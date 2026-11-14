@@ -40,23 +40,70 @@ pub fn save_to_folder(dir: &Path, file_name: &str, bytes: &[u8]) -> Result<PathB
 
     let mut n = 0u32;
     let result = loop {
-        let candidate = match (n, ext) {
-            (0, _) => file_name.to_owned(),
-            (n, Some(ext)) => format!("{stem}-{n}.{ext}"),
-            (n, None) => format!("{stem}-{n}"),
-        };
-        let target = dir.join(candidate);
+        let target = dir.join(candidate_name(file_name, stem, ext, n));
         // A hard link fails atomically with AlreadyExists and never replaces a file, unlike
-        // `rename`, which silently overwrites on Unix. Filesystems without hard links are
-        // reported as a storage error rather than risking an overwrite.
+        // `rename`, which silently overwrites on Unix.
         match fs::hard_link(&tmp, &target) {
             Ok(()) => break Ok(target),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) if links_unsupported(&e) => {
+                break publish_without_link(dir, file_name, &tmp).map_err(storage);
+            }
             Err(e) => break Err(storage(e)),
         }
     };
     let _ = fs::remove_file(&tmp);
     result
+}
+
+fn candidate_name(file_name: &str, stem: &str, ext: Option<&str>, n: u32) -> String {
+    match (n, ext) {
+        (0, _) => file_name.to_owned(),
+        (n, Some(ext)) => format!("{stem}-{n}.{ext}"),
+        (n, None) => format!("{stem}-{n}"),
+    }
+}
+
+/// SMB and NFS mounts, common for consume folders, often reject hard links.
+fn links_unsupported(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::{CrossesDevices, PermissionDenied, TooManyLinks, Unsupported};
+    // 95 is ENOTSUP/EOPNOTSUPP on Linux, which `ErrorKind` does not always map.
+    matches!(
+        e.kind(),
+        Unsupported | PermissionDenied | CrossesDevices | TooManyLinks
+    ) || e.raw_os_error() == Some(95)
+}
+
+/// Fallback when hard links are unavailable: copy the finished temp file straight to the target
+/// with `create_new`, which still never replaces a file. The trade-off is that the target is
+/// briefly partial; consumers such as Paperless act on close-after-write or on a stable file,
+/// so that is acceptable where a no-replace atomic publish is impossible.
+fn publish_without_link(dir: &Path, file_name: &str, tmp: &Path) -> std::io::Result<PathBuf> {
+    let bytes = fs::read(tmp)?;
+    let path = Path::new(file_name);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("scan");
+    let ext = path.extension().and_then(|s| s.to_str());
+    for n in 0.. {
+        let target = dir.join(candidate_name(file_name, stem, ext, n));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+        {
+            Ok(mut f) => {
+                // The file is ours (create_new), so a failed write may delete it safely.
+                if let Err(e) = f.write_all(&bytes).and_then(|()| f.sync_all()) {
+                    drop(f);
+                    let _ = fs::remove_file(&target);
+                    return Err(e);
+                }
+                return Ok(target);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!("the suffix counter does not run out")
 }
 
 #[cfg(test)]
@@ -90,6 +137,29 @@ mod tests {
         save_to_folder(dir.path(), "scan.pdf", b"new").unwrap();
         assert_eq!(fs::read(dir.path().join("scan.pdf")).unwrap(), b"original");
         assert_eq!(fs::read(dir.path().join("scan-1.pdf")).unwrap(), b"new");
+    }
+
+    #[test]
+    fn fallback_suffixes_clashes_and_never_overwrites() {
+        let dir = temp_dir();
+        let tmp = dir.path().join(".src.tmp");
+        fs::write(&tmp, b"new").unwrap();
+        fs::write(dir.path().join("scan.pdf"), b"original").unwrap();
+        let a = publish_without_link(dir.path(), "scan.pdf", &tmp).unwrap();
+        let b = publish_without_link(dir.path(), "scan.pdf", &tmp).unwrap();
+        assert_eq!(a, dir.path().join("scan-1.pdf"));
+        assert_eq!(b, dir.path().join("scan-2.pdf"));
+        assert_eq!(fs::read(dir.path().join("scan.pdf")).unwrap(), b"original");
+        assert_eq!(fs::read(&b).unwrap(), b"new");
+    }
+
+    #[test]
+    fn unsupported_link_errors_are_recognised() {
+        use std::io::{Error, ErrorKind};
+        assert!(links_unsupported(&Error::from(ErrorKind::Unsupported)));
+        assert!(links_unsupported(&Error::from(ErrorKind::PermissionDenied)));
+        assert!(links_unsupported(&Error::from_raw_os_error(95)));
+        assert!(!links_unsupported(&Error::from(ErrorKind::NotFound)));
     }
 
     #[test]
