@@ -50,9 +50,43 @@ use pages::{
     scan::ScanPage,
 };
 
+/// The page's Content Security Policy, for the request's nonce (Leptos makes one per request
+/// and puts it on the hydration script). Only that inline script runs; the bundle comes from
+/// recto itself and compiles its WebAssembly (`'wasm-unsafe-eval'`). Styles allow inline
+/// attributes, which the supply meters and the scan selection use; a nonce would disable that.
+/// Under `cargo leptos watch`, the live reload script also talks to its own WebSocket port.
+#[cfg(feature = "ssr")]
+pub fn content_security_policy(nonce: &str, live_reload: bool) -> String {
+    let connect = if live_reload { "'self' ws:" } else { "'self'" };
+    format!(
+        "default-src 'self'; script-src 'self' 'nonce-{nonce}' 'wasm-unsafe-eval'; \
+         style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src {connect}; \
+         object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    )
+}
+
+/// Sends the page's [`content_security_policy`] with the response.
+#[cfg(feature = "ssr")]
+fn send_content_security_policy() {
+    let (Some(nonce), Some(response)) = (
+        leptos::nonce::use_nonce(),
+        use_context::<leptos_axum::ResponseOptions>(),
+    ) else {
+        return;
+    };
+    let live_reload = std::env::var_os("LEPTOS_WATCH").is_some();
+    if let Ok(value) =
+        axum::http::HeaderValue::from_str(&content_security_policy(&nonce, live_reload))
+    {
+        response.insert_header(axum::http::header::CONTENT_SECURITY_POLICY, value);
+    }
+}
+
 /// The HTML document around every page. Its `lang` attribute is the request's language, which
 /// islands read back in the browser.
 pub fn shell(options: LeptosOptions) -> impl IntoView {
+    #[cfg(feature = "ssr")]
+    send_content_security_policy();
     let language = i18n::tag(i18n::locale());
     view! {
         <!DOCTYPE html>

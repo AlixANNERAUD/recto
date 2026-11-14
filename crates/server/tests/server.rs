@@ -881,6 +881,59 @@ async fn sign_out_without_an_id_token_still_ends_the_provider_session() {
 }
 
 #[tokio::test]
+async fn responses_carry_security_headers() {
+    let harness = Harness::new();
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let response = harness.send(page("/", Some(&cookie))).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers().clone();
+    assert_eq!(headers["referrer-policy"], "same-origin");
+    assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    let policy = headers[header::CONTENT_SECURITY_POLICY]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    for directive in [
+        "default-src 'self'",
+        "frame-ancestors 'none'",
+        "object-src 'none'",
+        "'wasm-unsafe-eval'",
+    ] {
+        assert!(
+            policy.contains(directive),
+            "{directive} missing in {policy}"
+        );
+    }
+    // The hydration script runs under a fresh nonce named in the policy.
+    let html = text(response).await;
+    let nonce = html
+        .split("nonce=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("a script with a nonce");
+    assert!(policy.contains(&format!("'nonce-{nonce}'")), "{policy}");
+    assert!(!policy.contains("'unsafe-inline' 'nonce"), "{policy}");
+
+    // Everything else cannot be framed or sniffed either.
+    for request in [
+        get("/health"),
+        get("/favicon.svg"),
+        page("/auth/signed-out", None),
+    ] {
+        let response = harness.send(request).await;
+        let headers = response.headers();
+        assert!(
+            headers[header::CONTENT_SECURITY_POLICY]
+                .to_str()
+                .unwrap()
+                .contains("frame-ancestors 'none'")
+        );
+        assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(headers["referrer-policy"], "same-origin");
+    }
+}
+
+#[tokio::test]
 async fn session_cookie_is_renewed_with_its_attributes() {
     let harness = Harness::new();
     let cookie = harness.sign_in("alice-subject", "alice").await;

@@ -10,7 +10,7 @@ use axum::{
     Router,
     body::Body,
     extract::{DefaultBodyLimit, Request, State},
-    http::{Method, StatusCode},
+    http::{HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -81,6 +81,30 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
             AllowedOrigin::new(&auth.public_url),
             refuse_cross_site,
         ))
+        .layer(middleware::from_fn(security_headers))
+}
+
+/// Headers for every response. Pages bring their own Content Security Policy, with the nonce
+/// of their hydration script (see [`recto_app::content_security_policy`]); everything else
+/// gets one that only forbids framing, so no response can be put in another site's frame.
+async fn security_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    if !headers.contains_key(header::CONTENT_SECURITY_POLICY) {
+        headers.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static("frame-ancestors 'none'"),
+        );
+    }
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
 }
 
 /// Rejects cross-site state-changing requests with 403 (see [`csrf::allowed`]).
