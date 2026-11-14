@@ -185,9 +185,12 @@ impl PrintService for Cups {
         let mut request = new_request(Operation::CupsGetPrinters, None)?;
         add_requested(&mut request, &PRINTER_ATTRIBUTES)?;
         let response = self.send(&self.root_uri()?, request).await?;
-        check(&response, || {
-            PrintError::Unavailable("CUPS has no printer list".into())
-        })?;
+        // A CUPS without any queue answers client-error-not-found rather than an empty list.
+        match check(&response, || PrintError::PrinterNotFound(String::new())) {
+            Ok(()) => {}
+            Err(PrintError::PrinterNotFound(_)) => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        }
         let default = self.default_printer().await?;
         Ok(printer_groups(&response)
             .filter_map(|group| parse_printer(group, default.as_deref()))

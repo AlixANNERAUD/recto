@@ -215,6 +215,19 @@ async fn lists_printers_when_cups_has_no_default() {
 }
 
 #[tokio::test]
+async fn no_queue_is_an_empty_list() {
+    // Real CUPS answers client-error-not-found when no printer is configured.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(Ipp(Operation::CupsGetPrinters, None))
+        .respond_with(ipp(StatusCode::ClientErrorNotFound, vec![]))
+        .mount(&server)
+        .await;
+
+    assert!(cups(&server).printers().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn submits_pdf_with_options() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
