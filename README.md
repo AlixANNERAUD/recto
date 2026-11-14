@@ -34,7 +34,9 @@ ENV
 docker compose up -d --wait
 ```
 
-Open <http://localhost:8080> (change the port with `RECTO_PORT`). `compose.yml` starts recto and a
+Open <http://localhost:8080> (change the port with `RECTO_PORT`). Sign-in only works through the
+address in `RECTO_PUBLIC_URL` (the session cookie and the redirects depend on it), so if that is
+another address, open that one. `compose.yml` starts recto and a
 CUPS server on a private network. Add a printer to it:
 
 ```sh
@@ -44,7 +46,8 @@ docker compose exec cups lpadmin -p office -E -v ipp://192.168.1.60/ipp/print -m
 Scanners need a little more setup, see [SANE](#scanners-sane).
 
 Images are published as `ghcr.io/alixanneraud/recto` for linux/amd64 and linux/arm64, with the
-tags `X.Y.Z`, `X.Y`, `X` and `latest`. Set `RECTO_IMAGE` to pin one. `docker compose up --build`
+tags `X.Y.Z`, `X.Y`, `X` and `latest`. Set `RECTO_IMAGE` to pin one. `latest` exists only once the first `vX.Y.Z` release is published;
+before that, run `docker compose up -d --build` to build it from the checkout. `docker compose up --build`
 builds the image from your checkout instead.
 
 recto listens in plain HTTP. Put a reverse proxy with TLS in front of it and set
@@ -54,7 +57,7 @@ depend on it.
 ## Configuration
 
 Every setting is an environment variable. In `compose.yml`, put them under `environment`. A
-variable set to an empty value counts as unset.
+optional variable set to an empty value counts as unset.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -182,8 +185,9 @@ sudo chown 65532:65532 consume
 To write into a folder that someone else owns, such as the consume folder of Paperless, set
 `user: "<uid>:<gid>"` on the recto service to that owner instead.
 
-Files appear atomically and never overwrite an existing file (recto uses a hard link, with a
-no-replace fallback on SMB and NFS shares).
+Files never overwrite an existing file. Normally they appear atomically, through a hard link. On
+SMB and NFS shares, which often refuse hard links, recto writes the file directly instead, so it may
+be briefly partial; Paperless copes with that.
 
 ## Limits
 
@@ -204,12 +208,13 @@ You need [mise](https://mise.jdx.dev), plus `libsane-dev` and libclang for the l
 
 ```sh
 mise install
-mise run dev         # http://127.0.0.1:3000 with fake printers and scanners and a dev user
+mise run dev         # http://127.0.0.1:3000, signed in as a dev user, with fake printers and scanners
 mise run check       # lint, rustdoc, tests, cargo-deny: what CI runs
 mise run test-sane   # scanner tests against libsane's virtual test backend
 ```
 
-`mise run dev` uses development mocks, which exist in debug builds only. If a build complains about
+`mise run dev` sets `RECTO_DEV_MOCKS=1`: the mocks sign every request in and exist in debug builds
+only, so never expose that server. If a build complains about
 the `wasm-bindgen` version, a stale `wasm-bindgen` in `~/.cargo/bin` may be shadowing the one mise
 pins: remove it.
 

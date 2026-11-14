@@ -54,8 +54,8 @@ run = "cargo deny check"
 description = "Everything CI checks, except the release build"
 depends = ["lint", "doc", "test", "deny"]
 
-# The `dev-mocks` feature lets `RECTO_DEV_MOCKS=1 mise run dev` swap CUPS and SANE for mocks and
-# sign every request in, to try the interface without hardware; it only exists in debug builds.
+# The `dev-mocks` feature and `RECTO_DEV_MOCKS=1` (set below) swap CUPS and SANE for mocks and sign
+# every request in, to try the interface without hardware; the feature only exists in debug builds.
 # cargo-leptos 0.3.11 reads the binary's arguments from its command line only (there is no
 # `bin-args` key in the workspace metadata), hence `-- serve`. cargo-leptos itself runs with
 # `site-addr` and `site-root` from Cargo.toml, which these values must match.
@@ -68,6 +68,7 @@ RECTO_SITE_ROOT = "target/site"
 RECTO_LISTEN_ADDRESS = "127.0.0.1:3000"
 RECTO_PUBLIC_URL = "http://127.0.0.1:3000"
 RECTO_LOG_FORMAT = "text"
+RECTO_DEV_MOCKS = "1"
 # Dummy values until sign-in exists; the identity provider is never contacted at startup.
 RECTO_OIDC_ISSUER = "http://127.0.0.1:9/"
 RECTO_OIDC_CLIENT_ID = "recto-dev"

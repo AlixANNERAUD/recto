@@ -26,7 +26,7 @@ Everything goes through [mise](https://mise.jdx.dev), which pins the toolchain.
 | `mise run test` | The test suite (nextest) |
 | `mise run doc` | Rustdoc with warnings as errors |
 | `mise run check` | What CI runs: lint, rustdoc, tests, cargo-deny |
-| `mise run dev` | Development server on http://127.0.0.1:3000 |
+| `mise run dev` | Development server on http://127.0.0.1:3000 with mocked printers and scanners and a signed-in dev user (debug builds only) |
 | `mise run build` | Release binary and site |
 
 Builds are heavy: run one cargo command at a time.
