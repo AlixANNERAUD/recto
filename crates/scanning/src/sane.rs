@@ -1,5 +1,5 @@
-use std::sync::Mutex;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use async_trait::async_trait;
@@ -19,18 +19,20 @@ enum Command {
     List(Reply<Vec<ScannerInfo>>),
     Capabilities(String, Reply<ScannerCapabilities>),
     Scan(String, ScanSettings, Reply<Vec<ScannedPage>>),
-    /// Lets a test prove that a dead worker comes back on the next command.
+    /// Lets a test prove that a dead worker comes back on the next command. The reply sender
+    /// is dropped while unwinding, like the one of a real command that panics.
     #[cfg(test)]
-    Crash,
+    Crash(Reply<()>),
 }
-
 struct Worker {
-    commands: mpsc::Sender<Command>,
-    thread: JoinHandle<()>,
+    commands: Mutex<Option<mpsc::Sender<Command>>>,
+    thread: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Worker {
-    fn spawn() -> Result<Self, ScanError> {
+    /// Blocks until `sane_init` is done, which can be slow with network backends, so callers in
+    /// async code run it through `spawn_blocking`.
+    fn spawn() -> Result<Arc<Self>, ScanError> {
         let (commands, inbox) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::channel();
         // libsane keeps devices on the thread that opened them, and `sane_init` must not run
@@ -49,14 +51,44 @@ impl Worker {
                 }
             })
             .map_err(|e| ScanError::Device(e.to_string()))?;
+        let worker = Arc::new(Self {
+            commands: Mutex::new(Some(commands)),
+            thread: Mutex::new(Some(thread)),
+        });
         match ready_rx.recv() {
-            Ok(Ok(())) => Ok(Self { commands, thread }),
+            Ok(Ok(())) => Ok(worker),
             Ok(Err(error)) => {
-                let _ = thread.join();
+                worker.join();
                 Err(error)
             }
-            Err(_) => Err(stopped()),
+            Err(_) => {
+                worker.join();
+                Err(stopped())
+            }
         }
+    }
+
+    fn send(&self, command: Command) -> bool {
+        // The sender is only borrowed for the call, so it never outlives the request.
+        match self.commands.lock().unwrap().as_ref() {
+            Some(sender) => sender.send(command).is_ok(),
+            None => false,
+        }
+    }
+
+    /// Closes the inbox and waits for the thread, so its `Sane` is released before another one
+    /// is initialised.
+    fn join(&self) {
+        drop(self.commands.lock().unwrap().take());
+        if let Some(thread) = self.thread.lock().unwrap().take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.join();
     }
 }
 
@@ -66,7 +98,9 @@ fn stopped() -> ScanError {
 
 /// The real scanners, driven through libsane on a dedicated thread.
 pub struct SaneScanners {
-    worker: Mutex<Option<Worker>>,
+    /// Async lock: spawning and retiring wait on threads, and other requests must wait for them
+    /// without blocking the runtime.
+    worker: tokio::sync::Mutex<Option<Arc<Worker>>>,
     cache: Mutex<Option<Vec<ScannerInfo>>>,
 }
 
@@ -74,54 +108,55 @@ impl SaneScanners {
     /// Initialises SANE. Only one instance may exist per process.
     pub fn start() -> Result<Self, ScanError> {
         Ok(Self {
-            worker: Mutex::new(Some(Worker::spawn()?)),
+            worker: tokio::sync::Mutex::new(Some(Worker::spawn()?)),
             cache: Mutex::new(None),
         })
+    }
+
+    async fn current(&self) -> Result<Arc<Worker>, ScanError> {
+        let mut slot = self.worker.lock().await;
+        if let Some(worker) = slot.as_ref() {
+            return Ok(worker.clone());
+        }
+        let worker = tokio::task::spawn_blocking(Worker::spawn)
+            .await
+            .map_err(|_| stopped())??;
+        *slot = Some(worker.clone());
+        Ok(worker)
     }
 
     /// Sends a command and waits for the reply. A worker that panicked is replaced on the next
     /// call rather than this one, so the failed request reports the failure honestly.
     async fn ask<T>(&self, build: impl FnOnce(Reply<T>) -> Command) -> Result<T, ScanError> {
         let (reply, answer) = oneshot::channel();
-        let sender = {
-            let mut slot = self.worker.lock().unwrap();
-            if slot.is_none() {
-                *slot = Some(Worker::spawn()?);
-            }
-            slot.as_ref()
-                .map(|w| w.commands.clone())
-                .expect("just filled")
-        };
-        if sender.send(build(reply)).is_err() {
-            self.retire();
+        let worker = self.current().await?;
+        if !worker.send(build(reply)) {
+            self.retire(&worker).await;
             return Err(stopped());
         }
         match answer.await {
             Ok(result) => result,
             Err(_) => {
-                self.retire();
+                self.retire(&worker).await;
                 Err(stopped())
             }
         }
     }
 
-    /// Joins the dead thread so its `Sane` is released before a new one is initialised.
-    fn retire(&self) {
-        if let Some(worker) = self.worker.lock().unwrap().take() {
-            drop(worker.commands);
-            let _ = worker.thread.join();
+    /// Retires `dead` only if it is still the current worker: every request queued on it fails
+    /// and lands here, and a later one must not tear down the replacement.
+    async fn retire(&self, dead: &Arc<Worker>) {
+        let mut slot = self.worker.lock().await;
+        if slot.as_ref().is_some_and(|w| Arc::ptr_eq(w, dead)) {
+            *slot = None;
+            let dead = dead.clone();
+            let _ = tokio::task::spawn_blocking(move || dead.join()).await;
         }
     }
 
     #[cfg(test)]
-    async fn crash(&self) {
-        let _ = self.ask::<()>(|_| Command::Crash).await;
-    }
-}
-
-impl Drop for SaneScanners {
-    fn drop(&mut self) {
-        self.retire();
+    async fn crash(&self) -> Result<(), ScanError> {
+        self.ask(Command::Crash).await
     }
 }
 
@@ -160,7 +195,10 @@ fn run(sane: &Sane, command: Command) {
             let _ = reply.send(scan(sane, &id, &settings));
         }
         #[cfg(test)]
-        Command::Crash => panic!("test crash"),
+        Command::Crash(reply) => {
+            let _held = reply;
+            panic!("test crash");
+        }
     }
 }
 
@@ -329,6 +367,7 @@ fn scan(sane: &Sane, id: &str, settings: &ScanSettings) -> Result<Vec<ScannedPag
         }
         // `next_page` reports an empty feeder as `false`; a no-documents status from the
         // backend after a page is the same thing, not a failure.
+        // A failure here drops the pages already read on purpose, so a jam is never hidden.
         match scan.next_page() {
             Ok(true) => {}
             Ok(false) | Err(libsane::Error::NoDocs) => break,
@@ -352,13 +391,52 @@ mod tests {
         assert!(matches!(map_error(&E::Io), ScanError::Device(_)));
     }
 
+    fn stopped_error() -> ScanError {
+        ScanError::Device("scanner worker stopped".into())
+    }
+
     #[tokio::test]
     #[ignore = "needs libsane, see tests/sane_test_backend.rs"]
     async fn worker_restarts_after_a_panic() {
         let sane = SaneScanners::start().unwrap();
         assert!(!sane.scanners(true).await.unwrap().is_empty());
-        sane.crash().await;
+        assert_eq!(sane.crash().await, Err(stopped_error()));
         // The failed command reported the stop; the next one starts a fresh worker.
         assert!(!sane.scanners(true).await.unwrap().is_empty());
+    }
+
+    /// Requests queued behind a crashing worker all fail and all retire it. They must not tear
+    /// down the replacement, and nothing may block a single-threaded runtime.
+    #[tokio::test]
+    #[ignore = "needs libsane, see tests/sane_test_backend.rs"]
+    async fn requests_queued_on_a_crashing_worker_do_not_kill_its_replacement() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let sane = Arc::new(SaneScanners::start().unwrap());
+        let run = async {
+            let crash = tokio::spawn({
+                let sane = sane.clone();
+                async move { sane.crash().await }
+            });
+            let queued: Vec<_> = (0..3)
+                .map(|_| {
+                    let sane = sane.clone();
+                    tokio::spawn(async move { sane.scanners(true).await })
+                })
+                .collect();
+            assert_eq!(crash.await.unwrap(), Err(stopped_error()));
+            for task in queued {
+                let result = task.await.unwrap();
+                assert!(
+                    result.is_ok() || result == Err(stopped_error()),
+                    "{result:?}"
+                );
+            }
+            assert!(!sane.scanners(true).await.unwrap().is_empty());
+        };
+        tokio::time::timeout(Duration::from_secs(20), run)
+            .await
+            .expect("no deadlock");
     }
 }
