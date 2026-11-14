@@ -61,12 +61,12 @@ optional variable set to an empty value counts as unset.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `RECTO_PUBLIC_URL` | required | The address users open, such as `https://recto.example.org`. |
+| `RECTO_PUBLIC_URL` | required | The address users open, such as `https://recto.example.org`. It must be the root of a site: recto cannot run under a path such as `/recto`. |
 | `RECTO_OIDC_ISSUER` | required | The issuer URL of your identity provider. |
 | `RECTO_OIDC_CLIENT_ID` | required | The client id of the public client. |
 | `RECTO_OIDC_SCOPES` | none | Extra scopes, separated by spaces, requested next to `openid`. |
 | `RECTO_OIDC_REQUIRED_CLAIM` | none | Only let in users whose token has this claim. |
-| `RECTO_OIDC_REQUIRED_VALUE` | none | With the claim: the value it must equal or contain. |
+| `RECTO_OIDC_REQUIRED_VALUE` | none | The value the claim must equal or contain. recto refuses to start with a value and no claim. |
 | `RECTO_CUPS_URL` | `http://localhost:631` | The CUPS server. `ipp://` and `ipps://` are accepted. |
 | `RECTO_SCAN_OUTPUT_DIR` | none | The folder behind "Save" on the scan page. Without it, scans can only be downloaded. |
 | `RECTO_MAX_UPLOAD_SIZE` | `52428800` (50 MiB) | The largest file accepted for printing, in bytes. |

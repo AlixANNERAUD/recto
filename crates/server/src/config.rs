@@ -43,8 +43,9 @@ pub struct Config {
 }
 
 impl Config {
-    /// Drops blank optional values: a variable set to nothing means the same as no variable.
-    pub fn normalized(mut config: Self) -> Self {
+    /// Drops blank optional values (a variable set to nothing means the same as no variable),
+    /// then refuses combinations that would start recto wrongly configured.
+    pub fn normalized(mut config: Self) -> Result<Self, clap::Error> {
         config.oidc_scopes.retain(|scope| !scope.trim().is_empty());
         for value in [
             &mut config.oidc_required_claim,
@@ -61,7 +62,28 @@ impl Config {
         {
             config.scan_output_dir = None;
         }
-        config
+        let invalid = |message: &str| {
+            Err(clap::Error::raw(
+                clap::error::ErrorKind::ValueValidation,
+                format!("{message}\n"),
+            ))
+        };
+        // The value alone would be ignored: a misspelt claim variable would let every account
+        // of the provider in, without a word.
+        if config.oidc_required_value.is_some() && config.oidc_required_claim.is_none() {
+            return invalid(
+                "RECTO_OIDC_REQUIRED_VALUE is set without RECTO_OIDC_REQUIRED_CLAIM: set the \
+                 claim the value applies to, or remove the value",
+            );
+        }
+        // Routes, redirects and the cookie path all assume recto is the whole site.
+        if config.public_url.path() != "/" {
+            return invalid(
+                "RECTO_PUBLIC_URL must be the root of its site, such as \
+                 https://recto.example.org: recto cannot be served under a path",
+            );
+        }
+        Ok(config)
     }
 }
 
@@ -133,7 +155,7 @@ mod tests {
     {
         let command = Config::command().mut_args(|argument| argument.env(None::<&str>));
         let matches = command.try_get_matches_from(arguments)?;
-        Config::from_arg_matches(&matches).map(Config::normalized)
+        Config::from_arg_matches(&matches).and_then(Config::normalized)
     }
 
     fn parse(extra: &[&str]) -> Result<Config, clap::Error> {
@@ -175,6 +197,48 @@ mod tests {
             "recto",
         ];
         assert!(parse_arguments(arguments).is_err());
+    }
+
+    /// The required arguments with another public URL.
+    fn parse_public_url(public_url: &str) -> Result<Config, clap::Error> {
+        let mut arguments = REQUIRED;
+        arguments[2] = public_url;
+        parse_arguments(arguments)
+    }
+
+    #[test]
+    fn required_value_needs_a_claim() {
+        // A misspelt claim variable must not leave recto open to every account.
+        let error = parse(&["--oidc-required-value", "recto"]).unwrap_err();
+        assert!(
+            error.to_string().contains("RECTO_OIDC_REQUIRED_CLAIM"),
+            "{error}"
+        );
+        let blank_claim = parse(&[
+            "--oidc-required-claim",
+            " ",
+            "--oidc-required-value",
+            "recto",
+        ]);
+        assert!(blank_claim.is_err());
+        let both = parse(&[
+            "--oidc-required-claim",
+            "roles",
+            "--oidc-required-value",
+            "recto",
+        ]);
+        assert_eq!(both.unwrap().oidc_required_value.as_deref(), Some("recto"));
+    }
+
+    #[test]
+    fn public_url_must_be_the_root() {
+        for root in ["https://recto.example.com", "https://recto.example.com/"] {
+            assert!(parse_public_url(root).is_ok(), "{root}");
+        }
+        for prefixed in ["https://example.com/recto", "https://example.com/recto/"] {
+            let error = parse_public_url(prefixed).unwrap_err();
+            assert!(error.to_string().contains("RECTO_PUBLIC_URL"), "{error}");
+        }
     }
 
     #[test]

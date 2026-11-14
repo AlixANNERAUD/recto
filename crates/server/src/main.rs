@@ -13,7 +13,7 @@ async fn main() -> ExitCode {
     let command_line = CommandLine::parse();
     let result = match command_line.command {
         recto::config::Command::Serve(config) => {
-            let config = Config::normalized(*config);
+            let config = Config::normalized(*config).unwrap_or_else(|error| error.exit());
             initialize_logging(config.log_format);
             serve::run(config).await
         }
