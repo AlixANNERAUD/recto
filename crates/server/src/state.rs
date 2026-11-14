@@ -25,6 +25,8 @@ pub struct AuthState {
     pub public_url: Url,
     /// Whether the session cookie is `Secure`: browsers drop such cookies over plain HTTP.
     pub secure_cookies: bool,
+    /// The sessions; the server deletes expired ones in the background.
+    pub sessions: crate::session::Store,
 }
 
 impl AuthState {
@@ -34,6 +36,7 @@ impl AuthState {
             openid,
             public_url,
             secure_cookies,
+            sessions: crate::session::Store::default(),
         }
     }
 

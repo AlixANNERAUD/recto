@@ -6,5 +6,3 @@ pub mod routes;
 pub mod serve;
 pub mod session;
 pub mod state;
-#[cfg(feature = "testing")]
-mod testing;

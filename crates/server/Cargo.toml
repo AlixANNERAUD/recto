@@ -31,6 +31,7 @@ serde_json.workspace = true
 uuid.workspace = true
 async-trait.workspace = true
 tower-http.workspace = true
+tower.workspace = true
 tokio.workspace = true
 clap.workspace = true
 tracing.workspace = true
@@ -38,16 +39,9 @@ tracing-subscriber.workspace = true
 reqwest.workspace = true
 url.workspace = true
 
-[features]
-# A route signing anyone in without a provider, for this package's own tests. It is enabled by
-# the dev-dependency below only, so no build of the binary ever contains it.
-testing = []
-
 [dev-dependencies]
-recto = { path = ".", features = ["testing"] }
 recto-printing = { workspace = true, features = ["testing"] }
 recto-scanning = { workspace = true, features = ["testing"] }
-tower.workspace = true
 tempfile.workspace = true
 wiremock.workspace = true
 

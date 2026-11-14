@@ -4,7 +4,10 @@
 use std::{path::PathBuf, sync::Arc};
 
 use axum::{extract::FromRef, http::request::Parts};
-use leptos::{config::LeptosOptions, prelude::use_context};
+use leptos::{
+    config::LeptosOptions,
+    prelude::{ServerFnError, use_context},
+};
 use recto_authentication::User;
 use recto_printing::PrintService;
 use recto_scanning::{ResultStore, ScannerService};
@@ -40,4 +43,29 @@ pub fn app_state() -> Option<AppState> {
 /// session access of its own.
 pub fn current_user() -> Option<User> {
     use_context::<Parts>()?.extensions.get::<User>().cloned()
+}
+
+/// The signed-in user, for every page and server function that reads [`AppState`] or acts for
+/// someone: call it first. Without a user, the response becomes a redirect to sign-in and the
+/// error says sign-in is required. The server already turns anonymous visitors away before any
+/// page renders; this keeps a page safe should a route ever be left open by mistake.
+pub fn require_user() -> Result<User, ServerFnError> {
+    if let Some(user) = current_user() {
+        return Ok(user);
+    }
+    let next = use_context::<Parts>()
+        .and_then(|parts| {
+            parts
+                .uri
+                .path_and_query()
+                .map(|path| path.as_str().to_owned())
+        })
+        .unwrap_or_else(|| "/".to_owned());
+    leptos_axum::redirect(&format!(
+        "/auth/login?next={}",
+        crate::pages::auth::encode_component(&next)
+    ));
+    Err(ServerFnError::new(crate::messages::sign_in_required(
+        crate::i18n::locale(),
+    )))
 }

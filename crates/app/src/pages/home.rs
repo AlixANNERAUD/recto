@@ -38,7 +38,9 @@ pub fn HomePage() -> impl IntoView {
 #[cfg(feature = "ssr")]
 fn unavailable_banner() -> impl Future<Output = Option<String>> + Send + 'static {
     // Contexts are read before the future runs: they belong to the rendering owner.
-    let state = crate::state::app_state();
+    let state = crate::state::require_user()
+        .ok()
+        .and_then(|_| crate::state::app_state());
     let locale = crate::i18n::locale();
     async move {
         let reason = match state?.print.printers().await {

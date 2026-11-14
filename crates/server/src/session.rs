@@ -1,10 +1,18 @@
 //! Sessions and the signed-in user.
 //!
-//! Sessions live in memory behind the `recto_session` cookie: `HttpOnly`, `SameSite=Lax`,
-//! `Secure` when the public URL is HTTPS, and forgotten after 12 hours without a request. The
-//! user is read from the session once per request and left in the request's extensions, where
-//! handlers, pages and server functions find it ([`recto_app::state::current_user`]).
+//! Sessions live in memory ([`Store`]) behind the `recto_session` cookie: `HttpOnly`,
+//! `SameSite=Lax`, `Secure` when the public URL is HTTPS. A signed-in session is forgotten after
+//! 12 hours without a request; a session that only holds a sign-in in progress, after 10
+//! minutes. The user is read from the session once per request and left in the request's
+//! extensions, where handlers, pages and server functions find it
+//! ([`recto_app::state::current_user`]).
 
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
+};
+
+use async_trait::async_trait;
 use axum::{
     extract::Request,
     http::{Method, StatusCode, header},
@@ -14,8 +22,13 @@ use axum::{
 use recto_app::{i18n, messages};
 use recto_authentication::User;
 use tower_sessions::{
-    Expiry, MemoryStore, Session, SessionManagerLayer,
-    cookie::{SameSite, time},
+    Expiry, Session, SessionManagerLayer, SessionStore,
+    cookie::{
+        SameSite,
+        time::{Duration, OffsetDateTime},
+    },
+    session::{Id, Record},
+    session_store::{self, ExpiredDeletion},
 };
 
 /// The signed-in [`User`].
@@ -23,13 +36,87 @@ const USER: &str = "user";
 /// The ID token of the sign-in, a hint for the provider at sign-out.
 const ID_TOKEN: &str = "id_token";
 
-pub fn layer(secure: bool) -> SessionManagerLayer<MemoryStore> {
-    SessionManagerLayer::new(MemoryStore::default())
+/// How long a signed-in session survives without a request.
+const SIGNED_IN: Duration = Duration::hours(12);
+/// How long a session survives with only a sign-in in progress: the provider's round trip.
+const SIGNING_IN: Duration = Duration::minutes(10);
+
+/// Sessions in memory. Unlike tower-sessions' `MemoryStore`, expired records are deleted
+/// ([`ExpiredDeletion`]), so anonymous visitors starting sign-ins cannot grow memory for good.
+#[derive(Clone, Debug, Default)]
+pub struct Store(Arc<Mutex<HashMap<Id, Record>>>);
+
+impl Store {
+    fn records(&self) -> MutexGuard<'_, HashMap<Id, Record>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// How many records are kept, expired ones included.
+    pub fn len(&self) -> usize {
+        self.records().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.records().is_empty()
+    }
+}
+
+#[async_trait]
+impl SessionStore for Store {
+    async fn create(&self, record: &mut Record) -> session_store::Result<()> {
+        let mut records = self.records();
+        while records.contains_key(&record.id) {
+            record.id = Id::default();
+        }
+        records.insert(record.id, record.clone());
+        Ok(())
+    }
+
+    async fn save(&self, record: &Record) -> session_store::Result<()> {
+        self.records().insert(record.id, record.clone());
+        Ok(())
+    }
+
+    async fn load(&self, id: &Id) -> session_store::Result<Option<Record>> {
+        let now = OffsetDateTime::now_utc();
+        Ok(self
+            .records()
+            .get(id)
+            .filter(|record| record.expiry_date > now)
+            .cloned())
+    }
+
+    async fn delete(&self, id: &Id) -> session_store::Result<()> {
+        self.records().remove(id);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl ExpiredDeletion for Store {
+    async fn delete_expired(&self) -> session_store::Result<()> {
+        let now = OffsetDateTime::now_utc();
+        self.records().retain(|_, record| record.expiry_date > now);
+        Ok(())
+    }
+}
+
+/// The session layer. Sessions are saved on every request (`always_save`), so the inactivity
+/// expiry moves with each request even when nothing in the session changes; a request without
+/// a session cookie and with nothing to store still creates nothing.
+pub fn layer(store: Store, secure: bool) -> SessionManagerLayer<Store> {
+    SessionManagerLayer::new(store)
         .with_name("recto_session")
         .with_http_only(true)
         .with_same_site(SameSite::Lax)
         .with_secure(secure)
-        .with_expiry(Expiry::OnInactivity(time::Duration::hours(12)))
+        .with_expiry(Expiry::OnInactivity(SIGNED_IN))
+        .with_always_save(true)
+}
+
+/// Gives the session the short life of a sign-in in progress.
+pub fn signing_in(session: &Session) {
+    session.set_expiry(Some(Expiry::OnInactivity(SIGNING_IN)));
 }
 
 /// Starts a signed-in session. The session gets a new id, so an id planted in the browser
@@ -40,6 +127,7 @@ pub async fn sign_in(
     id_token: &str,
 ) -> Result<(), tower_sessions::session::Error> {
     session.cycle_id().await?;
+    session.set_expiry(Some(Expiry::OnInactivity(SIGNED_IN)));
     session.insert(USER, user).await?;
     session.insert(ID_TOKEN, id_token).await
 }
@@ -54,14 +142,18 @@ pub async fn sign_out(session: &Session) -> Option<String> {
 }
 
 /// Middleware putting the session's [`User`] in the request's extensions. A session that cannot
-/// be read counts as signed out.
+/// be read counts as signed out. A session without a user holds at most a sign-in in progress,
+/// so its life stays short even though every request saves it.
 pub async fn load_user(session: Session, mut request: Request, next: Next) -> Response {
     match session.get::<User>(USER).await {
         Ok(Some(user)) => {
             request.extensions_mut().insert(user);
         }
-        Ok(None) => {}
-        Err(error) => tracing::warn!(%error, "reading the session failed"),
+        Ok(None) => signing_in(&session),
+        Err(error) => {
+            tracing::warn!(%error, "reading the session failed");
+            signing_in(&session);
+        }
     }
     next.run(request).await
 }
@@ -71,14 +163,19 @@ fn is_public(path: &str) -> bool {
     path == "/no-access" || path.starts_with("/auth/")
 }
 
-/// Middleware letting only signed-in users through. A browser navigating to a page is sent to
-/// sign in and brought back; anything else (forms, downloads, server functions, images) gets
-/// 401, which a script can handle and an `<img>` simply fails on.
+/// Middleware letting only signed-in users through, except to the public paths.
 pub async fn require_user(request: Request, next: Next) -> Response {
     if request.extensions().get::<User>().is_some() || is_public(request.uri().path()) {
         return next.run(request).await;
     }
-    if is_page_request(&request) {
+    unauthenticated(&request)
+}
+
+/// The answer to an anonymous request for something that needs a user. A browser navigating
+/// to a page is sent to sign in and brought back; anything else (forms, downloads, server
+/// functions, images) gets 401, which a script can handle and an `<img>` simply fails on.
+pub fn unauthenticated(request: &Request) -> Response {
+    if is_page_request(request) {
         let target = request
             .uri()
             .path_and_query()
@@ -117,7 +214,7 @@ pub fn local_path(next: Option<&str>) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::local_path;
+    use super::*;
 
     #[test]
     fn only_local_paths_are_kept() {
@@ -133,5 +230,31 @@ mod tests {
             assert_eq!(local_path(Some(foreign)), "/", "{foreign:?}");
         }
         assert_eq!(local_path(None), "/");
+    }
+
+    fn record(expiry_date: OffsetDateTime) -> Record {
+        Record {
+            id: Id::default(),
+            data: Default::default(),
+            expiry_date,
+        }
+    }
+
+    #[tokio::test]
+    async fn expired_records_are_deleted() {
+        let store = Store::default();
+        let now = OffsetDateTime::now_utc();
+        let mut expired = record(now - Duration::seconds(1));
+        let mut active = record(now + Duration::minutes(5));
+        store.create(&mut expired).await.unwrap();
+        store.create(&mut active).await.unwrap();
+        // Expired records are never served, even before they are deleted.
+        assert!(store.load(&expired.id).await.unwrap().is_none());
+        assert_eq!(store.len(), 2);
+
+        store.delete_expired().await.unwrap();
+        assert_eq!(store.len(), 1);
+        let kept = store.load(&active.id).await.unwrap().unwrap();
+        assert_eq!(kept.id, active.id);
     }
 }

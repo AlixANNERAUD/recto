@@ -1,5 +1,6 @@
 //! The routes of the server, driven through the router with mock printing and scanning services.
-//! Users are signed in through the route of the `testing` feature, never a real provider.
+//! Users are signed in by writing their session straight into the router's session store, with
+//! the same code as the provider's callback; no route of the server can do that.
 
 use std::{
     path::{Path, PathBuf},
@@ -14,8 +15,9 @@ use axum::{
 };
 use leptos::config::LeptosOptions;
 use recto::serve::{AuthState, router};
+use recto::session::Store;
 use recto_app::state::AppState;
-use recto_authentication::{OpenId, OpenIdSettings};
+use recto_authentication::{OpenId, OpenIdSettings, User};
 use recto_printing::{
     Capabilities, ColorMode, DocumentFormat, Job, JobState, PageRanges, PrintOptions, Printer,
     PrinterState, Sides, testing::MockPrintService,
@@ -23,6 +25,7 @@ use recto_printing::{
 use recto_scanning::{MockScannerService, OutputFormat, ResultStore};
 use tempfile::TempDir;
 use tower::ServiceExt;
+use tower_sessions::{Session, SessionStore, cookie::time::OffsetDateTime, session::Id};
 use url::Url;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -67,6 +70,7 @@ struct Setup {
     output_dir: Option<PathBuf>,
     result_ttl: Duration,
     issuer: String,
+    public_url: &'static str,
 }
 
 impl Default for Setup {
@@ -76,6 +80,7 @@ impl Default for Setup {
             output_dir: None,
             result_ttl: Duration::from_secs(3600),
             issuer: UNREACHABLE_ISSUER.into(),
+            public_url: PUBLIC_URL,
         }
     }
 }
@@ -84,6 +89,7 @@ struct Harness {
     router: Router,
     print: Arc<MockPrintService>,
     results: Arc<ResultStore>,
+    sessions: Store,
     _dir: TempDir,
 }
 
@@ -111,6 +117,9 @@ impl Harness {
             dir.path().join("results"),
             setup.result_ttl,
         ));
+        let site = dir.path().join("site");
+        std::fs::create_dir_all(&site).unwrap();
+        std::fs::write(site.join("favicon.svg"), "<svg/>").unwrap();
         let state = AppState {
             print: print.clone(),
             scan: Arc::new(MockScannerService::default()),
@@ -119,10 +128,10 @@ impl Harness {
             max_upload_size: setup.max_upload_size,
             leptos_options: LeptosOptions::builder()
                 .output_name("recto")
-                .site_root(dir.path().join("site").to_string_lossy().into_owned())
+                .site_root(site.to_string_lossy().into_owned())
                 .build(),
         };
-        let public_url = Url::parse(PUBLIC_URL).unwrap();
+        let public_url = Url::parse(setup.public_url).unwrap();
         let openid = OpenId::new(OpenIdSettings {
             issuer: Url::parse(&setup.issuer).unwrap(),
             client_id: "recto".into(),
@@ -133,10 +142,12 @@ impl Harness {
         })
         .retry_after(Duration::ZERO);
         let auth = AuthState::new(Arc::new(openid), public_url);
+        let sessions = auth.sessions.clone();
         Self {
             router: router(state, auth),
             print,
             results,
+            sessions,
             _dir: dir,
         }
     }
@@ -147,13 +158,15 @@ impl Harness {
 
     /// Signs a user in and returns the session cookie to send back.
     async fn sign_in(&self, subject: &str, username: &str) -> String {
-        let response = self
-            .send(get(&format!(
-                "/testing/sign-in?subject={subject}&username={username}"
-            )))
-            .await;
-        assert!(response.status().is_success(), "{}", response.status());
-        session_cookie(response.headers()).expect("a session cookie")
+        let session = Session::new(None, Arc::new(self.sessions.clone()), None);
+        let user = User {
+            subject: subject.into(),
+            username: username.into(),
+            name: None,
+        };
+        recto::session::sign_in(&session, &user, "").await.unwrap();
+        session.save().await.unwrap();
+        format!("recto_session={}", session.id().unwrap())
     }
 }
 
@@ -188,6 +201,17 @@ fn session_cookie(headers: &HeaderMap) -> Option<String> {
         .filter_map(|value| value.to_str().ok())
         .find(|value| value.starts_with("recto_session="))
         .map(|value| value.split(';').next().unwrap().to_owned())
+}
+
+/// The whole `Set-Cookie` header of the session cookie, attributes included.
+fn set_cookie(headers: &HeaderMap) -> String {
+    headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find(|value| value.starts_with("recto_session="))
+        .expect("a session cookie")
+        .to_owned()
 }
 
 fn location(response: &Response<Body>) -> String {
@@ -741,6 +765,19 @@ async fn sign_in_state_is_single_use() {
         .1
         .into_owned();
     let cookie = session_cookie(response.headers()).expect("a session cookie");
+    // A sign-in in progress lives for the provider's round trip, not for 12 hours.
+    assert!(
+        set_cookie(response.headers()).contains("Max-Age=600"),
+        "{}",
+        set_cookie(response.headers())
+    );
+    let id: Id = cookie.trim_start_matches("recto_session=").parse().unwrap();
+    let record = harness.sessions.load(&id).await.unwrap().unwrap();
+    let left = record.expiry_date - OffsetDateTime::now_utc();
+    assert!(
+        left.whole_seconds() <= 600 && left.whole_seconds() > 590,
+        "{left}"
+    );
 
     let response = harness
         .send(page("/auth/callback?code=c&state=forged", Some(&cookie)))
@@ -770,4 +807,63 @@ async fn sign_out_ends_the_session() {
     assert_redirect(&response, "/auth/login?next=%2F");
     let response = harness.send(page("/auth/signed-out", None)).await;
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn session_cookie_is_renewed_with_its_attributes() {
+    let harness = Harness::new();
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    // Every signed-in request pushes the inactivity expiry back and says so in the cookie.
+    for _ in 0..2 {
+        let response = harness.send(page("/", Some(&cookie))).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let header = set_cookie(response.headers());
+        assert!(header.starts_with(&format!("{cookie};")), "{header}");
+        for attribute in ["HttpOnly", "SameSite=Lax", "Max-Age=43200", "Path=/"] {
+            assert!(
+                header.contains(attribute),
+                "{attribute} missing in {header}"
+            );
+        }
+        assert!(!header.contains("Secure"), "{header}");
+    }
+
+    let harness = Harness::with(Setup {
+        public_url: "https://recto.test/",
+        ..Setup::default()
+    });
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let response = harness.send(page("/", Some(&cookie))).await;
+    assert!(set_cookie(response.headers()).contains("Secure"));
+
+    // Anonymous visits store nothing and set no cookie.
+    let response = harness.send(page("/no-access", None)).await;
+    assert!(session_cookie(response.headers()).is_none());
+    assert!(harness.sessions.len() == 1);
+}
+
+#[tokio::test]
+async fn fallback_never_renders_the_interface_for_anonymous_visitors() {
+    let harness = Harness::new();
+    for path in ["/no-access/", "/jobs/", "/anything/", "/auth/error/x"] {
+        let response = harness.send(page(path, None)).await;
+        let next: String = url::form_urlencoded::byte_serialize(path.as_bytes()).collect();
+        assert_redirect(&response, &format!("/auth/login?next={next}"));
+        let body = text(response).await;
+        assert!(!body.contains("<html"), "{path}: {body}");
+    }
+    let response = harness.send(get("/anything")).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(!text(response).await.contains("<html"));
+
+    // Assets stay public.
+    let response = harness.send(get("/favicon.svg")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(text(response).await, "<svg/>");
+
+    // A signed-in user gets the interface's not-found page.
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let response = harness.send(page("/anything/", Some(&cookie))).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(text(response).await.contains("Page not found"));
 }

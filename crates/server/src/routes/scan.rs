@@ -51,17 +51,21 @@ pub async fn save(
         let message = messages::save_disabled(locale).to_owned();
         return failure(StatusCode::NOT_FOUND, message).into_response();
     };
-    let Some(result) = find(&state, &user, &id) else {
+    let not_found = || {
         let message = messages::scan_result_not_found(locale).to_owned();
-        return failure(StatusCode::NOT_FOUND, message).into_response();
+        failure(StatusCode::NOT_FOUND, message).into_response()
     };
-    let results = Arc::clone(&state.results);
-    let saved = tokio::task::spawn_blocking(move || {
-        let bytes = results.read(&result)?;
-        save_to_folder(&dir, &result.file_name, &bytes)
-    })
-    .await
-    .unwrap_or_else(|_| Err(ScanError::Device("saving the scan stopped".into())));
+    let Some(result) = find(&state, &user, &id) else {
+        return not_found();
+    };
+    // A result that cannot be read is gone for the user; the store's own path stays private.
+    let Some(bytes) = read(&state, &result).await else {
+        return not_found();
+    };
+    let saved =
+        tokio::task::spawn_blocking(move || save_to_folder(&dir, &result.file_name, &bytes))
+            .await
+            .unwrap_or_else(|_| Err(ScanError::Device("saving the scan stopped".into())));
     match saved {
         Ok(path) => {
             tracing::info!(user = user.username, path = %path.display(), "scan saved");
@@ -72,6 +76,21 @@ pub async fn save(
             let message = messages::scan_error(&error, locale);
             failure(StatusCode::INTERNAL_SERVER_ERROR, message).into_response()
         }
+    }
+}
+
+/// The bytes of a stored result, `None` when its file went missing under the index (a cleaned
+/// temporary directory).
+async fn read(state: &AppState, result: &ScanResult) -> Option<Vec<u8>> {
+    let results = Arc::clone(&state.results);
+    let result = result.clone();
+    match tokio::task::spawn_blocking(move || results.read(&result)).await {
+        Ok(Ok(bytes)) => Some(bytes),
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "reading a scan result failed");
+            None
+        }
+        Err(_) => None,
     }
 }
 
@@ -100,19 +119,8 @@ async fn serve(
     let Some(result) = find(state, user, id) else {
         return not_found();
     };
-    let results = Arc::clone(&state.results);
-    let read = {
-        let result = result.clone();
-        tokio::task::spawn_blocking(move || results.read(&result)).await
-    };
-    let bytes = match read {
-        Ok(Ok(bytes)) => bytes,
-        Ok(Err(error)) => {
-            // The file went missing under the index (a cleaned temporary directory).
-            tracing::warn!(%error, "reading a scan result failed");
-            return not_found();
-        }
-        Err(_) => return not_found(),
+    let Some(bytes) = read(state, &result).await else {
+        return not_found();
     };
     // The name is recto's own `scan-YYYYMMDD-HHMMSS.ext`, safe inside quotes.
     let disposition = format!("{disposition}; filename=\"{}\"", result.file_name);

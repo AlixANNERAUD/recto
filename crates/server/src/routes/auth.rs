@@ -47,6 +47,8 @@ async fn login(
             return Redirect::to(&failure_location(&error, &next)).into_response();
         }
     };
+    // Short-lived until the provider sends the browser back; sign-in makes it 12 hours.
+    session::signing_in(&session);
     let stored = async {
         session.insert(PENDING, &pending).await?;
         session.insert(NEXT, &next).await
