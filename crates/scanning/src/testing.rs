@@ -22,6 +22,8 @@ pub struct MockScannerService {
     active: AtomicUsize,
     peak: AtomicUsize,
     requests: Mutex<Vec<(String, ScanSettings)>>,
+    /// Every id a caller tried to open, listed or not.
+    opened: Mutex<Vec<String>>,
 }
 
 impl Default for MockScannerService {
@@ -50,6 +52,7 @@ impl Default for MockScannerService {
             active: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
             requests: Mutex::new(Vec::new()),
+            opened: Mutex::new(Vec::new()),
         }
     }
 }
@@ -84,7 +87,14 @@ impl MockScannerService {
         self.requests.lock().unwrap().clone()
     }
 
+    /// Every id passed to `capabilities` or `scan`, in order: what a real backend would have
+    /// tried to open.
+    pub fn opened(&self) -> Vec<String> {
+        self.opened.lock().unwrap().clone()
+    }
+
     fn check(&self, id: &str) -> Result<(), ScanError> {
+        self.opened.lock().unwrap().push(id.to_owned());
         if let Some(error) = self.failure.lock().unwrap().clone() {
             return Err(error);
         }

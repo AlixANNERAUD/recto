@@ -48,8 +48,13 @@ pub async fn list_scanners(refresh: bool) -> Result<Vec<ScannerInfo>, ServerFnEr
 #[server(name = ScannerCapabilitiesRequest, endpoint = "scanner_capabilities")]
 pub async fn scanner_capabilities(id: String) -> Result<ScannerCapabilities, ServerFnError> {
     let context = server::Context::new()?;
-    let capabilities = context.state.scan.capabilities(&id).await;
-    capabilities.map_err(|error| context.scan_failure(&error))
+    let capabilities = async {
+        context.listed(&id).await?;
+        context.state.scan.capabilities(&id).await
+    };
+    capabilities
+        .await
+        .map_err(|error| context.scan_failure(&error))
 }
 
 /// A quick low-resolution scan of the whole glass, stored as PNG for the preview image.
@@ -57,6 +62,7 @@ pub async fn scanner_capabilities(id: String) -> Result<ScannerCapabilities, Ser
 pub async fn preview(id: String) -> Result<ScanOutcome, ServerFnError> {
     let context = server::Context::new()?;
     let scanned = async {
+        context.listed(&id).await?;
         let capabilities = context.state.scan.capabilities(&id).await?;
         let settings = recto_scanning::preview_settings(&capabilities);
         let pages = context.state.scan.scan(&id, settings).await?;
@@ -76,6 +82,7 @@ pub async fn scan(
 ) -> Result<ScanOutcome, ServerFnError> {
     let context = server::Context::new()?;
     let scanned = async {
+        context.listed(&id).await?;
         let capabilities = context.state.scan.capabilities(&id).await?;
         let settings = server::checked(settings, selection, &capabilities)?;
         let pages = context.state.scan.scan(&id, settings).await?;
@@ -135,6 +142,20 @@ mod server {
                 _ => embedded_i18n::t!("print.errors.refused", locale = locale).to_owned(),
             };
             ServerFnError::new(message)
+        }
+
+        /// Refuses a scanner the scanner list does not have. Ids come from the browser, and
+        /// SANE's `net` backend opens an unknown `net:<host>:<device>` by connecting to that
+        /// host: any user could make recto reach arbitrary hosts, and an unreachable one holds
+        /// the single SANE thread, so every other scan, until the connection times out. The
+        /// cached list is enough: Refresh in the interface updates it.
+        pub async fn listed(&self, id: &str) -> Result<(), ScanError> {
+            let scanners = self.state.scan.scanners(false).await?;
+            if scanners.iter().any(|scanner| scanner.id == id) {
+                Ok(())
+            } else {
+                Err(ScanError::NotFound(id.to_owned()))
+            }
         }
 
         pub fn scan_failure(&self, error: &ScanError) -> ServerFnError {

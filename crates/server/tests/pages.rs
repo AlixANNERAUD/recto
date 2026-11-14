@@ -473,3 +473,44 @@ async fn scan_errors_are_readable() {
     );
     assert!(harness.scan.scan_requests().is_empty());
 }
+
+#[tokio::test]
+async fn unlisted_scanner_ids_are_never_opened() {
+    let harness = Harness::new(vec![kitchen()], vec![]);
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let form = "application/x-www-form-urlencoded";
+    // SANE's `net` backend would connect to any host named in an id it does not know.
+    let foreign = "net%3A203.0.113.9%3Atest%3A0";
+    for (endpoint, body) in [
+        ("scanner_capabilities", format!("id={foreign}")),
+        ("preview", format!("id={foreign}")),
+    ] {
+        let response = harness.call(endpoint, &cookie, form, body).await;
+        assert!(
+            text(response).await.contains("Scanner not found"),
+            "{endpoint}"
+        );
+    }
+    let body = serde_json::json!({
+        "id": "net:203.0.113.9:test:0",
+        "settings": { "resolution": 150, "mode": "Gray", "source": null, "area": null },
+        "selection": null,
+        "format": "Pdf",
+    });
+    let response = harness
+        .call("scan", &cookie, "application/json", body.to_string())
+        .await;
+    assert!(text(response).await.contains("Scanner not found"));
+    assert!(
+        harness.scan.opened().is_empty(),
+        "{:?}",
+        harness.scan.opened()
+    );
+
+    // A listed scanner still opens.
+    let response = harness
+        .call("scanner_capabilities", &cookie, form, "id=mock%3A0".into())
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(harness.scan.opened(), ["mock:0"]);
+}
