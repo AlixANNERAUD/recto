@@ -9,10 +9,21 @@ mod model;
 mod options;
 mod status;
 
+#[cfg(feature = "service")]
+mod cups;
+#[cfg(feature = "service")]
+mod service;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
+
+#[cfg(feature = "service")]
+pub use cups::Cups;
 pub use error::PrintError;
 pub use format::DocumentFormat;
 #[cfg(feature = "service")]
 pub use model::PrintRequest;
 pub use model::{Capabilities, Job, Printer};
 pub use options::{ColorMode, PageRanges, PrintOptions, Sides};
+#[cfg(feature = "service")]
+pub use service::PrintService;
 pub use status::{JobState, PrinterState, ReasonKind, Severity, StateReason, Supply, supplies};

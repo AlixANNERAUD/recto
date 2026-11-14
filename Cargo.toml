@@ -35,8 +35,11 @@ embedded-i18n = "0.2"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 bytes = "1"
-# Task 3 adds the client features; the models only need the attribute types.
+# The models only need the attribute types; the `service` feature of recto-printing adds the client.
 ipp = { version = "8.0.0", default-features = false }
+async-trait = "0.1"
+percent-encoding = "2.3"
+wiremock = "0.6.5"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

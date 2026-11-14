@@ -9,6 +9,18 @@ pub enum PrinterState {
     Stopped,
 }
 
+impl PrinterState {
+    /// Maps the IPP `printer-state` enum (3 to 5).
+    pub fn from_ipp(value: i32) -> Option<PrinterState> {
+        Some(match value {
+            3 => PrinterState::Idle,
+            4 => PrinterState::Processing,
+            5 => PrinterState::Stopped,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Severity {
     Report,
@@ -183,6 +195,14 @@ mod tests {
         assert_eq!(built[0].color.as_deref(), Some("#00FFFF"));
         assert_eq!(built[1].level, Some(80));
         assert_eq!(built[1].color, None);
+    }
+
+    #[test]
+    fn printer_state_from_ipp() {
+        assert_eq!(PrinterState::from_ipp(3), Some(PrinterState::Idle));
+        assert_eq!(PrinterState::from_ipp(4), Some(PrinterState::Processing));
+        assert_eq!(PrinterState::from_ipp(5), Some(PrinterState::Stopped));
+        assert_eq!(PrinterState::from_ipp(0), None);
     }
 
     #[test]
