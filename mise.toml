@@ -1,0 +1,75 @@
+[tools]
+rust = { version = "1.99.1", components = "rustfmt,clippy,llvm-tools", targets = "wasm32-unknown-unknown", mr_boxington = true }
+mr-boxington = "latest"
+"github:leptos-rs/cargo-leptos" = "0.3.11"
+"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.149"
+"aqua:EmbarkStudios/cargo-deny" = "0.20.2"
+"aqua:taiki-e/cargo-llvm-cov" = "0.9.1"
+# Must match the wasm-bindgen version in Cargo.lock. The statically linked (musl) build runs on
+# any Linux, including the Debian 12 image builder whose glibc is older than the gnu build needs.
+"github:wasm-bindgen/wasm-bindgen" = { version = "0.2.130", matching = "unknown-linux-musl" }
+# cargo-leptos uses these from the PATH instead of downloading them at each clean build (GitHub
+# refusing those downloads was failing builds). The versions are cargo-leptos 0.3.11's defaults.
+"github:WebAssembly/binaryen" = { version = "123", version_prefix = "version_" }
+"aqua:tailwindlabs/tailwindcss" = "4.2.1"
+
+[env]
+# The browser bundle is built separately for wasm32, so server-side commands leave it out to
+# avoid unifying the `ssr` and `hydrate` features of the interface crate.
+RECTO_SERVER_PACKAGES = "--workspace --exclude recto-frontend"
+
+[tasks.format]
+description = "Format the code"
+run = "cargo fmt --all"
+
+[tasks.lint]
+description = "Check formatting and run clippy on the server and browser code"
+run = [
+  "cargo fmt --all --check",
+  "cargo clippy $RECTO_SERVER_PACKAGES --all-targets -- -D warnings",
+  "cargo clippy --package recto-frontend --target wasm32-unknown-unknown -- -D warnings",
+]
+
+[tasks.test]
+description = "Run the test suite"
+run = "cargo nextest run $RECTO_SERVER_PACKAGES --no-tests=pass"
+
+# Warnings are errors, so a broken intra-doc link or a malformed doc comment fails CI.
+[tasks.doc]
+description = "Build the API documentation, failing on rustdoc warnings"
+run = "cargo doc $RECTO_SERVER_PACKAGES --no-deps --document-private-items"
+
+[tasks.doc.env]
+RUSTDOCFLAGS = "-D warnings"
+
+[tasks.coverage]
+description = "Run the test suite with coverage, writing lcov.info"
+run = "cargo llvm-cov nextest $RECTO_SERVER_PACKAGES --no-tests=pass --lcov --output-path lcov.info"
+
+[tasks.deny]
+description = "Check advisories, licences, bans and sources"
+run = "cargo deny check"
+
+[tasks.check]
+description = "Everything CI checks, except the release build"
+depends = ["lint", "doc", "test", "deny"]
+
+# cargo-leptos 0.3.11 reads the binary's arguments from its command line only (there is no
+# `bin-args` key in the workspace metadata), hence `-- serve`. cargo-leptos itself runs with
+# `site-addr` and `site-root` from Cargo.toml, which these values must match.
+[tasks.dev]
+description = "Run the server with live reload on http://127.0.0.1:3000"
+run = "cargo leptos watch -- serve"
+
+[tasks.dev.env]
+RECTO_SITE_ROOT = "target/site"
+RECTO_LISTEN_ADDRESS = "127.0.0.1:3000"
+RECTO_PUBLIC_URL = "http://127.0.0.1:3000"
+RECTO_LOG_FORMAT = "text"
+# Dummy values until sign-in exists; the identity provider is never contacted at startup.
+RECTO_OIDC_ISSUER = "http://127.0.0.1:9/"
+RECTO_OIDC_CLIENT_ID = "recto-dev"
+
+[tasks.build]
+description = "Build the release binary and the site"
+run = "cargo leptos build --release"

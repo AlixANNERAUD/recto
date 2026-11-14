@@ -1,0 +1,10 @@
+{
+  "app": {
+    "name": "recto",
+    "tagline": "Print and scan from your browser."
+  },
+  "not_found": {
+    "title": "Not found",
+    "heading": "Page not found"
+  }
+}

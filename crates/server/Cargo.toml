@@ -1,0 +1,40 @@
+[package]
+name = "recto"
+description = "Self-hosted web app to print and scan behind OpenID Connect."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "recto"
+path = "src/lib.rs"
+
+[[bin]]
+name = "recto"
+path = "src/main.rs"
+
+[dependencies]
+recto-app = { workspace = true, features = ["ssr"] }
+recto-printing.workspace = true
+recto-scanning.workspace = true
+recto-authentication.workspace = true
+leptos = { workspace = true, features = ["ssr"] }
+leptos_axum.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+tokio.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+reqwest.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tower = { version = "0.5.3", features = ["util"] }
+
+[lints]
+workspace = true

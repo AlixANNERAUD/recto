@@ -1,0 +1,8 @@
+target
+.git
+.github
+.superpowers
+.env
+mise.local.toml
+Dockerfile
+.dockerignore

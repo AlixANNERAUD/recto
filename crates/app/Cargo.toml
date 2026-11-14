@@ -1,0 +1,32 @@
+[package]
+name = "recto-app"
+description = "Web interface of recto."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+leptos.workspace = true
+leptos_router.workspace = true
+leptos_meta.workspace = true
+leptos_axum = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+embedded-i18n.workspace = true
+
+[features]
+default = []
+hydrate = ["leptos/hydrate"]
+ssr = [
+    "leptos/ssr",
+    "leptos_meta/ssr",
+    "leptos_router/ssr",
+    "dep:leptos_axum",
+    "dep:axum",
+]
+
+[lints]
+workspace = true
