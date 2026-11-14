@@ -11,15 +11,18 @@
 //! - claims come from the ID token, and from UserInfo only when the required claim is missing
 //!   from the token, since providers differ on where they put roles.
 
-use std::time::Duration;
+use std::{
+    sync::{Arc, PoisonError, RwLock},
+    time::{Duration, Instant},
+};
 
 use openidconnect::{
-    AccessTokenHash, AdditionalClaims, AuthorizationCode, Client, ClientId, CsrfToken,
-    EmptyAdditionalProviderMetadata, EmptyExtraTokenFields, EndpointMaybeSet, EndpointNotSet,
-    EndpointSet, IdTokenFields, IssuerUrl, LogoutProviderMetadata, Nonce, OAuth2TokenResponse,
-    PkceCodeChallenge, PkceCodeVerifier, ProviderMetadataWithLogout, RedirectUrl,
-    RequestTokenError, Scope, StandardErrorResponse, StandardTokenResponse, TokenResponse,
-    UserInfoClaims,
+    AccessTokenHash, AdditionalClaims, AuthorizationCode, ClaimsVerificationError, Client,
+    ClientId, CsrfToken, DiscoveryError, EmptyAdditionalProviderMetadata, EmptyExtraTokenFields,
+    EndpointMaybeSet, EndpointNotSet, EndpointSet, IdTokenFields, IssuerUrl,
+    LogoutProviderMetadata, Nonce, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier,
+    ProviderMetadataWithLogout, RedirectUrl, RequestTokenError, Scope, SignatureVerificationError,
+    StandardErrorResponse, StandardTokenResponse, TokenResponse, UserInfoClaims, UserInfoError,
     core::{
         CoreAuthDisplay, CoreAuthPrompt, CoreAuthenticationFlow, CoreErrorResponseType,
         CoreGenderClaim, CoreJsonWebKey, CoreJweContentEncryptionAlgorithm,
@@ -29,7 +32,7 @@ use openidconnect::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tokio::sync::OnceCell;
+use tokio::sync::Mutex;
 use url::Url;
 
 use crate::{claims, user::User};
@@ -90,7 +93,7 @@ pub struct OpenIdSettings {
 
 /// What the callback needs from the start of a sign-in, kept in the session meanwhile. It
 /// must be used once and then removed from the session.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingSignIn {
     /// Ties the callback to the browser that started the sign-in.
     pub state: String,
@@ -99,12 +102,31 @@ pub struct PendingSignIn {
     pub pkce_verifier: String,
 }
 
+// All three values are secrets of an ongoing sign-in; they stay out of logs.
+impl std::fmt::Debug for PendingSignIn {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PendingSignIn")
+            .finish_non_exhaustive()
+    }
+}
+
 /// A completed sign-in.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SignedIn {
     pub user: User,
     /// Kept in the session to hint the provider at sign-out.
     pub id_token: String,
+}
+
+// The ID token is a bearer credential for the provider's end session endpoint.
+impl std::fmt::Debug for SignedIn {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SignedIn")
+            .field("user", &self.user)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Why a sign-in failed. The messages reach the sign-in error page, so they stay readable.
@@ -120,17 +142,27 @@ pub enum OpenIdError {
     AccessDenied,
 }
 
-/// The provider as discovered: the client and where to send the browser to sign out.
+/// The provider as discovered: the client (with the provider's signing keys) and where to send
+/// the browser to sign out.
 struct Discovered {
     client: DiscoveredClient,
     end_session_endpoint: Option<Url>,
 }
 
+/// How long a failed discovery is remembered.
+const RETRY_AFTER: Duration = Duration::from_secs(5);
+
 /// The OpenID Connect provider, discovered on first use.
 pub struct OpenId {
     settings: OpenIdSettings,
     http: reqwest::Client,
-    discovered: OnceCell<Discovered>,
+    /// The current discovery result, swapped when the provider is discovered again. Readers
+    /// never wait for a discovery in progress.
+    discovered: RwLock<Option<Arc<Discovered>>>,
+    /// Serializes discoveries, and holds when and why the last one failed, so concurrent
+    /// sign-in pages fail fast instead of each waiting for the provider's timeout.
+    failure: Mutex<Option<(Instant, String)>>,
+    retry_after: Duration,
 }
 
 impl OpenId {
@@ -139,56 +171,120 @@ impl OpenId {
         let http = reqwest::Client::builder()
             // Following redirects would expose the client to server-side request forgery.
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(10))
             .build()
             // Only fails when the TLS backend cannot initialize, which no retry can fix.
             .expect("the HTTP client could not be built");
         Self {
             settings,
             http,
-            discovered: OnceCell::new(),
+            discovered: RwLock::new(None),
+            failure: Mutex::new(None),
+            retry_after: RETRY_AFTER,
         }
     }
 
-    /// Discovers the provider, once; a failed discovery is retried by the next call.
-    async fn discovered(&self) -> Result<&Discovered, OpenIdError> {
+    /// Changes how long a failed discovery is remembered before the next call tries again
+    /// (5 seconds by default).
+    #[must_use]
+    pub fn retry_after(mut self, delay: Duration) -> Self {
+        self.retry_after = delay;
+        self
+    }
+
+    fn current(&self) -> Option<Arc<Discovered>> {
         self.discovered
-            .get_or_try_init(|| async {
-                let unavailable =
-                    |error: &dyn std::fmt::Display| OpenIdError::Unavailable(error.to_string());
-                let mut first_error = None;
-                let mut found = None;
-                for issuer in issuer_candidates(&self.settings.issuer) {
-                    let issuer = IssuerUrl::new(issuer).map_err(|error| unavailable(&error))?;
-                    match ProviderMetadataWithLogout::discover_async(issuer, &self.http).await {
-                        Ok(metadata) => {
-                            found = Some(metadata);
-                            break;
-                        }
-                        Err(error) => {
-                            first_error.get_or_insert_with(|| error.to_string());
-                        }
-                    }
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The discovered provider; discovery runs on the first call and again after a failure,
+    /// but not within `retry_after` of the last failure.
+    async fn discovered(&self) -> Result<Arc<Discovered>, OpenIdError> {
+        if let Some(discovered) = self.current() {
+            return Ok(discovered);
+        }
+        let mut failure = self.failure.lock().await;
+        // Another caller may have finished while this one waited for the lock.
+        if let Some(discovered) = self.current() {
+            return Ok(discovered);
+        }
+        if let Some((at, reason)) = &*failure
+            && at.elapsed() < self.retry_after
+        {
+            return Err(OpenIdError::Unavailable(reason.clone()));
+        }
+        self.discover(&mut failure).await
+    }
+
+    /// Discovers the provider again after a verification failed with the cached keys, which
+    /// happens when the provider rotated them. `stale` is what the caller verified with: if
+    /// another caller already refreshed, that result is used instead of another round trip.
+    async fn refreshed(&self, stale: &Arc<Discovered>) -> Result<Arc<Discovered>, OpenIdError> {
+        let mut failure = self.failure.lock().await;
+        match self.current() {
+            Some(current) if !Arc::ptr_eq(&current, stale) => Ok(current),
+            _ => self.discover(&mut failure).await,
+        }
+    }
+
+    async fn discover(
+        &self,
+        failure: &mut Option<(Instant, String)>,
+    ) -> Result<Arc<Discovered>, OpenIdError> {
+        match self.fetch().await {
+            Ok(discovered) => {
+                let discovered = Arc::new(discovered);
+                *self
+                    .discovered
+                    .write()
+                    .unwrap_or_else(PoisonError::into_inner) = Some(discovered.clone());
+                *failure = None;
+                Ok(discovered)
+            }
+            Err(error) => {
+                // The previous keys stay in use: a provider that is briefly down must not
+                // lock out sign-ins that the cached keys can still verify.
+                *failure = Some((Instant::now(), error.clone()));
+                Err(OpenIdError::Unavailable(error))
+            }
+        }
+    }
+
+    async fn fetch(&self) -> Result<Discovered, String> {
+        let mut metadata = None;
+        let mut first_error = None;
+        for issuer in issuer_candidates(&self.settings.issuer) {
+            let issuer = IssuerUrl::new(issuer).map_err(|error| error.to_string())?;
+            match ProviderMetadataWithLogout::discover_async(issuer, &self.http).await {
+                Ok(found) => {
+                    metadata = Some(found);
+                    break;
                 }
-                let metadata = found
-                    .ok_or_else(|| OpenIdError::Unavailable(first_error.unwrap_or_default()))?;
-                let LogoutProviderMetadata {
-                    end_session_endpoint,
-                    additional_metadata: EmptyAdditionalProviderMetadata {},
-                } = metadata.additional_metadata().clone();
-                let redirect = RedirectUrl::from_url(self.settings.redirect_url.clone());
-                let client = Client::from_provider_metadata(
-                    metadata,
-                    ClientId::new(self.settings.client_id.clone()),
-                    None,
-                )
-                .set_redirect_uri(redirect);
-                Ok(Discovered {
-                    client,
-                    end_session_endpoint: end_session_endpoint.map(|url| url.url().clone()),
-                })
-            })
-            .await
+                // Only an issuer mismatch is worth trying the other spelling for; the same
+                // request to an unreachable provider would only wait for a second timeout.
+                Err(error @ DiscoveryError::Validation(_)) => {
+                    first_error.get_or_insert_with(|| error.to_string());
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        let metadata = metadata.ok_or_else(|| first_error.unwrap_or_default())?;
+        let LogoutProviderMetadata {
+            end_session_endpoint,
+            additional_metadata: EmptyAdditionalProviderMetadata {},
+        } = metadata.additional_metadata().clone();
+        let client = Client::from_provider_metadata(
+            metadata,
+            ClientId::new(self.settings.client_id.clone()),
+            None,
+        )
+        .set_redirect_uri(RedirectUrl::from_url(self.settings.redirect_url.clone()));
+        Ok(Discovered {
+            client,
+            end_session_endpoint: end_session_endpoint.map(|url| url.url().clone()),
+        })
     }
 
     /// Starts a sign-in: the provider address to redirect to, and what to keep in the session.
@@ -221,7 +317,9 @@ impl OpenId {
     /// Completes a sign-in from the provider's callback.
     ///
     /// Verifies the state, exchanges the code with the PKCE verifier, checks the ID token's
-    /// signature, nonce and access token hash, then the required claim.
+    /// signature, issuer, audience, expiry, nonce and access token hash, then the required
+    /// claim. When the signature cannot be checked with the cached keys, the provider is
+    /// discovered again once, since it may have rotated them.
     pub async fn finish(
         &self,
         pending: PendingSignIn,
@@ -231,8 +329,9 @@ impl OpenId {
         if state != pending.state {
             return Err(OpenIdError::StateMismatch);
         }
-        let client = &self.discovered().await?.client;
-        let token = client
+        let mut discovered = self.discovered().await?;
+        let token = discovered
+            .client
             .exchange_code(AuthorizationCode::new(code.to_owned()))
             .map_err(|error| OpenIdError::Rejected(error.to_string()))?
             .set_pkce_verifier(PkceCodeVerifier::new(pending.pkce_verifier))
@@ -242,48 +341,48 @@ impl OpenId {
                 RequestTokenError::Request(error) => OpenIdError::Unavailable(error.to_string()),
                 other => OpenIdError::Rejected(other.to_string()),
             })?;
-        let id_token = token
-            .id_token()
-            .ok_or_else(|| OpenIdError::Rejected("no ID token in the answer".to_owned()))?;
-        let verifier = client.id_token_verifier();
-        let rejected = |error: &dyn std::fmt::Display| OpenIdError::Rejected(error.to_string());
-        let id_claims = id_token
-            .claims(&verifier, &Nonce::new(pending.nonce))
-            .map_err(|error| rejected(&error))?;
-        if let Some(expected) = id_claims.access_token_hash() {
-            let algorithm = id_token.signing_alg().map_err(|error| rejected(&error))?;
-            let key = id_token
-                .signing_key(&verifier)
-                .map_err(|error| rejected(&error))?;
-            let actual = AccessTokenHash::from_token(token.access_token(), algorithm, key)
-                .map_err(|error| rejected(&error))?;
-            if actual != *expected {
-                return Err(OpenIdError::Rejected(
-                    "the access token does not match the ID token".to_owned(),
-                ));
+        let nonce = Nonce::new(pending.nonce);
+        let (mut all, subject) = match verify(&discovered.client, &token, &nonce) {
+            Err(Verification::Keys(_)) => {
+                // The code is spent, so only the verification is retried, with fresh keys.
+                discovered = self.refreshed(&discovered).await?;
+                verify(&discovered.client, &token, &nonce)
             }
+            other => other,
         }
+        .map_err(|error| match error {
+            Verification::Keys(reason) | Verification::Invalid(reason) => {
+                OpenIdError::Rejected(reason)
+            }
+        })?;
+        let client = &discovered.client;
 
-        let mut all = to_map(id_claims);
         if let Some(claim) = &self.settings.required_claim
             && !claims::allows(&all, claim, self.settings.required_value.as_deref())
         {
             // Some providers only put roles in UserInfo.
-            let request = client
-                .user_info(
-                    token.access_token().clone(),
-                    Some(id_claims.subject().clone()),
-                )
-                .map_err(|error| rejected(&error))?;
-            match request.request_async(&self.http).await {
-                Ok(information) => {
-                    let information: UserInfoClaims<ExtraClaims, CoreGenderClaim> = information;
-                    for (key, value) in to_map(&information) {
-                        all.entry(key).or_insert(value);
+            // A provider without a UserInfo endpoint leaves the claim absent.
+            if let Ok(request) = client.user_info(token.access_token().clone(), Some(subject)) {
+                match request.request_async(&self.http).await {
+                    Ok(information) => {
+                        let information: UserInfoClaims<ExtraClaims, CoreGenderClaim> = information;
+                        for (key, value) in to_map(&information) {
+                            all.entry(key).or_insert(value);
+                        }
                     }
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "reading the user information failed");
+                    Err(UserInfoError::Request(error)) => {
+                        return Err(OpenIdError::Unavailable(error.to_string()));
+                    }
+                    Err(UserInfoError::ClaimsVerification(error)) => {
+                        // Typically a `sub` that is not the signed-in user's: nothing from
+                        // that answer may grant access.
+                        return Err(OpenIdError::Rejected(format!(
+                            "the user information does not match the ID token: {error}"
+                        )));
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "reading the user information failed");
+                    }
                 }
             }
             if !claims::allows(&all, claim, self.settings.required_value.as_deref()) {
@@ -292,22 +391,65 @@ impl OpenId {
         }
         let user = User::from_claims(&all)
             .ok_or_else(|| OpenIdError::Rejected("the ID token has no subject".to_owned()))?;
-        Ok(SignedIn {
-            user,
-            id_token: id_token.to_string(),
-        })
+        let id_token = token
+            .id_token()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        Ok(SignedIn { user, id_token })
     }
 
     /// Where to send the browser to end the session at the provider, when it supports it and
     /// has been discovered (a sign-in always discovers it first).
     pub fn end_session_url(&self, id_token: &str, post_logout: &Url) -> Option<Url> {
-        let mut url = self.discovered.get()?.end_session_endpoint.clone()?;
+        let mut url = self.current()?.end_session_endpoint.clone()?;
         url.query_pairs_mut()
             .append_pair("id_token_hint", id_token)
             .append_pair("client_id", &self.settings.client_id)
             .append_pair("post_logout_redirect_uri", post_logout.as_str());
         Some(url)
     }
+}
+
+enum Verification {
+    /// The signature could not be checked with the cached keys; fresh ones may help.
+    Keys(String),
+    Invalid(String),
+}
+
+/// Checks the ID token and returns all its claims and its subject.
+fn verify(
+    client: &DiscoveredClient,
+    token: &ExtraTokenResponse,
+    nonce: &Nonce,
+) -> Result<(Map<String, Value>, openidconnect::SubjectIdentifier), Verification> {
+    let invalid = |error: &dyn std::fmt::Display| Verification::Invalid(error.to_string());
+    let id_token = token
+        .id_token()
+        .ok_or_else(|| Verification::Invalid("no ID token in the answer".to_owned()))?;
+    let verifier = client.id_token_verifier();
+    let claims = id_token
+        .claims(&verifier, nonce)
+        .map_err(|error| match error {
+            ClaimsVerificationError::SignatureVerification(
+                SignatureVerificationError::NoMatchingKey
+                | SignatureVerificationError::CryptoError(_),
+            ) => Verification::Keys(error.to_string()),
+            other => invalid(&other),
+        })?;
+    if let Some(expected) = claims.access_token_hash() {
+        let algorithm = id_token.signing_alg().map_err(|error| invalid(&error))?;
+        let key = id_token
+            .signing_key(&verifier)
+            .map_err(|error| invalid(&error))?;
+        let actual = AccessTokenHash::from_token(token.access_token(), algorithm, key)
+            .map_err(|error| invalid(&error))?;
+        if actual != *expected {
+            return Err(Verification::Invalid(
+                "the access token does not match the ID token".to_owned(),
+            ));
+        }
+    }
+    Ok((to_map(claims), claims.subject().clone()))
 }
 
 /// All claims, standard ones included, as one JSON object.

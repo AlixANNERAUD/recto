@@ -2,9 +2,9 @@
 //!
 //! Session cookies are `SameSite=Lax`, so browsers do not send them with cross-site `POST`
 //! requests. On top of that, state-changing requests are refused when the browser says they
-//! come from another site (`Sec-Fetch-Site`) or from another origin (`Origin`). Requests with
-//! an `Authorization` header are left alone: a page on another site cannot add that header
-//! without a CORS preflight, which the server never grants.
+//! come from another site (`Sec-Fetch-Site`) or from another origin (`Origin`). An
+//! `Authorization` header exempts nothing: recto has no API authenticated that way, and a
+//! browser can attach cached credentials (HTTP Basic from a reverse proxy) to a forged request.
 //!
 //! The check is deliberately lenient with requests that carry neither header: those come from
 //! non-browser clients, which hold no session cookie of the user's, or from old browsers on
@@ -37,11 +37,11 @@ fn is_safe(method: &Method) -> bool {
     )
 }
 
-/// Whether a request may proceed. Safe methods and requests with an `Authorization` header
-/// always may; others are refused when `Sec-Fetch-Site` is present and not `same-origin` (or `none`, a navigation typed by the
+/// Whether a request may proceed. Safe methods always may; others are refused when
+/// `Sec-Fetch-Site` is present and not `same-origin` (or `none`, a navigation typed by the
 /// user), or when `Origin` is present and differs from `origin`.
 pub fn allowed(method: &Method, headers: &HeaderMap, origin: &AllowedOrigin) -> bool {
-    if is_safe(method) || headers.contains_key(header::AUTHORIZATION) {
+    if is_safe(method) {
         return true;
     }
     if let Some(site) = headers
@@ -126,6 +126,16 @@ mod tests {
             &headers(&[("sec-fetch-site", "same-site")]),
             &origin
         ));
+    }
+
+    #[test]
+    fn authorization_header_does_not_exempt_cross_site_posts() {
+        let forged = headers(&[
+            ("authorization", "Basic dXNlcjpwYXNz"),
+            ("origin", "https://evil.example"),
+            ("sec-fetch-site", "cross-site"),
+        ]);
+        assert!(!allowed(&Method::POST, &forged, &origin()));
     }
 
     #[test]

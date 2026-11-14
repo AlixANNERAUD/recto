@@ -1,6 +1,8 @@
 //! OpenID Connect sign-in against a mocked provider: discovery, PKCE, nonce, signed ID tokens,
 //! required claims and the provider being down at first.
 
+use std::time::Instant;
+
 use chrono::{Duration, Utc};
 use openidconnect::{
     AccessToken, Audience, EndUserEmail, EndUserName, EndUserUsername, IdToken, IdTokenClaims,
@@ -23,16 +25,35 @@ use wiremock::{
 
 const CLIENT_ID: &str = "recto";
 // A key made for these tests only; it signs nothing real.
-const KEY: &str = include_str!("fixtures/test-only-oidc-signing-key.pem");
+const SIGNING_KEY: &str = include_str!("fixtures/test-only-oidc-signing-key.pem");
+const OTHER_KEY: &str = include_str!("fixtures/test-only-oidc-other-key.pem");
 
-fn signing_key() -> CoreRsaPrivateSigningKey {
-    CoreRsaPrivateSigningKey::from_pem(KEY, Some(JsonWebKeyId::new("test-key".to_owned())))
+#[derive(Clone, Copy)]
+enum Key {
+    Signing,
+    Other,
+}
+
+fn key(which: Key) -> CoreRsaPrivateSigningKey {
+    let pem = match which {
+        Key::Signing => SIGNING_KEY,
+        Key::Other => OTHER_KEY,
+    };
+    // Both keys share an id, so a rotation is seen as a signature that no longer verifies
+    // or a key that is gone, whichever the verifier meets first.
+    CoreRsaPrivateSigningKey::from_pem(pem, Some(JsonWebKeyId::new("test-key".to_owned())))
         .expect("a valid test key")
 }
+
+const DISCOVERY_PATH: &str = "/.well-known/openid-configuration";
 
 /// A mocked provider whose issuer is the bare origin, as Zitadel announces it.
 struct Provider {
     server: MockServer,
+    /// Announce the issuer with a trailing slash, as Authentik does.
+    slash: bool,
+    /// Advertise an `end_session_endpoint`.
+    end_session: bool,
 }
 
 impl Provider {
@@ -43,21 +64,38 @@ impl Provider {
         provider
     }
 
+    async fn start_with(slash: bool, end_session: bool) -> Self {
+        let provider = Self {
+            server: MockServer::start().await,
+            slash,
+            end_session,
+        };
+        provider.mount_discovery().await;
+        provider
+    }
+
     /// A provider that answers nothing yet, as when the identity provider is down.
     async fn down() -> Self {
         Self {
             server: MockServer::start().await,
+            slash: false,
+            end_session: true,
         }
     }
 
+    /// The issuer as the provider announces it, in discovery and in ID tokens.
     fn issuer(&self) -> String {
-        self.server.uri()
+        if self.slash {
+            format!("{}/", self.server.uri())
+        } else {
+            self.server.uri()
+        }
     }
 
     fn settings(&self) -> OpenIdSettings {
         OpenIdSettings {
-            // `Url` always writes the trailing slash the provider does not announce.
-            issuer: Url::parse(&self.issuer()).unwrap(),
+            // `Url` always writes the trailing slash a bare origin gets.
+            issuer: Url::parse(&self.server.uri()).unwrap(),
             client_id: CLIENT_ID.to_owned(),
             redirect_url: "https://recto.example.org/auth/callback".parse().unwrap(),
             extra_scopes: Vec::new(),
@@ -67,39 +105,56 @@ impl Provider {
     }
 
     async fn mount_discovery(&self) {
+        self.mount_discovery_with(Key::Signing).await;
+    }
+
+    /// Serves discovery, and the key set with the public part of `published`.
+    async fn mount_discovery_with(&self, published: Key) {
         let base = self.server.uri();
+        let mut document = json!({
+            "issuer": self.issuer(),
+            "authorization_endpoint": format!("{base}/authorize"),
+            "token_endpoint": format!("{base}/token"),
+            "userinfo_endpoint": format!("{base}/userinfo"),
+            "jwks_uri": format!("{base}/jwks"),
+            "response_types_supported": ["code"],
+            "subject_types_supported": ["public"],
+            "id_token_signing_alg_values_supported": ["RS256"]
+        });
+        if self.end_session {
+            document["end_session_endpoint"] = json!(format!("{base}/logout"));
+        }
         Mock::given(method("GET"))
-            .and(path("/.well-known/openid-configuration"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "issuer": base,
-                "authorization_endpoint": format!("{base}/authorize"),
-                "token_endpoint": format!("{base}/token"),
-                "userinfo_endpoint": format!("{base}/userinfo"),
-                "end_session_endpoint": format!("{base}/logout"),
-                "jwks_uri": format!("{base}/jwks"),
-                "response_types_supported": ["code"],
-                "subject_types_supported": ["public"],
-                "id_token_signing_alg_values_supported": ["RS256"]
-            })))
+            .and(path(DISCOVERY_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_json(document))
             .mount(&self.server)
             .await;
         Mock::given(method("GET"))
             .and(path("/jwks"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .set_body_json(json!({"keys": [signing_key().as_verification_key()]})),
+                    .set_body_json(json!({"keys": [key(published).as_verification_key()]})),
             )
             .mount(&self.server)
             .await;
     }
 
-    /// Answers the next code exchange with an ID token for `subject` carrying `extra` claims,
-    /// and the user information endpoint with `information`.
-    async fn answer(&self, nonce: &str, subject: &str, extra: Value, information: Value) {
+    async fn discovery_requests(&self) -> usize {
+        self.server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter(|request| request.url.path() == DISCOVERY_PATH)
+            .count()
+    }
+
+    /// Answers the next code exchange as described by `answer`.
+    async fn respond(&self, answer: Answer) {
         self.server.reset().await;
-        self.mount_discovery().await;
+        self.mount_discovery_with(answer.published).await;
         let access_token = AccessToken::new("access-token".to_owned());
-        let claims = serde_json::from_value(extra).unwrap();
+        let claims = serde_json::from_value(answer.extra).unwrap();
         let id_token = IdToken::<
             ExtraClaims,
             CoreGenderClaim,
@@ -108,10 +163,10 @@ impl Provider {
         >::new(
             IdTokenClaims::new(
                 IssuerUrl::new(self.issuer()).unwrap(),
-                vec![Audience::new(CLIENT_ID.to_owned())],
-                Utc::now() + Duration::minutes(5),
+                vec![Audience::new(answer.audience)],
+                Utc::now() + answer.lifetime,
                 Utc::now(),
-                StandardClaims::new(SubjectIdentifier::new(subject.to_owned()))
+                StandardClaims::new(SubjectIdentifier::new(answer.subject.clone()))
                     .set_preferred_username(Some(EndUserUsername::new("alice".to_owned())))
                     .set_name(Some(LocalizedClaim::from(EndUserName::new(
                         "Alice Martin".to_owned(),
@@ -119,8 +174,8 @@ impl Provider {
                     .set_email(Some(EndUserEmail::new("alice@example.org".to_owned()))),
                 ExtraClaims { claims },
             )
-            .set_nonce(Some(Nonce::new(nonce.to_owned()))),
-            &signing_key(),
+            .set_nonce(Some(Nonce::new(answer.nonce))),
+            &key(answer.signed_with),
             CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
             Some(&access_token),
             None,
@@ -138,13 +193,43 @@ impl Provider {
             })))
             .mount(&self.server)
             .await;
-        let mut information = information;
-        information["sub"] = json!(subject);
+        let mut information = answer.information;
+        if information.get("sub").is_none() {
+            information["sub"] = json!(answer.subject);
+        }
         Mock::given(method("GET"))
             .and(path("/userinfo"))
             .respond_with(ResponseTemplate::new(200).set_body_json(information))
             .mount(&self.server)
             .await;
+    }
+}
+
+/// What the provider answers at the token and user information endpoints; the defaults are a
+/// valid sign-in.
+struct Answer {
+    nonce: String,
+    subject: String,
+    audience: String,
+    lifetime: Duration,
+    signed_with: Key,
+    published: Key,
+    extra: Value,
+    information: Value,
+}
+
+impl Answer {
+    fn new(nonce: &str) -> Self {
+        Self {
+            nonce: nonce.to_owned(),
+            subject: "subject-1".to_owned(),
+            audience: CLIENT_ID.to_owned(),
+            lifetime: Duration::minutes(5),
+            signed_with: Key::Signing,
+            published: Key::Signing,
+            extra: json!({}),
+            information: json!({}),
+        }
     }
 }
 
@@ -161,12 +246,23 @@ async fn sign_in(
     extra: Value,
     information: Value,
 ) -> Result<SignedIn, OpenIdError> {
+    sign_in_with(provider, openid, |answer| {
+        answer.extra = extra;
+        answer.information = information;
+    })
+    .await
+}
+
+async fn sign_in_with(
+    provider: &Provider,
+    openid: &OpenId,
+    customize: impl FnOnce(&mut Answer),
+) -> Result<SignedIn, OpenIdError> {
     let (url, pending) = openid.start().await.unwrap();
     let state = query_parameter(&url, "state");
-    let nonce = query_parameter(&url, "nonce");
-    provider
-        .answer(&nonce, "subject-1", extra, information)
-        .await;
+    let mut answer = Answer::new(&query_parameter(&url, "nonce"));
+    customize(&mut answer);
+    provider.respond(answer).await;
     openid.finish(pending, "the-code", &state).await
 }
 
@@ -271,11 +367,200 @@ async fn required_claim_from_userinfo() {
 #[tokio::test]
 async fn provider_down_then_up() {
     let provider = Provider::down().await;
-    let openid = OpenId::new(provider.settings());
+    let openid = OpenId::new(provider.settings()).retry_after(std::time::Duration::ZERO);
     match openid.start().await {
         Err(OpenIdError::Unavailable(reason)) => assert!(!reason.is_empty()),
         other => panic!("expected Unavailable, got {other:?}"),
     }
     provider.mount_discovery().await;
     assert!(openid.start().await.is_ok());
+}
+
+#[tokio::test]
+async fn a_failed_discovery_is_not_retried_at_once() {
+    let provider = Provider::down().await;
+    let openid = OpenId::new(provider.settings());
+    assert!(matches!(
+        openid.start().await,
+        Err(OpenIdError::Unavailable(_))
+    ));
+    // The provider is back, but sign-in pages keep failing fast for a few seconds.
+    provider.mount_discovery().await;
+    assert!(matches!(
+        openid.start().await,
+        Err(OpenIdError::Unavailable(_))
+    ));
+}
+
+#[tokio::test]
+async fn a_hanging_provider_fails_within_the_timeout_and_then_fast() {
+    let provider = Provider::down().await;
+    Mock::given(method("GET"))
+        .and(path(DISCOVERY_PATH))
+        .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(30)))
+        .mount(&provider.server)
+        .await;
+    let openid = OpenId::new(provider.settings());
+
+    let started = Instant::now();
+    assert!(matches!(
+        openid.start().await,
+        Err(OpenIdError::Unavailable(_))
+    ));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(11),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(provider.discovery_requests().await, 1, "one spelling only");
+
+    let started = Instant::now();
+    assert!(matches!(
+        openid.start().await,
+        Err(OpenIdError::Unavailable(_))
+    ));
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+}
+
+#[tokio::test]
+async fn rotated_signing_key_is_picked_up() {
+    let provider = Provider::start().await;
+    let openid = OpenId::new(provider.settings());
+    // Discovery happens at the first start and caches key A.
+    let (url, pending) = openid.start().await.unwrap();
+    let state = query_parameter(&url, "state");
+    let mut answer = Answer::new(&query_parameter(&url, "nonce"));
+    answer.signed_with = Key::Other;
+    answer.published = Key::Other;
+    provider.respond(answer).await;
+    let signed_in = openid.finish(pending, "the-code", &state).await.unwrap();
+    assert_eq!(signed_in.user.username, "alice");
+    assert_eq!(provider.discovery_requests().await, 1, "one re-discovery");
+
+    // The new keys are kept: the next sign-in needs no discovery.
+    sign_in_with(&provider, &openid, |answer| {
+        answer.signed_with = Key::Other;
+        answer.published = Key::Other;
+    })
+    .await
+    .unwrap();
+    assert_eq!(provider.discovery_requests().await, 0);
+}
+
+#[tokio::test]
+async fn token_signed_by_an_unknown_key_is_refused_after_one_re_discovery() {
+    let provider = Provider::start().await;
+    let openid = OpenId::new(provider.settings());
+    let result = sign_in_with(&provider, &openid, |answer| {
+        answer.signed_with = Key::Other;
+    })
+    .await;
+    assert!(
+        matches!(result, Err(OpenIdError::Rejected(_))),
+        "{result:?}"
+    );
+    assert_eq!(provider.discovery_requests().await, 1);
+}
+
+#[tokio::test]
+async fn wrong_nonce_is_refused() {
+    let provider = Provider::start().await;
+    let openid = OpenId::new(provider.settings());
+    let result = sign_in_with(&provider, &openid, |answer| {
+        answer.nonce = "someone-elses-nonce".to_owned();
+    })
+    .await;
+    assert!(
+        matches!(result, Err(OpenIdError::Rejected(_))),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn wrong_audience_is_refused() {
+    let provider = Provider::start().await;
+    let openid = OpenId::new(provider.settings());
+    let result = sign_in_with(&provider, &openid, |answer| {
+        answer.audience = "another-client".to_owned();
+    })
+    .await;
+    assert!(
+        matches!(result, Err(OpenIdError::Rejected(_))),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn expired_token_is_refused() {
+    let provider = Provider::start().await;
+    let openid = OpenId::new(provider.settings());
+    let result = sign_in_with(&provider, &openid, |answer| {
+        answer.lifetime = Duration::minutes(-5);
+    })
+    .await;
+    assert!(
+        matches!(result, Err(OpenIdError::Rejected(_))),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn user_information_for_another_subject_grants_nothing() {
+    let provider = Provider::start().await;
+    let openid = OpenId::new(OpenIdSettings {
+        required_claim: Some("groups".to_owned()),
+        required_value: Some("printers".to_owned()),
+        ..provider.settings()
+    });
+    let result = sign_in(
+        &provider,
+        &openid,
+        json!({}),
+        json!({"sub": "someone-else", "groups": ["printers"]}),
+    )
+    .await;
+    assert!(
+        matches!(result, Err(OpenIdError::Rejected(_))),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn issuer_announced_with_a_trailing_slash_works() {
+    let provider = Provider::start_with(true, true).await;
+    let openid = OpenId::new(provider.settings());
+    let signed_in = sign_in(&provider, &openid, json!({}), json!({}))
+        .await
+        .unwrap();
+    assert_eq!(signed_in.user.username, "alice");
+}
+
+#[tokio::test]
+async fn no_end_session_endpoint_means_no_sign_out_url() {
+    let provider = Provider::start_with(false, false).await;
+    let openid = OpenId::new(provider.settings());
+    let signed_in = sign_in(&provider, &openid, json!({}), json!({}))
+        .await
+        .unwrap();
+    let post_logout: Url = "https://recto.example.org/".parse().unwrap();
+    assert!(
+        openid
+            .end_session_url(&signed_in.id_token, &post_logout)
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn debug_output_hides_secrets() {
+    let provider = Provider::start().await;
+    let openid = OpenId::new(provider.settings());
+    let (_, pending) = openid.start().await.unwrap();
+    let shown = format!("{pending:?}");
+    for secret in [&pending.state, &pending.nonce, &pending.pkce_verifier] {
+        assert!(!shown.contains(secret.as_str()), "{shown}");
+    }
+    let signed_in = sign_in(&provider, &openid, json!({}), json!({}))
+        .await
+        .unwrap();
+    assert!(!format!("{signed_in:?}").contains(&signed_in.id_token));
 }
