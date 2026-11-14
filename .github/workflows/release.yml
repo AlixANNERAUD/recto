@@ -95,6 +95,8 @@ jobs:
         uses: docker/metadata-action@v6.2.0
         with:
           images: ${{ env.IMAGE }}
+          # `auto` tags `latest` only for a stable version, never for a pre-release.
+          flavor: latest=auto
           # Pre-releases get no `latest`, minor or major tag.
           tags: |
             type=semver,pattern={{version}},value=${{ env.TAG }}

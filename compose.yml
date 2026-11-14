@@ -1,5 +1,6 @@
 # recto with Docker Compose:
 #
+#   mkdir -p consume && sudo chown 65532:65532 consume
 #   RECTO_PUBLIC_URL=https://recto.example.org \
 #   RECTO_OIDC_ISSUER=https://id.example.org \
 #   RECTO_OIDC_CLIENT_ID=... \
@@ -12,8 +13,13 @@
 # The identity provider needs a public client (authorization code with PKCE) whose redirect URI is
 # $RECTO_PUBLIC_URL/auth/callback. Every RECTO_* variable of the README works under `environment`.
 #
+# recto runs as uid 65532, so the folder behind "Save" must be writable by it (the chown above).
+# To save into an existing folder owned by someone else, such as Paperless's consume folder, set
+# `user: "<uid>:<gid>"` on the recto service to that owner instead.
+#
 # Printers: add them to the `cups` service, for example
 #   docker compose exec cups lpadmin -p office -E -v ipp://192.168.1.60/ipp/print -m everywhere
+# (the local socket is the only way to administer CUPS, see examples/cups/cups-files.conf).
 # Scanners: see the sane-airscan lines below.
 services:
   recto:
@@ -62,20 +68,31 @@ services:
 
   cups:
     # A maintained multi-architecture (amd64, arm64) Debian CUPS server.
-    image: olbat/cupsd:latest
+    # Pinned by the digest of the multi-architecture index. To update, run
+    # `docker buildx imagetools inspect olbat/cupsd:latest` and copy its Digest.
+    image: olbat/cupsd:latest@sha256:3a9d7c319f4153c87e16db4edb6ef6c317aa7e71f8abe65c3419cc9aca851194
     restart: unless-stopped
     volumes:
       # The named volume keeps the printers added with lpadmin (printers.conf lives in /etc/cups);
       # the file mounted over it is the one this repository controls.
       - cups-config:/etc/cups
       - ./examples/cups/cupsd.conf:/etc/cups/cupsd.conf:ro
+      - ./examples/cups/cups-files.conf:/etc/cups/cups-files.conf:ro
       - cups-spool:/var/spool/cups
-    # Publish 631 only to a trusted network: cupsd.conf allows private address ranges.
+    # Publishing 631 exposes printing to whoever can reach the port (Docker's proxy hides their
+    # address from cupsd.conf's allow list), so publish it only to a trusted network.
     # ports:
     #   - "127.0.0.1:631:631"
     # A printer attached by USB needs its device node; never use `privileged`.
     # devices:
     #   - /dev/bus/usb:/dev/bus/usb
+
+# A fixed subnet, which examples/cups/cupsd.conf allows to print. Change both if it clashes.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.80.0/24
 
 volumes:
   cups-config:

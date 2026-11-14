@@ -41,3 +41,13 @@ updates:
     commit-message:
       prefix: build
       include: scope
+
+  # Keeps the digest of the CUPS image in compose.yml current.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: build
+      include: scope

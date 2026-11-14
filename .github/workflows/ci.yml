@@ -69,6 +69,10 @@ jobs:
       - name: Start the image and wait until it reports healthy
         run: |
           mkdir consume
+          sudo chown 65532:65532 consume
+          # "Save" runs as 65532, so prove the folder the quick start prepares is writable by it.
+          docker compose run --rm --no-deps --entrypoint sh recto \
+            -c 'touch /consume/.probe && rm /consume/.probe'
           if ! docker compose up --detach --no-build --wait --wait-timeout 150; then
             docker compose logs
             exit 1
