@@ -54,12 +54,14 @@ run = "cargo deny check"
 description = "Everything CI checks, except the release build"
 depends = ["lint", "doc", "test", "deny"]
 
+# The `dev-mocks` feature lets `RECTO_DEV_MOCKS=1 mise run dev` swap CUPS and SANE for mocks and
+# sign every request in, to try the interface without hardware; it only exists in debug builds.
 # cargo-leptos 0.3.11 reads the binary's arguments from its command line only (there is no
 # `bin-args` key in the workspace metadata), hence `-- serve`. cargo-leptos itself runs with
 # `site-addr` and `site-root` from Cargo.toml, which these values must match.
 [tasks.dev]
 description = "Run the server with live reload on http://127.0.0.1:3000"
-run = "cargo leptos watch -- serve"
+run = "cargo leptos watch --bin-features dev-mocks -- serve"
 
 [tasks.dev.env]
 RECTO_SITE_ROOT = "target/site"

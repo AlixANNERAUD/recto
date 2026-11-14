@@ -17,6 +17,11 @@ path = "src/lib.rs"
 name = "recto"
 path = "src/main.rs"
 
+[features]
+# `RECTO_DEV_MOCKS=1` for `mise run dev`: mock CUPS and SANE and a fixed signed-in user. Debug
+# builds only; a release build with it does not compile.
+dev-mocks = ["recto-printing/testing", "recto-scanning/testing"]
+
 [dependencies]
 recto-app = { workspace = true, features = ["ssr"] }
 recto-printing = { workspace = true, features = ["service"] }

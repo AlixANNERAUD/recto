@@ -1,0 +1,200 @@
+//! Development mocks: with `RECTO_DEV_MOCKS=1`, CUPS and SANE are replaced by in-memory
+//! services and every request is signed in as a fixed user, so the interface can be tried
+//! without a printer, a scanner or an identity provider.
+//!
+//! It signs everyone in, so it must never ship: this module only exists in debug builds with
+//! the `dev-mocks` feature (`mise run dev` enables it), and the crate refuses to compile with
+//! that feature in a release build (see `lib.rs`).
+
+use std::{path::PathBuf, sync::Arc, time::Duration};
+
+use axum::{extract::Request, middleware::Next, response::Response};
+use recto_app::state::AppState;
+use recto_authentication::User;
+use recto_printing::{
+    Capabilities, ColorMode, Job, JobState, Printer, PrinterState, Sides, StateReason, Supply,
+    testing::MockPrintService,
+};
+use recto_scanning::MockScannerService;
+
+/// Whether the mocks were asked for. Only the exact value `1` counts, so a stray
+/// `RECTO_DEV_MOCKS=0` does not turn them on.
+pub fn requested(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
+/// Who every request is signed in as.
+pub fn user() -> User {
+    User {
+        subject: "dev-mocks".into(),
+        username: "dev".into(),
+        name: Some("Development user".into()),
+    }
+}
+
+/// Middleware giving every request the development user. It runs before the session is read,
+/// so a user signed in through the session still takes its place.
+pub async fn sign_in(mut request: Request, next: Next) -> Response {
+    request.extensions_mut().insert(user());
+    next.run(request).await
+}
+
+/// Swaps the services for mocks. Scans take a moment, as real ones do, so the waiting states
+/// of the scan page can be seen; Save writes under `target/` unless a folder is configured.
+pub fn apply(state: &mut AppState) {
+    state.print = Arc::new(
+        MockPrintService::new()
+            .with_printers(printers())
+            .with_jobs(jobs()),
+    );
+    state.scan =
+        Arc::new(MockScannerService::default().with_scan_delay(Duration::from_millis(800)));
+    if state.output_dir.is_none() {
+        let dir = PathBuf::from("target/dev-scans");
+        if let Err(error) = std::fs::create_dir_all(&dir) {
+            tracing::warn!(%error, "the development scan folder cannot be created");
+        }
+        state.output_dir = Some(dir);
+    }
+}
+
+fn supply(name: &str, level: Option<u8>, color: &str) -> Supply {
+    Supply {
+        name: name.into(),
+        level,
+        color: Some(color.into()),
+        kind: "toner".into(),
+    }
+}
+
+fn printers() -> Vec<Printer> {
+    let reasons = |keywords: &[&str]| -> Vec<StateReason> {
+        keywords
+            .iter()
+            .filter_map(|keyword| StateReason::parse(keyword))
+            .collect()
+    };
+    vec![
+        Printer {
+            name: "office".into(),
+            description: Some("Office laser".into()),
+            location: Some("Study".into()),
+            make_and_model: Some("Brother HL-L2350DW".into()),
+            is_default: true,
+            state: PrinterState::Idle,
+            reasons: vec![],
+            accepting_jobs: true,
+            supplies: vec![supply("Black toner", Some(64), "#000000")],
+            capabilities: Capabilities {
+                max_copies: 99,
+                sides: vec![
+                    Sides::OneSided,
+                    Sides::TwoSidedLongEdge,
+                    Sides::TwoSidedShortEdge,
+                ],
+                color_modes: vec![ColorMode::Monochrome],
+            },
+        },
+        Printer {
+            name: "photo".into(),
+            description: Some("Photo inkjet".into()),
+            location: Some("Living room".into()),
+            make_and_model: Some("Canon PIXMA".into()),
+            is_default: false,
+            state: PrinterState::Processing,
+            reasons: reasons(&["marker-supply-low-warning"]),
+            accepting_jobs: true,
+            supplies: vec![
+                supply("Cyan", Some(12), "#00AEEF"),
+                supply("Magenta", Some(55), "#EC008C"),
+                supply("Yellow", Some(80), "#FFF200"),
+                supply("Black", None, "#000000"),
+            ],
+            capabilities: Capabilities {
+                max_copies: 10,
+                sides: vec![Sides::OneSided],
+                color_modes: vec![ColorMode::Color, ColorMode::Monochrome],
+            },
+        },
+        Printer {
+            name: "garage".into(),
+            description: None,
+            location: None,
+            make_and_model: None,
+            is_default: false,
+            state: PrinterState::Stopped,
+            reasons: reasons(&["offline-report", "media-empty-error"]),
+            accepting_jobs: false,
+            supplies: vec![],
+            capabilities: Capabilities {
+                max_copies: 1,
+                sides: vec![Sides::OneSided],
+                color_modes: vec![ColorMode::Monochrome],
+            },
+        },
+    ]
+}
+
+fn jobs() -> Vec<Job> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| i64::try_from(elapsed.as_secs()).unwrap_or(0));
+    vec![
+        Job {
+            id: 41,
+            printer: "photo".into(),
+            name: Some("holiday.jpg".into()),
+            owner: Some("dev".into()),
+            state: JobState::Processing,
+            pages: Some(1),
+            created: Some(now - 90),
+        },
+        Job {
+            id: 40,
+            printer: "office".into(),
+            name: None,
+            owner: None,
+            state: JobState::Pending,
+            pages: None,
+            created: Some(now - 600),
+        },
+        Job {
+            id: 39,
+            printer: "office".into(),
+            name: Some("tax-return-2026.pdf".into()),
+            owner: Some("dev".into()),
+            state: JobState::Completed,
+            pages: Some(12),
+            created: Some(now - 3 * 86_400),
+        },
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_one_turns_the_mocks_on() {
+        assert!(requested(Some("1")));
+        for value in [None, Some("0"), Some(""), Some("true")] {
+            assert!(!requested(value), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn the_mock_printers_cover_every_case() {
+        let printers = printers();
+        assert_eq!(
+            printers.iter().filter(|printer| printer.is_default).count(),
+            1
+        );
+        assert!(printers.iter().any(|printer| !printer.is_online()));
+        assert!(
+            printers
+                .iter()
+                .any(|printer| printer.capabilities.sides.len() > 1)
+        );
+        assert!(jobs().iter().any(|job| job.owner.is_none()));
+    }
+}

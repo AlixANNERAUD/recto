@@ -86,12 +86,35 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
 /// Serves until ctrl-c or SIGTERM; requests in flight finish.
 pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let address = config.listen_address;
-    let (state, auth) = state::build(&config, leptos_options(&config)).await;
+    #[cfg_attr(
+        not(all(feature = "dev-mocks", debug_assertions)),
+        expect(unused_mut, reason = "only the development mocks change the state")
+    )]
+    let (mut state, auth) = state::build(&config, leptos_options(&config)).await;
+    #[cfg(all(feature = "dev-mocks", debug_assertions))]
+    let dev_mocks = crate::dev::requested(std::env::var("RECTO_DEV_MOCKS").ok().as_deref());
+    #[cfg(all(feature = "dev-mocks", debug_assertions))]
+    if dev_mocks {
+        crate::dev::apply(&mut state);
+        tracing::warn!(
+            "RECTO_DEV_MOCKS=1: printers and scanners are MOCKS and EVERY REQUEST IS SIGNED IN \
+             as the development user. Never expose this server."
+        );
+    }
     purge_expired_results(Arc::clone(&state.results));
     delete_expired_sessions(auth.sessions.clone());
+    #[cfg_attr(
+        not(all(feature = "dev-mocks", debug_assertions)),
+        expect(unused_mut, reason = "only the development mocks change the router")
+    )]
+    let mut app = router(state, auth);
+    #[cfg(all(feature = "dev-mocks", debug_assertions))]
+    if dev_mocks {
+        app = app.layer(middleware::from_fn(crate::dev::sign_in));
+    }
     let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!(%address, "listening");
-    axum::serve(listener, router(state, auth))
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
