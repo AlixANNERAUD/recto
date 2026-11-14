@@ -1,5 +1,5 @@
 //! The job list. Rendered on the server it is complete, with a plain Cancel form per active
-//! job; once the island runs it reloads the list every five seconds.
+//! job; once the island runs it reloads the list every five seconds while the page is visible.
 
 use std::time::Duration;
 
@@ -8,7 +8,10 @@ use recto_printing::{Job, JobState};
 
 use super::browser;
 use crate::{
-    components::ui::{Badge, ButtonVariant, Empty, Tone, button_class},
+    components::{
+        Failure, failure,
+        ui::{Alert, Badge, ButtonVariant, Empty, Tone, button_class},
+    },
     display::{iso_time, relative_time, unix_now},
     functions::list_jobs,
     t, tf, tp,
@@ -98,20 +101,52 @@ fn JobRow(job: Job, now: RwSignal<i64>) -> impl IntoView {
 pub fn JobList(jobs: Vec<Job>, now: i64) -> impl IntoView {
     let jobs = RwSignal::new(jobs);
     let now = RwSignal::new(now);
+    let signed_out = RwSignal::new(false);
+    let in_flight = StoredValue::new(false);
     Effect::new(move |_| {
-        browser::every(REFRESH, move || {
+        // A hidden tab does not ask: every request renews the session, so an idle tab left open
+        // would otherwise keep it alive for good. A refresh still waiting on a slow CUPS is not
+        // doubled, and once signed out there is nothing to ask for.
+        let refresh = move || {
+            if in_flight.get_value() || signed_out.get_untracked() || browser::page_hidden() {
+                return;
+            }
+            in_flight.set_value(true);
             spawn_local(async move {
-                // A failed refresh keeps the list as it was; the next one may work.
-                if let Ok(fresh) = list_jobs().await
-                    && jobs.with_untracked(|current| *current != fresh)
-                {
-                    jobs.set(fresh);
+                let fresh = list_jobs().await;
+                in_flight.set_value(false);
+                match fresh {
+                    Ok(fresh) => {
+                        if jobs.with_untracked(|current| *current != fresh) {
+                            jobs.set(fresh);
+                        }
+                    }
+                    Err(error) if failure(&error) == Failure::SignedOut => signed_out.set(true),
+                    // Anything else keeps the list as it was; the next refresh may work.
+                    Err(_) => {}
                 }
                 now.set(unix_now());
             });
-        });
+        };
+        browser::every(REFRESH, refresh);
+        // Back on the page, the list catches up at once rather than at the next tick.
+        browser::on_visible(refresh);
     });
+    let notice = move || {
+        signed_out.get().then(|| {
+            view! {
+                <Alert tone=Tone::Warning>
+                    {t!("auth.session_ended")}
+                    " "
+                    <a class="underline underline-offset-4" href="/auth/login?next=%2Fjobs">
+                        {t!("auth.sign_in_again")}
+                    </a>
+                </Alert>
+            }
+        })
+    };
     view! {
+        {notice}
         <Show
             when=move || jobs.with(|jobs| !jobs.is_empty())
             fallback=|| view! { <Empty title=t!("jobs.empty") body=t!("jobs.empty_body") /> }

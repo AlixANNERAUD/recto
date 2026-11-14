@@ -6,13 +6,55 @@ pub mod ui;
 
 use leptos::prelude::*;
 
-use crate::t;
+use crate::{messages::SIGNED_OUT, t};
 
-/// The message of a server function's error, for the page. Server functions put a translated,
-/// readable message in their errors; anything else is the request failing on the way.
-pub fn error_text(error: &ServerFnError) -> String {
+/// How a server function call failed, as far as the browser can tell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Failure {
+    /// The session ended (it lapsed, or recto restarted): only signing in again helps.
+    SignedOut,
+    /// recto refused, with a translated message.
+    Refused(String),
+    /// No answer from recto: the network failed, or something between the browser and recto
+    /// answered instead, such as a reverse proxy's 502 or 504 page. recto encodes all its own
+    /// errors, so anything it cannot decode came from elsewhere.
+    Connection,
+}
+
+pub fn failure(error: &ServerFnError) -> Failure {
     match error {
-        ServerFnError::ServerError(message) => message.clone(),
-        _ => t!("common.network_error").to_string(),
+        ServerFnError::ServerError(message) if message == SIGNED_OUT => Failure::SignedOut,
+        ServerFnError::ServerError(message) => Failure::Refused(message.clone()),
+        _ => Failure::Connection,
+    }
+}
+
+/// The message of a server function's error, for the page.
+pub fn error_text(error: &ServerFnError) -> String {
+    match failure(error) {
+        Failure::SignedOut => t!("auth.signed_out_notice").to_string(),
+        Failure::Refused(message) => message,
+        Failure::Connection => t!("common.network_error").to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failures_are_told_apart() {
+        let signed_out = ServerFnError::ServerError(SIGNED_OUT.into());
+        assert_eq!(failure(&signed_out), Failure::SignedOut);
+        assert!(error_text(&signed_out).contains("signed out"));
+        let refused = ServerFnError::new("Scanner not found.");
+        assert_eq!(error_text(&refused), "Scanner not found.");
+        // A proxy's error page does not decode as a server function error.
+        let proxy = ServerFnError::Deserialization("missing delimiter".into());
+        assert_eq!(failure(&proxy), Failure::Connection);
+        assert_eq!(
+            failure(&ServerFnError::Request("timeout".into())),
+            Failure::Connection
+        );
     }
 }

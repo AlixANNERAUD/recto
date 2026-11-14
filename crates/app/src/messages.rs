@@ -6,8 +6,21 @@
 use embedded_i18n::{Locale, t};
 use recto_scanning::ScanError;
 
+/// The message of the server function error answered to a call without a signed-in user. It is
+/// a marker rather than text: the islands recognise it and say the session ended.
+pub const SIGNED_OUT: &str = "recto:signed-out";
+
 pub fn sign_in_required(locale: Locale) -> &'static str {
     t!("auth.sign_in_required", locale = locale)
+}
+
+/// Why a form or action was refused as cross-site. Most often recto was opened at another
+/// address than its public URL (`origin`), such as its LAN address.
+pub fn cross_site_refused(locale: Locale, origin: &str) -> String {
+    format!(
+        "{}",
+        t!("auth.cross_site_refused", origin = origin, locale = locale)
+    )
 }
 
 pub fn scan_result_not_found(locale: Locale) -> &'static str {
@@ -35,6 +48,7 @@ pub fn scan_error(error: &ScanError, locale: Locale) -> String {
             t!("scan.errors.device", reason = reason, locale = locale)
         ),
         ScanError::TooLarge => t!("scan.errors.too_large", locale = locale).to_owned(),
+        ScanError::Interrupted => t!("scan.errors.interrupted", locale = locale).to_owned(),
         ScanError::Encoding(reason) => format!(
             "{}",
             t!("scan.errors.encoding", reason = reason, locale = locale)
@@ -64,6 +78,19 @@ mod tests {
         assert_eq!(
             scan_error(&error, crate::i18n::default_locale()),
             "Cannot write to /scans: permission denied"
+        );
+    }
+
+    #[test]
+    fn interruptions_and_refusals_are_translated() {
+        let locale = crate::i18n::default_locale();
+        assert_eq!(
+            scan_error(&ScanError::Interrupted, locale),
+            "The scan stopped unexpectedly. Try again."
+        );
+        assert!(
+            cross_site_refused(locale, "https://recto.example.org")
+                .contains("Open recto at https://recto.example.org")
         );
     }
 }

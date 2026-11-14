@@ -192,7 +192,7 @@ mod server {
                 results.put(&owner, format, count, &bytes)
             })
             .await
-            .map_err(|_| ScanError::Encoding("the encoding task stopped".into()))??;
+            .map_err(|_| ScanError::Interrupted)??;
             Ok(ScanOutcome {
                 id: stored.id,
                 file_name: stored.file_name,

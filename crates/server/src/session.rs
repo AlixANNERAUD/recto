@@ -190,7 +190,14 @@ pub async fn require_user(request: Request, next: Next) -> Response {
 /// The answer to an anonymous request for something that needs a user. A browser navigating
 /// to a page is sent to sign in and brought back; anything else (forms, downloads, server
 /// functions, images) gets 401, which a script can handle and an `<img>` simply fails on.
+/// Server functions get it as a server function error carrying [`messages::SIGNED_OUT`], since
+/// the islands only see the decoded error, not the status.
 pub fn unauthenticated(request: &Request) -> Response {
+    if request.uri().path().starts_with("/api/") {
+        use leptos::server_fn::error::FromServerFnError;
+        let error = leptos::prelude::ServerFnError::new(messages::SIGNED_OUT);
+        return (StatusCode::UNAUTHORIZED, error.ser()).into_response();
+    }
     if is_page_request(request) {
         let target = request
             .uri()

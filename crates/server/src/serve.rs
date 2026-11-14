@@ -11,7 +11,7 @@ use axum::{
     body::Body,
     extract::{DefaultBodyLimit, Request, State},
     http::{Method, StatusCode},
-    middleware,
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -79,8 +79,27 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         .layer(session::layer(auth.sessions.clone(), auth.secure_cookies))
         .layer(middleware::from_fn_with_state(
             AllowedOrigin::new(&auth.public_url),
-            csrf::protect,
+            refuse_cross_site,
         ))
+}
+
+/// Rejects cross-site state-changing requests with 403 (see [`csrf::allowed`]).
+async fn refuse_cross_site(
+    State(origin): State<AllowedOrigin>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if csrf::allowed(request.method(), request.headers(), &origin) {
+        return next.run(request).await;
+    }
+    tracing::warn!(
+        method = %request.method(),
+        path = request.uri().path(),
+        "cross-site request refused"
+    );
+    let locale = recto_app::i18n::from_headers(request.headers());
+    let message = recto_app::messages::cross_site_refused(locale, origin.as_str());
+    (StatusCode::FORBIDDEN, message).into_response()
 }
 
 /// Serves until ctrl-c or SIGTERM; requests in flight finish.

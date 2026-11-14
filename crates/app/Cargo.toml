@@ -20,12 +20,14 @@ serde.workspace = true
 uuid.workspace = true
 tracing = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
-# Browser APIs of the islands: file size checks, pointer selection on the scan preview, and the
-# scan Save request.
+# Browser APIs of the islands: file size checks, pointer selection on the scan preview, the
+# scan Save request, and the page visibility that pauses the job list refresh.
 web-sys = { workspace = true, optional = true, features = [
     "Blob",
+    "Document",
     "DomRect",
     "Element",
+    "EventTarget",
     "File",
     "FileList",
     "HtmlInputElement",

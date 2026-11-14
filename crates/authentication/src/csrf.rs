@@ -1,4 +1,5 @@
-//! Cross-site request forgery protection for cookie-authenticated requests.
+//! Cross-site request forgery protection for cookie-authenticated requests. The server applies
+//! [`allowed`] to every request, with a refusal page of its own.
 //!
 //! Session cookies are `SameSite=Lax`, so browsers do not send them with cross-site `POST`
 //! requests. On top of that, state-changing requests are refused when the browser says they
@@ -12,12 +13,7 @@
 
 use std::sync::Arc;
 
-use axum::{
-    extract::{Request, State},
-    http::{HeaderMap, Method, StatusCode, header},
-    middleware::Next,
-    response::{IntoResponse, Response},
-};
+use axum::http::{HeaderMap, Method, header};
 
 /// The origin (`scheme://host[:port]`) the interface is served from.
 #[derive(Debug, Clone)]
@@ -27,6 +23,10 @@ impl AllowedOrigin {
     /// The origin of the instance's public URL; its path, if any, is ignored.
     pub fn new(public_url: &url::Url) -> Self {
         Self(public_url.origin().ascii_serialization().into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -59,24 +59,6 @@ pub fn allowed(method: &Method, headers: &HeaderMap, origin: &AllowedOrigin) -> 
         // Browsers send Origin with every cross-origin POST; requests without it come from
         // non-browser clients or same-origin navigations of older browsers.
         None => true,
-    }
-}
-
-/// Middleware rejecting cross-site state-changing requests with 403.
-pub async fn protect(
-    State(origin): State<AllowedOrigin>,
-    request: Request,
-    next: Next,
-) -> Response {
-    if allowed(request.method(), request.headers(), &origin) {
-        next.run(request).await
-    } else {
-        tracing::warn!(
-            method = %request.method(),
-            path = request.uri().path(),
-            "cross-site request refused"
-        );
-        (StatusCode::FORBIDDEN, "cross-site request refused").into_response()
     }
 }
 

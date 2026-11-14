@@ -10,13 +10,29 @@ use recto_scanning::{
 use super::browser;
 use crate::{
     components::{
-        error_text,
+        Failure, error_text, failure,
         icons::{Icon, IconKind},
         ui::{Alert, ButtonVariant, Card, Field, HINT, INPUT, Tone, button_class},
     },
+    display::unix_now,
     functions::{ScanOutcome, list_scanners, preview, scan, scanner_capabilities},
     t, tf, tp,
 };
+
+/// Reverse proxies give up on a request after a while (nginx after 60 seconds, Cloudflare
+/// after 100) with a timeout or a 502 or 504 page, while recto may still be scanning. A failure
+/// after this many seconds is taken for that; a quicker one is an ordinary network error.
+const SLOW_REQUEST_SECONDS: i64 = 20;
+
+/// What to say when a preview or scan that took `seconds` failed.
+fn scan_error_text(error: &ServerFnError, seconds: i64) -> String {
+    match failure(error) {
+        Failure::Connection if seconds >= SLOW_REQUEST_SECONDS => {
+            t!("scan.errors.connection_lost").to_string()
+        }
+        _ => error_text(error),
+    }
+}
 
 /// A drag shorter than this, as a fraction of the preview, is a stray tap rather than a
 /// selection (the server ignores such selections too).
@@ -349,6 +365,7 @@ pub fn Scanner(scanners: Vec<ScannerInfo>, error: Option<String>) -> impl IntoVi
         activity.set(Activity::Previewing);
         failure.set(None);
         spawn_local(async move {
+            let started = unix_now();
             let outcome = preview(id, source).await;
             activity.set(Activity::Idle);
             match outcome {
@@ -356,7 +373,7 @@ pub fn Scanner(scanners: Vec<ScannerInfo>, error: Option<String>) -> impl IntoVi
                     selection.set(None);
                     preview_image.set(Some(outcome));
                 }
-                Err(error) => failure.set(Some(error_text(&error))),
+                Err(error) => failure.set(Some(scan_error_text(&error, unix_now() - started))),
             }
         });
     };
@@ -376,11 +393,12 @@ pub fn Scanner(scanners: Vec<ScannerInfo>, error: Option<String>) -> impl IntoVi
         failure.set(None);
         saved.set(None);
         spawn_local(async move {
+            let started = unix_now();
             let outcome = scan(id, settings, chosen, format).await;
             activity.set(Activity::Idle);
             match outcome {
                 Ok(outcome) => result.set(Some(outcome)),
-                Err(error) => failure.set(Some(error_text(&error))),
+                Err(error) => failure.set(Some(scan_error_text(&error, unix_now() - started))),
             }
         });
     };
@@ -512,12 +530,14 @@ pub fn Scanner(scanners: Vec<ScannerInfo>, error: Option<String>) -> impl IntoVi
     let result_view = move || {
         result.get().map(|outcome| {
             let download = format!("/scan/results/{}/download", outcome.id);
+            // Saved once is enough: a second save would be a second document for Paperless.
+            let is_saved = move || saved.with(|saved| matches!(saved, Some(Ok(_))));
             let save_button = outcome.can_save.then(|| {
                 view! {
                     <button
                         type="button"
                         class=button_class(ButtonVariant::Secondary)
-                        disabled=busy
+                        disabled=move || busy() || is_saved()
                         on:click=save
                     >
                         {t!("scan.save")}
@@ -643,6 +663,18 @@ mod tests {
             ScanMode::Color
         );
         assert_eq!(default_mode(&[ScanMode::Lineart]), ScanMode::Lineart);
+    }
+
+    #[test]
+    fn slow_failures_point_at_a_proxy_timeout() {
+        let gateway = ServerFnError::Deserialization("<html>504 Gateway Time-out</html>".into());
+        assert!(scan_error_text(&gateway, 61).contains("may still be finishing"));
+        let dropped = ServerFnError::Request("network error".into());
+        assert!(scan_error_text(&dropped, 100).contains("read timeout"));
+        // A quick failure is an ordinary network error, and recto's own refusals stay as they are.
+        assert_eq!(scan_error_text(&dropped, 1), t!("common.network_error"));
+        let busy = ServerFnError::new("The scanner is busy.");
+        assert_eq!(scan_error_text(&busy, 90), "The scanner is busy.");
     }
 
     #[test]

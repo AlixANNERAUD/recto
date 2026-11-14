@@ -9,7 +9,7 @@ use uuid::Uuid;
 mod imp {
     use leptos::{ev, prelude::*};
     use uuid::Uuid;
-    use wasm_bindgen::{JsCast, JsValue};
+    use wasm_bindgen::{JsCast, JsValue, closure::Closure};
     use wasm_bindgen_futures::JsFuture;
 
     use crate::t;
@@ -55,6 +55,24 @@ mod imp {
         if let Some(element) = element(event) {
             let _ = element.set_pointer_capture(event.pointer_id());
         }
+    }
+
+    pub fn page_hidden() -> bool {
+        document().hidden()
+    }
+
+    pub fn on_visible(callback: impl Fn() + 'static) {
+        let listener = Closure::<dyn Fn()>::new(move || {
+            if !document().hidden() {
+                callback();
+            }
+        });
+        let _ = document().add_event_listener_with_callback(
+            "visibilitychange",
+            listener.as_ref().unchecked_ref(),
+        );
+        // Listens for as long as the page is open, like the refresh interval.
+        listener.forget();
     }
 
     pub async fn save_scan(id: Uuid) -> Result<String, String> {
@@ -134,6 +152,26 @@ pub async fn save_scan(id: Uuid) -> Result<String, String> {
         let _ = id;
         Err(String::new())
     }
+}
+
+/// Whether the page is in a background tab or minimised.
+pub fn page_hidden() -> bool {
+    #[cfg(feature = "hydrate")]
+    {
+        imp::page_hidden()
+    }
+    #[cfg(not(feature = "hydrate"))]
+    {
+        false
+    }
+}
+
+/// Runs `callback` each time the page becomes visible again.
+pub fn on_visible(callback: impl Fn() + 'static) {
+    #[cfg(feature = "hydrate")]
+    imp::on_visible(callback);
+    #[cfg(not(feature = "hydrate"))]
+    let _ = callback;
 }
 
 /// Runs `tick` every `period` for as long as the page is open.

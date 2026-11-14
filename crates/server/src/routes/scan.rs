@@ -65,7 +65,7 @@ pub async fn save(
     let saved =
         tokio::task::spawn_blocking(move || save_to_folder(&dir, &result.file_name, &bytes))
             .await
-            .unwrap_or_else(|_| Err(ScanError::Device("saving the scan stopped".into())));
+            .unwrap_or(Err(ScanError::Interrupted));
     match saved {
         Ok(path) => {
             tracing::info!(user = user.username, path = %path.display(), "scan saved");

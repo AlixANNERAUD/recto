@@ -317,6 +317,34 @@ async fn pages_redirect_to_login() {
 }
 
 #[tokio::test]
+async fn anonymous_server_function_calls_get_401() {
+    // Server functions sit behind the sign-in gate because `leptos_routes` registers them
+    // inside it; this keeps that true through Leptos upgrades.
+    let harness = Harness::new();
+    for endpoint in ["list_jobs", "list_printers", "scan"] {
+        let request = Request::post(format!("/api/{endpoint}"))
+            .header(header::ORIGIN, ORIGIN)
+            .header("sec-fetch-site", "same-origin")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::empty())
+            .unwrap();
+        let response = harness.send(request).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{endpoint}");
+        // Encoded as a server function error, so islands can tell a lapsed session from a
+        // failed request.
+        let error: leptos::prelude::ServerFnError = leptos::server_fn::error::FromServerFnError::de(
+            axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        );
+        assert_eq!(
+            error,
+            leptos::prelude::ServerFnError::ServerError(recto_app::messages::SIGNED_OUT.into())
+        );
+    }
+}
+
+#[tokio::test]
 async fn print_submits_with_user_and_options() {
     let harness = Harness::new();
     let cookie = harness.sign_in("alice-subject", "alice").await;
@@ -517,6 +545,12 @@ async fn cross_site_post_refused() {
         .unwrap();
     let response = harness.send(forged).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    // The likely cause is recto opened at another address than its public URL.
+    let message = text(response).await;
+    assert!(
+        message.contains("Open recto at http://recto.test"),
+        "{message}"
+    );
     assert!(harness.print.canceled().is_empty());
 
     let (content_type, body) = multipart(&[("printer", "office")], Some(("a.pdf", PDF)));

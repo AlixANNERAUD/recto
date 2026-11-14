@@ -54,6 +54,13 @@ recto listens in plain HTTP. Put a reverse proxy with TLS in front of it and set
 `RECTO_PUBLIC_URL` to the address people open: sign-in redirects and the `Secure` cookie flag
 depend on it.
 
+A scan answers only once the whole batch is read, which takes minutes for a long feeder batch, so
+let the proxy wait for recto: with nginx, set `proxy_read_timeout 600s;` (the default is 60
+seconds). Caddy and Traefik do not limit that wait by default (unless Traefik's
+`forwardingTimeouts.responseHeaderTimeout` is set). A Cloudflare tunnel cuts requests after 100
+seconds, which no setting raises on the free plans. When a proxy gives up, the scan page says so:
+the scan may still finish, but its result is lost, so scan again.
+
 ## Configuration
 
 Every setting is an environment variable. In `compose.yml`, put them under `environment`. A
@@ -175,6 +182,9 @@ shown: re-feed the stack and scan again.
 
 Scans are kept for 1 hour for download or save, then deleted. Only the user who scanned can reach a
 result.
+
+The printer status on the Print and Printers pages is read when the page loads: reload it to see a
+change. The job list refreshes itself every few seconds while its page is visible.
 
 ## Save into Paperless
 
