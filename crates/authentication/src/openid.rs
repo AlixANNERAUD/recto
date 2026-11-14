@@ -8,8 +8,10 @@
 //!   internal addresses;
 //! - the provider is discovered on first use rather than at startup, so recto starts even when
 //!   the provider is down; a failed discovery is retried by the next call;
-//! - claims come from the ID token, and from UserInfo only when the required claim is missing
-//!   from the token, since providers differ on where they put roles.
+//! - claims come from the ID token, and from UserInfo only when the required claim or every
+//!   profile claim (`preferred_username`, `email`, `name`) is missing from the token: providers
+//!   differ on where they put roles, and Zitadel leaves the profile out of the ID token unless
+//!   told otherwise. ID token claims win over UserInfo ones.
 
 use std::{
     sync::{Arc, PoisonError, RwLock},
@@ -357,37 +359,49 @@ impl OpenId {
         })?;
         let client = &discovered.client;
 
-        if let Some(claim) = &self.settings.required_claim
-            && !claims::allows(&all, claim, self.settings.required_value.as_deref())
+        let required = self.settings.required_claim.as_deref();
+        let required_value = self.settings.required_value.as_deref();
+        let lacks_claim =
+            required.is_some_and(|claim| !claims::allows(&all, claim, required_value));
+        // Without these the username would be the subject, a long number with some providers.
+        let lacks_profile = !["preferred_username", "email", "name"].iter().any(|key| {
+            all.get(*key)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+        });
+        // One request covers both. A provider without a UserInfo endpoint leaves the claims
+        // absent.
+        if (lacks_claim || lacks_profile)
+            && let Ok(request) = client.user_info(token.access_token().clone(), Some(subject))
         {
-            // Some providers only put roles in UserInfo.
-            // A provider without a UserInfo endpoint leaves the claim absent.
-            if let Ok(request) = client.user_info(token.access_token().clone(), Some(subject)) {
-                match request.request_async(&self.http).await {
-                    Ok(information) => {
-                        let information: UserInfoClaims<ExtraClaims, CoreGenderClaim> = information;
-                        for (key, value) in to_map(&information) {
-                            all.entry(key).or_insert(value);
-                        }
-                    }
-                    Err(UserInfoError::Request(error)) => {
-                        return Err(OpenIdError::Unavailable(error.to_string()));
-                    }
-                    Err(UserInfoError::ClaimsVerification(error)) => {
-                        // Typically a `sub` that is not the signed-in user's: nothing from
-                        // that answer may grant access.
-                        return Err(OpenIdError::Rejected(format!(
-                            "the user information does not match the ID token: {error}"
-                        )));
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "reading the user information failed");
+            match request.request_async(&self.http).await {
+                Ok(information) => {
+                    let information: UserInfoClaims<ExtraClaims, CoreGenderClaim> = information;
+                    for (key, value) in to_map(&information) {
+                        all.entry(key).or_insert(value);
                     }
                 }
+                Err(UserInfoError::ClaimsVerification(error)) => {
+                    // Typically a `sub` that is not the signed-in user's: nothing from that
+                    // answer may grant access or name the user.
+                    return Err(OpenIdError::Rejected(format!(
+                        "the user information does not match the ID token: {error}"
+                    )));
+                }
+                // Access cannot be decided without the claim; a missing profile only costs a
+                // nicer name.
+                Err(UserInfoError::Request(error)) if lacks_claim => {
+                    return Err(OpenIdError::Unavailable(error.to_string()));
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "reading the user information failed");
+                }
             }
-            if !claims::allows(&all, claim, self.settings.required_value.as_deref()) {
-                return Err(OpenIdError::AccessDenied);
-            }
+        }
+        if let Some(claim) = required
+            && !claims::allows(&all, claim, required_value)
+        {
+            return Err(OpenIdError::AccessDenied);
         }
         let user = User::from_claims(&all)
             .ok_or_else(|| OpenIdError::Rejected("the ID token has no subject".to_owned()))?;
@@ -399,13 +413,20 @@ impl OpenId {
     }
 
     /// Where to send the browser to end the session at the provider, when it supports it and
-    /// has been discovered (a sign-in always discovers it first).
-    pub fn end_session_url(&self, id_token: &str, post_logout: &Url) -> Option<Url> {
+    /// has been discovered (a sign-in always discovers it first). Without an ID token, as after
+    /// a sign-in refused for a missing role, `client_id` alone identifies recto, which
+    /// RP-initiated logout allows; the provider may then ask the user to confirm.
+    pub fn end_session_url(&self, id_token: Option<&str>, post_logout: &Url) -> Option<Url> {
         let mut url = self.current()?.end_session_endpoint.clone()?;
-        url.query_pairs_mut()
-            .append_pair("id_token_hint", id_token)
-            .append_pair("client_id", &self.settings.client_id)
-            .append_pair("post_logout_redirect_uri", post_logout.as_str());
+        {
+            let mut query = url.query_pairs_mut();
+            if let Some(id_token) = id_token {
+                query.append_pair("id_token_hint", id_token);
+            }
+            query
+                .append_pair("client_id", &self.settings.client_id)
+                .append_pair("post_logout_redirect_uri", post_logout.as_str());
+        }
         Some(url)
     }
 }

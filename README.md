@@ -101,7 +101,10 @@ Without a value, the claim only has to be present.
 3. Create an application of type **User Agent** with authentication method **PKCE**, and add the
    two URIs above. Copy its client id.
 4. Grant the `recto` role to the users who may use it.
-5. Configure recto:
+5. Optionally, enable **User Info inside ID Token** in the application's token settings. Zitadel
+   otherwise leaves the username and name out of the ID token, and recto reads them from the
+   UserInfo endpoint at each sign-in (one more request).
+6. Configure recto:
 
 ```yaml
 RECTO_OIDC_ISSUER: https://id.example.org

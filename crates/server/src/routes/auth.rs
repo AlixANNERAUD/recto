@@ -102,13 +102,16 @@ async fn callback(
 }
 
 /// Ends the session, then the provider's session when it supports that; either way the
-/// browser lands on `/auth/signed-out`.
+/// browser lands on `/auth/signed-out`. The provider's session is ended even without an ID
+/// token (on `/no-access` recto kept none): otherwise the next sign-in silently brings back the
+/// same refused account.
 async fn logout(State(auth): State<AuthState>, session: Session) -> Redirect {
     let id_token = session::sign_out(&session).await;
+    let id_token = id_token.filter(|token| !token.is_empty());
     let signed_out = auth.public("auth/signed-out");
-    let provider = id_token
-        .filter(|token| !token.is_empty())
-        .and_then(|token| auth.openid.end_session_url(&token, &signed_out));
+    let provider = auth
+        .openid
+        .end_session_url(id_token.as_deref(), &signed_out);
     match provider {
         Some(url) => Redirect::to(url.as_str()),
         None => Redirect::to("/auth/signed-out"),

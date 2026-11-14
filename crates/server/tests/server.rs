@@ -725,6 +725,7 @@ async fn provider() -> MockServer {
         "issuer": base,
         "authorization_endpoint": format!("{base}/authorize"),
         "token_endpoint": format!("{base}/token"),
+        "end_session_endpoint": format!("{base}/logout"),
         "jwks_uri": format!("{base}/jwks"),
         "response_types_supported": ["code"],
         "subject_types_supported": ["public"],
@@ -807,6 +808,42 @@ async fn sign_out_ends_the_session() {
     assert_redirect(&response, "/auth/login?next=%2F");
     let response = harness.send(page("/auth/signed-out", None)).await;
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn sign_out_without_an_id_token_still_ends_the_provider_session() {
+    // On /no-access the provider signed the user in, but recto kept no session and no ID
+    // token: signing out must still reach the provider, or the next sign-in is the same
+    // refused account again.
+    let provider = provider().await;
+    let harness = Harness::with(Setup {
+        issuer: provider.uri(),
+        ..Setup::default()
+    });
+    let response = harness.send(page("/auth/login?next=/", None)).await;
+    let cookie = session_cookie(response.headers()).expect("a session cookie");
+    let response = harness
+        .send(post("/auth/logout", &cookie, None, vec![]))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let logout = Url::parse(&location(&response)).unwrap();
+    assert_eq!(logout.path(), "/logout");
+    let query: Vec<(String, String)> = logout.query_pairs().into_owned().collect();
+    assert!(
+        query.contains(&("client_id".into(), "recto".into())),
+        "{logout}"
+    );
+    assert!(
+        query.contains(&(
+            "post_logout_redirect_uri".into(),
+            "http://recto.test/auth/signed-out".into()
+        )),
+        "{logout}"
+    );
+    assert!(
+        !query.iter().any(|(name, _)| name == "id_token_hint"),
+        "{logout}"
+    );
 }
 
 #[tokio::test]

@@ -139,6 +139,16 @@ impl Provider {
             .await;
     }
 
+    async fn user_information_requests(&self) -> usize {
+        self.server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter(|request| request.url.path() == "/userinfo")
+            .count()
+    }
+
     async fn discovery_requests(&self) -> usize {
         self.server
             .received_requests()
@@ -155,6 +165,15 @@ impl Provider {
         self.mount_discovery_with(answer.published).await;
         let access_token = AccessToken::new("access-token".to_owned());
         let claims = serde_json::from_value(answer.extra).unwrap();
+        let mut standard = StandardClaims::new(SubjectIdentifier::new(answer.subject.clone()));
+        if answer.profile {
+            standard = standard
+                .set_preferred_username(Some(EndUserUsername::new("alice".to_owned())))
+                .set_name(Some(LocalizedClaim::from(EndUserName::new(
+                    "Alice Martin".to_owned(),
+                ))))
+                .set_email(Some(EndUserEmail::new("alice@example.org".to_owned())));
+        }
         let id_token = IdToken::<
             ExtraClaims,
             CoreGenderClaim,
@@ -166,12 +185,7 @@ impl Provider {
                 vec![Audience::new(answer.audience)],
                 Utc::now() + answer.lifetime,
                 Utc::now(),
-                StandardClaims::new(SubjectIdentifier::new(answer.subject.clone()))
-                    .set_preferred_username(Some(EndUserUsername::new("alice".to_owned())))
-                    .set_name(Some(LocalizedClaim::from(EndUserName::new(
-                        "Alice Martin".to_owned(),
-                    ))))
-                    .set_email(Some(EndUserEmail::new("alice@example.org".to_owned()))),
+                standard,
                 ExtraClaims { claims },
             )
             .set_nonce(Some(Nonce::new(answer.nonce))),
@@ -216,6 +230,9 @@ struct Answer {
     published: Key,
     extra: Value,
     information: Value,
+    /// Put `preferred_username`, `name` and `email` in the ID token, as Zitadel does only when
+    /// "User Info inside ID Token" is on.
+    profile: bool,
 }
 
 impl Answer {
@@ -229,6 +246,7 @@ impl Answer {
             published: Key::Signing,
             extra: json!({}),
             information: json!({}),
+            profile: true,
         }
     }
 }
@@ -280,7 +298,7 @@ async fn full_flow_returns_user() {
 
     let post_logout: Url = "https://recto.example.org/".parse().unwrap();
     let logout = openid
-        .end_session_url(&signed_in.id_token, &post_logout)
+        .end_session_url(Some(&signed_in.id_token), &post_logout)
         .expect("the provider announces an end session endpoint");
     assert_eq!(logout.path(), "/logout");
     assert_eq!(
@@ -545,7 +563,7 @@ async fn no_end_session_endpoint_means_no_sign_out_url() {
     let post_logout: Url = "https://recto.example.org/".parse().unwrap();
     assert!(
         openid
-            .end_session_url(&signed_in.id_token, &post_logout)
+            .end_session_url(Some(&signed_in.id_token), &post_logout)
             .is_none()
     );
 }
@@ -563,4 +581,73 @@ async fn debug_output_hides_secrets() {
         .await
         .unwrap();
     assert!(!format!("{signed_in:?}").contains(&signed_in.id_token));
+}
+
+#[tokio::test]
+async fn username_comes_from_user_information_when_the_id_token_has_no_profile() {
+    // Zitadel leaves the profile out of the ID token unless told otherwise; without it the
+    // username would be the numeric subject.
+    let provider = Provider::start().await;
+    let openid = OpenId::new(provider.settings());
+    let signed_in = sign_in_with(&provider, &openid, |answer| {
+        answer.profile = false;
+        answer.information = json!({
+            "preferred_username": "alice.martin",
+            "name": "Alice Martin",
+        });
+    })
+    .await
+    .unwrap();
+    assert_eq!(signed_in.user.username, "alice.martin");
+    assert_eq!(signed_in.user.name.as_deref(), Some("Alice Martin"));
+    assert_eq!(provider.user_information_requests().await, 1);
+}
+
+#[tokio::test]
+async fn the_id_token_profile_needs_no_user_information() {
+    let provider = Provider::start().await;
+    let openid = OpenId::new(provider.settings());
+    let signed_in = sign_in_with(&provider, &openid, |answer| {
+        answer.information = json!({"preferred_username": "someone-else"});
+    })
+    .await
+    .unwrap();
+    assert_eq!(signed_in.user.username, "alice");
+    assert_eq!(provider.user_information_requests().await, 0);
+}
+
+#[tokio::test]
+async fn a_profile_for_another_subject_is_refused() {
+    let provider = Provider::start().await;
+    let openid = OpenId::new(provider.settings());
+    let result = sign_in_with(&provider, &openid, |answer| {
+        answer.profile = false;
+        answer.information = json!({"sub": "someone-else", "preferred_username": "mallory"});
+    })
+    .await;
+    assert!(
+        matches!(result, Err(OpenIdError::Rejected(_))),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn sign_out_without_an_id_token_names_the_client() {
+    let provider = Provider::start().await;
+    let openid = OpenId::new(provider.settings());
+    openid.start().await.unwrap();
+    let post_logout: Url = "https://recto.example.org/auth/signed-out".parse().unwrap();
+    let logout = openid
+        .end_session_url(None, &post_logout)
+        .expect("the provider announces an end session endpoint");
+    assert_eq!(query_parameter(&logout, "client_id"), CLIENT_ID);
+    assert_eq!(
+        query_parameter(&logout, "post_logout_redirect_uri"),
+        post_logout.as_str()
+    );
+    assert!(
+        !logout
+            .query_pairs()
+            .any(|(name, _)| name == "id_token_hint")
+    );
 }
