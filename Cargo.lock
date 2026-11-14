@@ -2004,6 +2004,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "ipp",
+ "recto-printing",
  "serde",
  "thiserror 2.0.21",
 ]

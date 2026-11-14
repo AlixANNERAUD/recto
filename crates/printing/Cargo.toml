@@ -22,3 +22,8 @@ serde.workspace = true
 thiserror.workspace = true
 ipp = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Enables `service` for this crate's own tests, so `cargo nextest run -p recto-printing` compiles
+# the service-gated ones without extra flags. Dev-dependencies never reach the wasm32 build.
+recto-printing = { path = ".", features = ["service"] }
