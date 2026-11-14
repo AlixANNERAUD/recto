@@ -43,8 +43,18 @@ const SIGNING_IN: Duration = Duration::minutes(10);
 
 /// Sessions in memory. Unlike tower-sessions' `MemoryStore`, expired records are deleted
 /// ([`ExpiredDeletion`]), so anonymous visitors starting sign-ins cannot grow memory for good.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct Store(Arc<Mutex<HashMap<Id, Record>>>);
+
+// Records hold users and ID tokens; logs get the count only.
+impl std::fmt::Debug for Store {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Store")
+            .field("records", &self.len())
+            .finish()
+    }
+}
 
 impl Store {
     fn records(&self) -> MutexGuard<'_, HashMap<Id, Record>> {
@@ -72,8 +82,14 @@ impl SessionStore for Store {
         Ok(())
     }
 
+    /// Updates a record that still exists, and never brings one back. Every request saves its
+    /// session, so a request that loaded it before a sign-out (or before sign-in retired its id)
+    /// would otherwise write the old user back when it ends. New and cycled ids go through
+    /// [`create`](SessionStore::create).
     async fn save(&self, record: &Record) -> session_store::Result<()> {
-        self.records().insert(record.id, record.clone());
+        if let Some(slot) = self.records().get_mut(&record.id) {
+            *slot = record.clone();
+        }
         Ok(())
     }
 
@@ -256,5 +272,70 @@ mod tests {
         assert_eq!(store.len(), 1);
         let kept = store.load(&active.id).await.unwrap().unwrap();
         assert_eq!(kept.id, active.id);
+    }
+
+    fn user() -> User {
+        User {
+            subject: "alice-subject".into(),
+            username: "alice".into(),
+            name: None,
+        }
+    }
+
+    fn session(store: &Store, id: Option<Id>) -> Session {
+        Session::new(id, Arc::new(store.clone()), None)
+    }
+
+    #[tokio::test]
+    async fn a_stale_request_cannot_undo_a_sign_out() {
+        let store = Store::default();
+        let signed_in = session(&store, None);
+        sign_in(&signed_in, &user(), "token").await.unwrap();
+        signed_in.save().await.unwrap();
+        let id = signed_in.id().unwrap();
+
+        // A slow request loads the session, a sign-out ends it, then the slow request ends.
+        let slow = session(&store, Some(id));
+        assert_eq!(slow.get::<User>(USER).await.unwrap(), Some(user()));
+        assert_eq!(
+            sign_out(&session(&store, Some(id))).await.as_deref(),
+            Some("token")
+        );
+        slow.save().await.unwrap();
+
+        assert!(store.load(&id).await.unwrap().is_none());
+        assert!(store.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_stale_request_cannot_revive_an_id_retired_at_sign_in() {
+        let store = Store::default();
+        let pending = session(&store, None);
+        pending.insert("openid.next", "/jobs").await.unwrap();
+        pending.save().await.unwrap();
+        let old = pending.id().unwrap();
+
+        let slow = session(&store, Some(old));
+        assert!(slow.get::<String>("openid.next").await.unwrap().is_some());
+        let callback = session(&store, Some(old));
+        sign_in(&callback, &user(), "token").await.unwrap();
+        callback.save().await.unwrap();
+        let new = callback.id().unwrap();
+        assert_ne!(new, old);
+        slow.save().await.unwrap();
+
+        assert!(store.load(&old).await.unwrap().is_none());
+        assert!(store.load(&new).await.unwrap().is_some());
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn debug_output_hides_records() {
+        let store = Store::default();
+        store.records().insert(
+            Id::default(),
+            record(OffsetDateTime::now_utc() + Duration::minutes(5)),
+        );
+        assert_eq!(format!("{store:?}"), "Store { records: 1 }");
     }
 }
