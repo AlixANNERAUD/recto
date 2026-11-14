@@ -3,6 +3,7 @@ use std::io::Cursor;
 use crate::{error::ScanError, model::OutputFormat, pdf};
 use image::{DynamicImage, ImageFormat, codecs::jpeg::JpegEncoder};
 
+#[derive(Debug)]
 pub struct ScannedPage {
     pub image: DynamicImage,
     pub dpi: u32,

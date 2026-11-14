@@ -13,12 +13,18 @@ mod model;
 mod encode;
 #[cfg(feature = "service")]
 mod pdf;
+#[cfg(feature = "sane")]
+mod sane;
 #[cfg(feature = "service")]
 mod save;
+#[cfg(feature = "service")]
+mod service;
 #[cfg(feature = "service")]
 mod store;
 #[cfg(test)]
 mod test_support;
+#[cfg(any(test, feature = "testing"))]
+mod testing;
 
 pub use area::{ScanSettings, Selection, preview_settings};
 pub use capabilities::{OptionConstraint, OptionInfo, OptionUnit, capabilities};
@@ -26,7 +32,13 @@ pub use capabilities::{OptionConstraint, OptionInfo, OptionUnit, capabilities};
 pub use encode::{ScannedPage, encode};
 pub use error::ScanError;
 pub use model::{Area, OutputFormat, ScanMode, ScannerCapabilities, ScannerInfo, Source};
+#[cfg(feature = "sane")]
+pub use sane::SaneScanners;
 #[cfg(feature = "service")]
 pub use save::save_to_folder;
 #[cfg(feature = "service")]
+pub use service::ScannerService;
+#[cfg(feature = "service")]
 pub use store::{ResultStore, ScanResult};
+#[cfg(any(test, feature = "testing"))]
+pub use testing::MockScannerService;

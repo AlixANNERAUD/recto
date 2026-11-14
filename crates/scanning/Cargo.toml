@@ -16,7 +16,12 @@ workspace = true
 # Everything touching `image`, the filesystem or the clock stays out of the default build so the
 # models compile for wasm32 in the browser bundle. The server and the `ssr` feature of the
 # interface enable it. `uuid/v4` needs OS randomness, which the browser build must not pull in.
-service = ["dep:image", "dep:chrono", "uuid/v4"]
+service = ["dep:image", "dep:chrono", "uuid/v4", "dep:async-trait", "dep:tokio"]
+# Test doubles for the consumers of `ScannerService`. Never enabled in the release build.
+testing = ["service"]
+# The real scanners through libsane, which needs the SANE development files to build. The server
+# binary enables it; the crate's own tests do too, so they cover the SANE test backend.
+sane = ["service", "dep:libsane"]
 
 [dependencies]
 serde.workspace = true
@@ -24,10 +29,14 @@ thiserror.workspace = true
 uuid.workspace = true
 image = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+libsane = { version = "0.1", features = ["image"], optional = true }
 
 [dev-dependencies]
 # Enables `service` for this crate's own tests, so `cargo nextest run -p recto-scanning` compiles
 # the service-gated ones without extra flags. Dev-dependencies never reach the wasm32 build.
-recto-scanning = { path = ".", features = ["service"] }
+recto-scanning = { path = ".", features = ["service", "testing", "sane"] }
+tokio.workspace = true
 tempfile.workspace = true
 serde_json.workspace = true
