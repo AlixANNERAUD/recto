@@ -19,7 +19,7 @@ path = "src/main.rs"
 
 [dependencies]
 recto-app = { workspace = true, features = ["ssr"] }
-recto-printing.workspace = true
+recto-printing = { workspace = true, features = ["service"] }
 recto-scanning.workspace = true
 recto-authentication.workspace = true
 leptos = { workspace = true, features = ["ssr"] }

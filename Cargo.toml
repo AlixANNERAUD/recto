@@ -32,6 +32,11 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "signal",
 wasm-bindgen = "0.2"
 console_error_panic_hook = "0.1"
 embedded-i18n = "0.2"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+bytes = "1"
+# Task 3 adds the client features; the models only need the attribute types.
+ipp = { version = "8.0.0", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
