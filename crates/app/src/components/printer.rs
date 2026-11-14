@@ -45,6 +45,7 @@ pub fn option_label(printer: &recto_printing::Printer) -> String {
 fn reason_label(reason: &StateReason) -> String {
     match &reason.kind {
         ReasonKind::Offline => t!("printers.reasons.offline").to_string(),
+        ReasonKind::Connecting => t!("printers.reasons.connecting").to_string(),
         ReasonKind::MediaEmpty => t!("printers.reasons.media_empty").to_string(),
         ReasonKind::MediaLow => t!("printers.reasons.media_low").to_string(),
         ReasonKind::MediaJam => t!("printers.reasons.media_jam").to_string(),

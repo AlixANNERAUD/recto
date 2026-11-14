@@ -23,6 +23,11 @@ use crate::{
 /// Long enough for a busy CUPS, short enough that a page never hangs on a dead one.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// A print request carries the document: up to the upload limit (50 MiB by default) to a CUPS
+/// that may sit across a slow Wi-Fi link. Reporting a slow upload as "unavailable" could also
+/// hide a job CUPS went on to print. Connecting still has [`REQUEST_TIMEOUT`].
+const SUBMIT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
 /// How many finished jobs the job list shows next to the unfinished ones.
 const COMPLETED_JOBS: i32 = 20;
 
@@ -69,6 +74,8 @@ impl Cups {
         Self::with_timeout(base, REQUEST_TIMEOUT)
     }
 
+    /// `timeout` bounds connecting and every request but a print request, which gets five
+    /// minutes.
     pub fn with_timeout(base: Url, timeout: Duration) -> Self {
         // The workspace reqwest (rustls with ring) does the HTTP instead of the client bundled
         // with `ipp`, which would pull in a second TLS stack built on aws-lc.
@@ -115,6 +122,16 @@ impl Cups {
         uri: &Uri,
         request: impl Into<IppRequestResponse>,
     ) -> Result<IppRequestResponse, PrintError> {
+        self.send_within(uri, request, None).await
+    }
+
+    /// [`send`](Self::send) with another total timeout than the client's.
+    async fn send_within(
+        &self,
+        uri: &Uri,
+        request: impl Into<IppRequestResponse>,
+        timeout: Option<Duration>,
+    ) -> Result<IppRequestResponse, PrintError> {
         let request = request.into();
         let mut body = request.to_bytes().to_vec();
         request
@@ -122,14 +139,15 @@ impl Cups {
             .read_to_end(&mut body)
             .map_err(|error| PrintError::Unavailable(error.to_string()))?;
 
-        let response = self
+        let mut post = self
             .client
             .post(uri.to_string())
             .header("content-type", "application/ipp")
-            .body(body)
-            .send()
-            .await
-            .map_err(transport_error)?;
+            .body(body);
+        if let Some(timeout) = timeout {
+            post = post.timeout(timeout);
+        }
+        let response = post.send().await.map_err(transport_error)?;
         let status = response.status();
         if !status.is_success() {
             return Err(http_status_error(status.as_u16()));
@@ -224,7 +242,9 @@ impl PrintService for Cups {
         .attributes(request.options.to_attributes(request.format))
         .build()
         .map_err(refused)?;
-        let response = self.send(&uri, operation).await?;
+        let response = self
+            .send_within(&uri, operation, Some(SUBMIT_TIMEOUT))
+            .await?;
         check(&response, || {
             PrintError::PrinterNotFound(request.printer.clone())
         })?;

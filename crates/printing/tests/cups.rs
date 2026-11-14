@@ -491,3 +491,43 @@ async fn slow_cups_times_out() {
     );
     assert!(started.elapsed() < Duration::from_secs(12));
 }
+
+#[tokio::test]
+async fn submitting_may_take_longer_than_other_requests() {
+    // A large file to a CUPS across the network takes longer than a listing; only the
+    // connection keeps the short timeout.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ipp(
+                StatusCode::SuccessfulOk,
+                vec![(
+                    DelimiterTag::JobAttributes,
+                    vec![attribute("job-id", IppValue::Integer(7))],
+                )],
+            )
+            .set_delay(Duration::from_millis(1500)),
+        )
+        .mount(&server)
+        .await;
+    let cups = Cups::with_timeout(
+        Url::parse(&server.uri()).unwrap(),
+        Duration::from_millis(500),
+    );
+
+    let id = cups
+        .submit(PrintRequest {
+            printer: "office".into(),
+            document: Bytes::from_static(b"%PDF-1.7\nhello"),
+            format: DocumentFormat::Pdf,
+            job_name: "report.pdf".into(),
+            user: "alice".into(),
+            options: PrintOptions::default(),
+        })
+        .await;
+    assert_eq!(id, Ok(7));
+    assert!(matches!(
+        cups.printers().await,
+        Err(PrintError::Unavailable(_))
+    ));
+}

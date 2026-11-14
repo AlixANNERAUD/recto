@@ -103,6 +103,9 @@ mod tests {
         assert!(!printer(PrinterState::Idle, &["offline-report"]).is_online());
         assert!(!printer(PrinterState::Stopped, &["media-jam-error"]).is_online());
         assert!(printer(PrinterState::Stopped, &["paused-report"]).is_online());
+        // CUPS sets this briefly at the start of most jobs on a healthy printer.
+        assert!(printer(PrinterState::Processing, &["connecting-to-device"]).is_online());
+        assert!(printer(PrinterState::Stopped, &["connecting-to-device"]).is_online());
     }
 
     #[test]

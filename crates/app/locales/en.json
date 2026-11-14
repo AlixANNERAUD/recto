@@ -118,6 +118,7 @@
     },
     "reasons": {
       "offline": "The printer cannot be reached.",
+      "connecting": "Connecting to the printer",
       "media_empty": "Out of paper",
       "media_low": "Paper low",
       "media_jam": "Paper jam",

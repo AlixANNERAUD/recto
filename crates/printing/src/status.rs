@@ -31,6 +31,8 @@ pub enum Severity {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReasonKind {
     Offline,
+    /// CUPS is opening the connection to the printer, which it does at the start of most jobs.
+    Connecting,
     MediaEmpty,
     MediaLow,
     MediaJam,
@@ -67,8 +69,17 @@ impl StateReason {
         } else {
             (keyword, Severity::Error)
         };
+        // A printer that is only being connected to is not offline: CUPS reports this on a
+        // healthy printer at the start of most jobs, without a suffix, so it is a report
+        // whatever the suffix says.
+        if base == "connecting-to-device" {
+            return Some(StateReason {
+                kind: ReasonKind::Connecting,
+                severity: Severity::Report,
+            });
+        }
         let kind = match base {
-            "offline" | "connecting-to-device" => ReasonKind::Offline,
+            "offline" => ReasonKind::Offline,
             "media-empty" => ReasonKind::MediaEmpty,
             "media-low" => ReasonKind::MediaLow,
             "media-jam" => ReasonKind::MediaJam,
@@ -173,7 +184,7 @@ mod tests {
         );
         assert_eq!(
             StateReason::parse("connecting-to-device"),
-            reason(ReasonKind::Offline, Severity::Error)
+            reason(ReasonKind::Connecting, Severity::Report)
         );
         assert_eq!(StateReason::parse("none"), None);
         assert_eq!(
