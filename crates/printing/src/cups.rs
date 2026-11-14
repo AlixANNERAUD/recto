@@ -1,15 +1,15 @@
 //! The real print service: IPP requests to a CUPS server.
 
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::time::Duration;
 
 use ipp::attribute::{IppAttribute, IppAttributeGroup};
-use ipp::client::non_blocking::AsyncIppClient;
-use ipp::error::IppError;
 use ipp::model::{DelimiterTag, IppVersion, Operation, StatusCode};
 use ipp::operation::builder::IppOperationBuilder;
+use ipp::parser::IppParser;
 use ipp::payload::IppPayload;
 use ipp::prelude::Uri;
+use ipp::reader::IppReader;
 use ipp::request::IppRequestResponse;
 use ipp::value::IppValue;
 use percent_encoding::percent_decode_str;
@@ -61,7 +61,7 @@ const JOB_ATTRIBUTES: [&str; 8] = [
 /// Talks to CUPS over IPP. `base` is the HTTP(S) address of the CUPS server.
 pub struct Cups {
     base: Url,
-    timeout: Duration,
+    client: reqwest::Client,
 }
 
 impl Cups {
@@ -70,7 +70,14 @@ impl Cups {
     }
 
     pub fn with_timeout(base: Url, timeout: Duration) -> Self {
-        Cups { base, timeout }
+        // The workspace reqwest (rustls with ring) does the HTTP instead of the client bundled
+        // with `ipp`, which would pull in a second TLS stack built on aws-lc.
+        let client = reqwest::Client::builder()
+            .timeout(timeout)
+            .connect_timeout(timeout)
+            .build()
+            .expect("the TLS backend initializes");
+        Cups { base, client }
     }
 
     /// `{base}/`, where CUPS answers the operations that are not about one printer.
@@ -108,12 +115,29 @@ impl Cups {
         uri: &Uri,
         request: impl Into<IppRequestResponse>,
     ) -> Result<IppRequestResponse, PrintError> {
-        AsyncIppClient::builder(uri.clone())
-            .request_timeout(self.timeout)
-            .build()
-            .send(request)
+        let request = request.into();
+        let mut body = request.to_bytes().to_vec();
+        request
+            .into_payload()
+            .read_to_end(&mut body)
+            .map_err(|error| PrintError::Unavailable(error.to_string()))?;
+
+        let response = self
+            .client
+            .post(uri.to_string())
+            .header("content-type", "application/ipp")
+            .body(body)
+            .send()
             .await
-            .map_err(transport_error)
+            .map_err(transport_error)?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(http_status_error(status.as_u16()));
+        }
+        let bytes = response.bytes().await.map_err(transport_error)?;
+        IppParser::new(IppReader::new(Cursor::new(bytes.to_vec())))
+            .parse()
+            .map_err(|error| PrintError::Unavailable(format!("unreadable CUPS answer: {error}")))
     }
 
     /// The name of the default printer, if CUPS has one.
@@ -296,28 +320,24 @@ fn add_requested(request: &mut IppRequestResponse, names: &[&str]) -> Result<(),
     Ok(())
 }
 
-/// Network and HTTP failures. The reason goes into the message so the banner is actionable.
-fn transport_error(error: IppError) -> PrintError {
-    match error {
-        IppError::RequestError(401 | 403) => {
-            PrintError::Refused("CUPS requires authentication".into())
-        }
+fn http_status_error(code: u16) -> PrintError {
+    match code {
+        401 | 403 => PrintError::Refused("CUPS requires authentication".into()),
         // A wrong Host header (missing `ServerAlias *` in cupsd.conf) is answered with a 400.
-        IppError::RequestError(code) => {
-            PrintError::Unavailable(format!("CUPS answered with HTTP status {code}"))
-        }
-        IppError::AsyncClientError(error) => {
-            let mut message = error.to_string();
-            let mut source = std::error::Error::source(&error);
-            while let Some(cause) = source {
-                message.push_str(": ");
-                message.push_str(&cause.to_string());
-                source = cause.source();
-            }
-            PrintError::Unavailable(message)
-        }
-        other => PrintError::Unavailable(other.to_string()),
+        code => PrintError::Unavailable(format!("CUPS answered with HTTP status {code}")),
     }
+}
+
+/// Network failures. The reason goes into the message so the banner is actionable.
+fn transport_error(error: reqwest::Error) -> PrintError {
+    let mut message = error.to_string();
+    let mut source = std::error::Error::source(&error);
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    PrintError::Unavailable(message)
 }
 
 /// Turns a non-success IPP status into the error the interface can explain.
@@ -363,13 +383,20 @@ fn values<'a>(group: &'a IppAttributeGroup, name: &str) -> Vec<&'a IppValue> {
     }
 }
 
+/// Only real text counts. Out-of-band values (`unknown`, `no-value`, ...) are how CUPS hides an
+/// attribute, and they must never be mistaken for the text itself.
 fn text_of(value: &IppValue) -> Option<String> {
     let text = match value {
-        IppValue::TextWithLanguage { text, .. } => text.to_string(),
-        IppValue::NameWithLanguage { name, .. } => name.to_string(),
-        other => other.to_string(),
+        IppValue::TextWithoutLanguage(text) | IppValue::TextWithLanguage { text, .. } => {
+            text.to_string()
+        }
+        IppValue::NameWithoutLanguage(name) | IppValue::NameWithLanguage { name, .. } => {
+            name.to_string()
+        }
+        IppValue::Keyword(keyword) => keyword.to_string(),
+        IppValue::Uri(uri) => uri.to_string(),
+        _ => return None,
     };
-    // `no-value` and empty strings are CUPS saying "nothing here".
     (!text.is_empty()).then_some(text)
 }
 

@@ -321,11 +321,11 @@ async fn lists_jobs_newest_first() {
     assert_eq!(jobs[3].state, JobState::Completed);
 }
 
-async fn cancel_scenario(owner: Option<&str>) -> (Result<(), PrintError>, Option<String>) {
+async fn cancel_scenario(owner: Option<IppValue>) -> (Result<(), PrintError>, Option<String>) {
     let server = MockServer::start().await;
     let mut attributes = vec![attribute("job-id", IppValue::Integer(9))];
     if let Some(owner) = owner {
-        attributes.push(attribute("job-originating-user-name", name(owner)));
+        attributes.push(attribute("job-originating-user-name", owner));
     }
     Mock::given(method("POST"))
         .and(Ipp(Operation::GetJobAttributes, None))
@@ -356,7 +356,7 @@ async fn cancel_scenario(owner: Option<&str>) -> (Result<(), PrintError>, Option
 
 #[tokio::test]
 async fn cancels_as_job_owner() {
-    let (result, user) = cancel_scenario(Some("bob")).await;
+    let (result, user) = cancel_scenario(Some(name("bob"))).await;
     result.unwrap();
     assert_eq!(user.as_deref(), Some("bob"));
 }
@@ -366,6 +366,23 @@ async fn cancels_as_requester_when_owner_hidden() {
     let (result, user) = cancel_scenario(None).await;
     result.unwrap();
     assert_eq!(user.as_deref(), Some("alice"));
+}
+
+#[tokio::test]
+async fn cancels_as_requester_when_owner_empty() {
+    let (result, user) = cancel_scenario(Some(name(""))).await;
+    result.unwrap();
+    assert_eq!(user.as_deref(), Some("alice"));
+}
+
+#[tokio::test]
+async fn cancels_as_requester_when_owner_out_of_band() {
+    // CUPS hides attributes with the out-of-band tags `unknown` (0x12) and `no-value` (0x13).
+    for tag in [0x12, 0x13] {
+        let (result, user) = cancel_scenario(Some(IppValue::new_other(tag, Bytes::new()))).await;
+        result.unwrap();
+        assert_eq!(user.as_deref(), Some("alice"), "tag {tag:#x}");
+    }
 }
 
 #[tokio::test]
