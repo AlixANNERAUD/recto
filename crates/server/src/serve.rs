@@ -20,7 +20,7 @@ use leptos_axum::{LeptosRoutes, generate_route_list};
 use recto_app::{App, shell, state::AppState};
 use recto_authentication::User;
 use recto_authentication::csrf::{self, AllowedOrigin};
-use recto_scanning::ResultStore;
+use recto_scanning::{ResultStore, ScannerService};
 use tower::ServiceExt;
 use tower_http::services::ServeDir;
 use tower_sessions::session_store::ExpiredDeletion;
@@ -122,6 +122,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     }
     purge_expired_results(Arc::clone(&state.results));
     delete_expired_sessions(auth.sessions.clone());
+    find_scanners(Arc::clone(&state.scan));
     #[cfg_attr(
         not(all(feature = "dev-mocks", debug_assertions)),
         expect(unused_mut, reason = "only the development mocks change the router")
@@ -162,6 +163,18 @@ async fn fallback(State(state): State<AppState>, request: Request) -> Response {
     }
     let not_found = leptos_axum::file_and_error_handler::<AppState, _>(shell);
     not_found(request.uri().clone(), State(state), request).await
+}
+
+/// Lists the scanners once in the background, so the first visit to the scan page finds the
+/// list cached instead of waiting for SANE's discovery, which takes seconds with network
+/// backends. Startup does not wait for it.
+fn find_scanners(scan: Arc<dyn ScannerService>) {
+    tokio::spawn(async move {
+        match scan.scanners(true).await {
+            Ok(scanners) => tracing::info!(count = scanners.len(), "scanners listed"),
+            Err(error) => tracing::warn!(%error, "listing the scanners failed"),
+        }
+    });
 }
 
 /// Deletes expired sessions in the background, every [`SESSION_PURGE_INTERVAL`].
