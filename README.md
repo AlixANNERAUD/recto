@@ -46,9 +46,9 @@ docker compose exec cups lpadmin -p office -E -v ipp://192.168.1.60/ipp/print -m
 Scanners need a little more setup, see [SANE](#scanners-sane).
 
 Images are published as `ghcr.io/alixanneraud/recto` for linux/amd64 and linux/arm64, with the
-tags `X.Y.Z`, `X.Y`, `X` and `latest`. Set `RECTO_IMAGE` to pin one. `latest` exists only once the first `vX.Y.Z` release is published;
-before that, run `docker compose up -d --build` to build it from the checkout. `docker compose up --build`
-builds the image from your checkout instead.
+tags `X.Y.Z`, `X.Y`, `X` and `latest`. Set `RECTO_IMAGE` to pin one. `latest` exists only once the
+first `vX.Y.Z` release is published; before that, or to run your own changes, build the image from
+the checkout with `docker compose up -d --build`.
 
 recto listens in plain HTTP. Put a reverse proxy with TLS in front of it and set
 `RECTO_PUBLIC_URL` to the address people open: sign-in redirects and the `Secure` cookie flag
@@ -63,7 +63,7 @@ the scan may still finish, but its result is lost, so scan again.
 
 ## Configuration
 
-Every setting is an environment variable. In `compose.yml`, put them under `environment`. A
+Every setting is an environment variable. In `compose.yml`, put them under `environment`. An
 optional variable set to an empty value counts as unset.
 
 | Variable | Default | Meaning |

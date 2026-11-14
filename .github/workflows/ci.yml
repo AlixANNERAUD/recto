@@ -11,9 +11,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request makes its older run pointless; every commit on main keeps its
+# own run, so a failing commit is never hidden by the next one.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   MISE_ENV: ci
