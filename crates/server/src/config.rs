@@ -43,15 +43,6 @@ pub struct Config {
 }
 
 impl Config {
-    /// Parses arguments and environment, normalized.
-    pub fn try_parse_normalized<I, T>(arguments: I) -> Result<Self, clap::Error>
-    where
-        I: IntoIterator<Item = T>,
-        T: Into<std::ffi::OsString> + Clone,
-    {
-        Ok(Self::normalized(Self::try_parse_from(arguments)?))
-    }
-
     /// Drops blank optional values: a variable set to nothing means the same as no variable.
     pub fn normalized(mut config: Self) -> Self {
         config.oidc_scopes.retain(|scope| !scope.trim().is_empty());
@@ -119,6 +110,8 @@ pub enum Command {
 
 #[cfg(test)]
 mod tests {
+    use clap::{CommandFactory, FromArgMatches};
+
     use super::*;
 
     const REQUIRED: [&str; 7] = [
@@ -131,8 +124,20 @@ mod tests {
         "recto",
     ];
 
+    /// Parses the arguments only: the environment is ignored, so RECTO_* variables exported in a
+    /// developer's shell cannot change the outcome.
+    fn parse_arguments<I, T>(arguments: I) -> Result<Config, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
+        let command = Config::command().mut_args(|argument| argument.env(None::<&str>));
+        let matches = command.try_get_matches_from(arguments)?;
+        Config::from_arg_matches(&matches).map(Config::normalized)
+    }
+
     fn parse(extra: &[&str]) -> Result<Config, clap::Error> {
-        Config::try_parse_normalized(REQUIRED.iter().chain(extra))
+        parse_arguments(REQUIRED.iter().chain(extra))
     }
 
     #[test]
@@ -169,7 +174,7 @@ mod tests {
             "--oidc-client-id",
             "recto",
         ];
-        assert!(Config::try_parse_normalized(arguments).is_err());
+        assert!(parse_arguments(arguments).is_err());
     }
 
     #[test]

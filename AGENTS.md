@@ -1,7 +1,7 @@
 # AGENTS.md
 
 recto is a self-hosted web app to print (CUPS/IPP) and scan (SANE) behind OpenID Connect, written
-in Rust. The design is in `docs/superpowers/specs/`.
+in Rust.
 
 ## Layout
 
@@ -38,6 +38,6 @@ Builds are heavy: run one cargo command at a time.
   islands.
 - Tests never touch a real printer, scanner or identity provider: use mocks and `wiremock`.
 - Comments explain why, never restate the code. Docs are plain, concise English with no em dashes.
-- Branch from `main`, never push to `main` directly. Commits follow Conventional Commits
-  (`feat:`, `fix:`, `test:`, `build:`, `ci:`, `docs:`), imperative, with a body. Do not mention AI
-  tools and add no `Co-Authored-By` or "Generated with" lines.
+- Work and push directly on `main`; there are no pull requests. Commits follow Conventional
+  Commits (`feat:`, `fix:`, `test:`, `build:`, `ci:`, `docs:`), imperative, with a body. Do not
+  mention AI tools and add no `Co-Authored-By` or "Generated with" lines.

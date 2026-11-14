@@ -10,8 +10,8 @@
 //!
 //! ```ignore
 //! let label = t!("app.name");
-//! let notice = tf!("app.tagline");
-//! let components = tp!("app.name", 1);
+//! let notice = tf!("notices.sent", name = file_name);
+//! let pages = tp!("print.pages", page_count);
 //! ```
 
 use embedded_i18n::Locale;
