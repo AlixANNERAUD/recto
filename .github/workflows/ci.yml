@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  # Maintenance happens on main; pull requests come from outside contributors.
+  push:
+    branches: [main]
+    tags-ignore: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MISE_ENV: ci
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  check:
+    name: Format, clippy and tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      # The libsane crate needs libsane to link and libclang for bindgen; the SANE tests need
+      # libsane at run time.
+      - name: Install libsane
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libsane-dev libsane1 libclang-dev pkg-config
+      - uses: jdx/mise-action@v5.2.7
+      - uses: Swatinem/rust-cache@v2.9.3
+      - run: mise run lint
+      - run: mise run doc
+      - run: mise run test
+      # The SANE tests are ignored by default; this runs them against libsane's virtual test
+      # backend (the task sets RECTO_SANE_TESTS and SANE_CONFIG_DIR).
+      - run: mise run test-sane
+      - run: mise run deny
+
+  image:
+    name: Container image (${{ matrix.architecture }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: docker/setup-buildx-action@v4.4.1
+      - uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          load: true
+          tags: recto:ci
+          platforms: linux/${{ matrix.architecture }}
+          cache-from: type=gha,scope=image-${{ matrix.architecture }}
+          cache-to: type=gha,scope=image-${{ matrix.architecture }},mode=max
+      # Through compose.yml, so the file users start from is tested too. The identity provider is
+      # never contacted at startup, so dummy values are enough for the image to turn healthy.
+      - name: Start the image and wait until it reports healthy
+        run: |
+          mkdir consume
+          if ! docker compose up --detach --no-build --wait --wait-timeout 150; then
+            docker compose logs
+            exit 1
+          fi
+          curl --fail --silent http://localhost:8080/health
+        env:
+          RECTO_IMAGE: recto:ci
+          RECTO_PUBLIC_URL: http://localhost:8080
+          RECTO_OIDC_ISSUER: http://127.0.0.1:9/
+          RECTO_OIDC_CLIENT_ID: recto-ci
+      - name: Report size
+        run: docker image ls recto:ci
+
+  # The one check branch protection requires: it fails unless every job above succeeded, so
+  # adding a job here needs no change to the repository settings.
+  passed:
+    name: CI passed
+    if: always()
+    needs: [check, image]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check that every job succeeded
+        run: |
+          echo "$RESULTS" | jq --exit-status 'all(.[]; .result == "success")' > /dev/null || {
+            echo "$RESULTS" | jq --raw-output 'to_entries[] | "\(.key): \(.value.result)"'
+            echo "::error::A required job did not succeed"
+            exit 1
+          }
+        env:
+          RESULTS: ${{ toJSON(needs) }}

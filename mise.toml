@@ -75,3 +75,14 @@ RECTO_OIDC_CLIENT_ID = "recto-dev"
 [tasks.build]
 description = "Build the release binary and the site"
 run = "cargo leptos build --release"
+
+# libsane reads its backends once per process and allows one instance, so these tests (ignored
+# by default) run in their own invocation. CI sets `RECTO_SANE_TESTS` and `SANE_CONFIG_DIR`, see
+# crates/scanning/tests/sane_test_backend.rs.
+[tasks.test-sane]
+description = "Run the SANE tests against libsane's virtual test backend (needs libsane)"
+run = "cargo nextest run --package recto-scanning --run-ignored only --no-tests=fail"
+
+[tasks.test-sane.env]
+RECTO_SANE_TESTS = "1"
+SANE_CONFIG_DIR = "{{config_root}}/crates/scanning/tests/sane-config"

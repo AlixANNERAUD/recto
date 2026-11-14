@@ -1,0 +1,82 @@
+# recto with Docker Compose:
+#
+#   RECTO_PUBLIC_URL=https://recto.example.org \
+#   RECTO_OIDC_ISSUER=https://id.example.org \
+#   RECTO_OIDC_CLIENT_ID=... \
+#   docker compose up -d --wait
+#
+# or put those variables in a `.env` file next to this one, then open http://localhost:8080. The
+# published image is used (amd64 and arm64); with `docker compose up --build` it is built from this
+# checkout.
+#
+# The identity provider needs a public client (authorization code with PKCE) whose redirect URI is
+# $RECTO_PUBLIC_URL/auth/callback. Every RECTO_* variable of the README works under `environment`.
+#
+# Printers: add them to the `cups` service, for example
+#   docker compose exec cups lpadmin -p office -E -v ipp://192.168.1.60/ipp/print -m everywhere
+# Scanners: see the sane-airscan lines below.
+services:
+  recto:
+    image: ${RECTO_IMAGE:-ghcr.io/alixanneraud/recto:latest}
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - cups
+    ports:
+      - "${RECTO_PORT:-8080}:8080"
+    environment:
+      # The address users reach recto at: sign-in redirects and the Secure cookie flag use it.
+      RECTO_PUBLIC_URL: ${RECTO_PUBLIC_URL:?set RECTO_PUBLIC_URL to the address users open}
+      RECTO_OIDC_ISSUER: ${RECTO_OIDC_ISSUER:?set RECTO_OIDC_ISSUER to your identity provider}
+      RECTO_OIDC_CLIENT_ID: ${RECTO_OIDC_CLIENT_ID:?set RECTO_OIDC_CLIENT_ID to the public client}
+      RECTO_CUPS_URL: http://cups:631
+      # Where "Save" on the scan page writes; it must be writable by uid 65532 (chown 65532 consume).
+      RECTO_SCAN_OUTPUT_DIR: /consume
+      RECTO_LOG_FORMAT: ${RECTO_LOG_FORMAT:-json}
+      # Optional settings must be absent rather than empty, so set them here, for example to let
+      # only members of a Zitadel role in:
+      # RECTO_OIDC_SCOPES: urn:zitadel:iam:org:projects:roles
+      # RECTO_OIDC_REQUIRED_CLAIM: urn:zitadel:iam:org:project:roles
+      # RECTO_OIDC_REQUIRED_VALUE: recto
+    volumes:
+      - ./consume:/consume
+      # Docker's bridge network carries no multicast, so sane-airscan cannot discover scanners:
+      # list them in airscan.conf. The Debian dll.conf probes every backend, which is slow in a
+      # container; the one here enables airscan, escl and net only. net.conf lists saned hosts.
+      # - ./examples/sane/airscan.conf:/etc/sane.d/airscan.conf:ro
+      # - ./examples/sane/dll.conf:/etc/sane.d/dll.conf:ro
+      # - ./examples/sane/net.conf:/etc/sane.d/net.conf:ro
+    # A USB scanner needs its device node, which the image's user (65532) must be able to open
+    # (a udev rule or a group on the host); never use `privileged`.
+    # devices:
+    #   - /dev/bus/usb:/dev/bus/usb
+    read_only: true
+    # libsane and the scan results write here.
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # The image checks itself with `recto healthcheck`; `--wait` waits for it.
+
+  cups:
+    # A maintained multi-architecture (amd64, arm64) Debian CUPS server.
+    image: olbat/cupsd:latest
+    restart: unless-stopped
+    volumes:
+      # The named volume keeps the printers added with lpadmin (printers.conf lives in /etc/cups);
+      # the file mounted over it is the one this repository controls.
+      - cups-config:/etc/cups
+      - ./examples/cups/cupsd.conf:/etc/cups/cupsd.conf:ro
+      - cups-spool:/var/spool/cups
+    # Publish 631 only to a trusted network: cupsd.conf allows private address ranges.
+    # ports:
+    #   - "127.0.0.1:631:631"
+    # A printer attached by USB needs its device node; never use `privileged`.
+    # devices:
+    #   - /dev/bus/usb:/dev/bus/usb
+
+volumes:
+  cups-config:
+  cups-spool:
