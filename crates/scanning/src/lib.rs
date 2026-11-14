@@ -26,10 +26,10 @@ mod test_support;
 #[cfg(any(test, feature = "testing"))]
 mod testing;
 
-pub use area::{ScanSettings, Selection, preview_settings};
+pub use area::{MAX_PAGE_BYTES, ScanSettings, Selection, check_page_bytes, preview_settings};
 pub use capabilities::{OptionConstraint, OptionInfo, OptionUnit, capabilities};
 #[cfg(feature = "service")]
-pub use encode::{ScannedPage, encode};
+pub use encode::{ScannedPage, assemble};
 pub use error::ScanError;
 pub use model::{Area, OutputFormat, ScanMode, ScannerCapabilities, ScannerInfo, Source};
 #[cfg(feature = "sane")]
@@ -37,7 +37,7 @@ pub use sane::SaneScanners;
 #[cfg(feature = "service")]
 pub use save::save_to_folder;
 #[cfg(feature = "service")]
-pub use service::ScannerService;
+pub use service::{ScanRequest, ScannerService};
 #[cfg(feature = "service")]
 pub use store::{ResultStore, ScanResult};
 #[cfg(any(test, feature = "testing"))]

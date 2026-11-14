@@ -34,6 +34,7 @@ pub fn scan_error(error: &ScanError, locale: Locale) -> String {
             "{}",
             t!("scan.errors.device", reason = reason, locale = locale)
         ),
+        ScanError::TooLarge => t!("scan.errors.too_large", locale = locale).to_owned(),
         ScanError::Encoding(reason) => format!(
             "{}",
             t!("scan.errors.encoding", reason = reason, locale = locale)

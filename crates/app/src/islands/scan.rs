@@ -263,6 +263,19 @@ pub fn Scanner(scanners: Vec<ScannerInfo>, error: Option<String>) -> impl IntoVi
 
     let busy = move || activity.get() != Activity::Idle;
     let can_scan = move || ready.get() && !busy() && capabilities.with(Option::is_some);
+    // A preview from a feeder would pull the first sheet through, so it needs the flatbed.
+    let feeder_chosen = move || {
+        capabilities.with(|capabilities| {
+            source.with(|chosen| {
+                capabilities.as_ref().is_some_and(|capabilities| {
+                    capabilities
+                        .sources
+                        .iter()
+                        .any(|known| Some(&known.name) == chosen.as_ref() && known.is_feeder)
+                })
+            })
+        })
+    };
     let selectable = move || {
         capabilities.with(|capabilities| {
             capabilities
@@ -332,10 +345,11 @@ pub fn Scanner(scanners: Vec<ScannerInfo>, error: Option<String>) -> impl IntoVi
 
     let run_preview = move |_| {
         let id = selected.get_untracked();
+        let source = source.get_untracked();
         activity.set(Activity::Previewing);
         failure.set(None);
         spawn_local(async move {
-            let outcome = preview(id).await;
+            let outcome = preview(id, source).await;
             activity.set(Activity::Idle);
             match outcome {
                 Ok(outcome) => {
@@ -582,7 +596,7 @@ pub fn Scanner(scanners: Vec<ScannerInfo>, error: Option<String>) -> impl IntoVi
                         <button
                             type="button"
                             class=button_class(ButtonVariant::Secondary)
-                            disabled=move || !can_scan()
+                            disabled=move || !can_scan() || feeder_chosen()
                             on:click=run_preview
                         >
                             {t!("scan.preview")}
@@ -596,6 +610,9 @@ pub fn Scanner(scanners: Vec<ScannerInfo>, error: Option<String>) -> impl IntoVi
                             {t!("scan.scan")}
                         </button>
                     </div>
+                    {move || {
+                        feeder_chosen().then(|| view! { <p class=HINT>{t!("scan.preview_needs_flatbed")}</p> })
+                    }}
                     <p aria-live="polite" class="text-muted-foreground text-sm empty:hidden">
                         {move || activity.get().message()}
                     </p>

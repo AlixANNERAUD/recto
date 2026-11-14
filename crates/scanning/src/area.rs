@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Area, ScanMode, ScannerCapabilities};
+use crate::{
+    error::ScanError,
+    model::{Area, ScanMode, ScannerCapabilities},
+};
 
 /// A rectangle on the preview as fractions of its width and height, from the top-left corner.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -47,9 +50,39 @@ pub struct ScanSettings {
     pub area: Option<Area>,
 }
 
-/// Settings for the quick preview: low resolution keeps it fast, and the source is left alone so
-/// a preview does not flip the feeder/flatbed choice made on the device.
-pub fn preview_settings(caps: &ScannerCapabilities) -> ScanSettings {
+/// The most raw image data one page may take, in bytes. A page is held whole while it is
+/// encoded, so this bounds the memory of a scan: 300 MB is an A4 page in colour at about
+/// 1000 dpi, or in gray at about 1700 dpi, far beyond what documents need.
+pub const MAX_PAGE_BYTES: u64 = 300_000_000;
+
+impl ScanSettings {
+    /// The raw size of one page at these settings, when the area is known: one byte per sample,
+    /// three samples per pixel in colour (line art is expanded to a byte per pixel too).
+    pub fn page_bytes(&self) -> Option<u64> {
+        let area = self.area?;
+        // Areas are at most a few hundred millimetres, far inside u64.
+        let pixels = |mm: f64| (mm.max(0.0) / 25.4 * f64::from(self.resolution)).ceil() as u64;
+        let samples = if self.mode == ScanMode::Color { 3 } else { 1 };
+        Some(
+            pixels(area.width())
+                .saturating_mul(pixels(area.height()))
+                .saturating_mul(samples),
+        )
+    }
+}
+
+/// Refuses a page of `bytes` raw bytes above [`MAX_PAGE_BYTES`].
+pub fn check_page_bytes(bytes: u64) -> Result<(), ScanError> {
+    if bytes > MAX_PAGE_BYTES {
+        Err(ScanError::TooLarge)
+    } else {
+        Ok(())
+    }
+}
+
+/// Settings for the quick preview from `source` (the device's current one when `None`): low
+/// resolution keeps it fast.
+pub fn preview_settings(caps: &ScannerCapabilities, source: Option<String>) -> ScanSettings {
     let resolution = caps
         .resolutions
         .iter()
@@ -66,7 +99,7 @@ pub fn preview_settings(caps: &ScannerCapabilities) -> ScanSettings {
     ScanSettings {
         resolution,
         mode,
-        source: None,
+        source,
         area: caps.area,
     }
 }
@@ -95,19 +128,54 @@ mod tests {
 
     #[test]
     fn preview_picks_low_resolution() {
-        assert_eq!(preview_settings(&caps(&[50, 75, 300])).resolution, 75);
-        assert_eq!(preview_settings(&caps(&[300, 600])).resolution, 300);
-        assert_eq!(preview_settings(&caps(&[50, 60])).resolution, 50);
-        let s = preview_settings(&caps(&[75]));
+        let preview = |resolutions: &[u32]| preview_settings(&caps(resolutions), None);
+        assert_eq!(preview(&[50, 75, 300]).resolution, 75);
+        assert_eq!(preview(&[300, 600]).resolution, 300);
+        assert_eq!(preview(&[50, 60]).resolution, 50);
+        let s = preview(&[75]);
         assert_eq!(s.mode, ScanMode::Color);
         assert_eq!(s.source, None);
+    }
+
+    #[test]
+    fn preview_uses_the_chosen_source() {
+        let s = preview_settings(&caps(&[75]), Some("Flatbed".into()));
+        assert_eq!(s.source.as_deref(), Some("Flatbed"));
     }
 
     #[test]
     fn preview_falls_back_to_first_mode() {
         let mut c = caps(&[75]);
         c.modes = vec![ScanMode::Gray, ScanMode::Lineart];
-        assert_eq!(preview_settings(&c).mode, ScanMode::Gray);
+        assert_eq!(preview_settings(&c, None).mode, ScanMode::Gray);
+    }
+
+    #[test]
+    fn page_size_follows_area_resolution_and_mode() {
+        let a4 = ScanSettings {
+            resolution: 300,
+            mode: ScanMode::Color,
+            source: None,
+            area: Some(Area {
+                left: 0.0,
+                top: 0.0,
+                right: 210.0,
+                bottom: 297.0,
+            }),
+        };
+        // 2481 x 3508 pixels.
+        assert_eq!(a4.page_bytes(), Some(2481 * 3508 * 3));
+        let gray = ScanSettings {
+            mode: ScanMode::Gray,
+            ..a4.clone()
+        };
+        assert_eq!(gray.page_bytes(), Some(2481 * 3508));
+        assert_eq!(ScanSettings { area: None, ..a4 }.page_bytes(), None);
+        assert!(check_page_bytes(MAX_PAGE_BYTES).is_ok());
+        assert_eq!(
+            check_page_bytes(MAX_PAGE_BYTES + 1),
+            Err(ScanError::TooLarge)
+        );
     }
 
     #[test]

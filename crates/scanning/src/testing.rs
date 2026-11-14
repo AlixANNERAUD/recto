@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use image::{DynamicImage, GrayImage, Luma};
 
 use crate::{
-    Area, ScanError, ScanMode, ScanSettings, ScannedPage, ScannerCapabilities, ScannerInfo,
+    Area, ScanError, ScanMode, ScanRequest, ScannedPage, ScannerCapabilities, ScannerInfo,
     ScannerService, Source,
 };
 
@@ -21,7 +21,7 @@ pub struct MockScannerService {
     queue: tokio::sync::Mutex<()>,
     active: AtomicUsize,
     peak: AtomicUsize,
-    requests: Mutex<Vec<(String, ScanSettings)>>,
+    requests: Mutex<Vec<(String, ScanRequest)>>,
     /// Every id a caller tried to open, listed or not.
     opened: Mutex<Vec<String>>,
 }
@@ -83,7 +83,7 @@ impl MockScannerService {
     }
 
     /// Every scan request received, in order of arrival at the scanner.
-    pub fn scan_requests(&self) -> Vec<(String, ScanSettings)> {
+    pub fn scan_requests(&self) -> Vec<(String, ScanRequest)> {
         self.requests.lock().unwrap().clone()
     }
 
@@ -120,18 +120,19 @@ impl ScannerService for MockScannerService {
         Ok(self.capabilities.clone())
     }
 
-    async fn scan(&self, id: &str, settings: ScanSettings) -> Result<Vec<ScannedPage>, ScanError> {
+    async fn scan(&self, id: &str, request: ScanRequest) -> Result<Vec<ScannedPage>, ScanError> {
         let _turn = self.queue.lock().await;
         let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.peak.fetch_max(now, Ordering::SeqCst);
         self.requests
             .lock()
             .unwrap()
-            .push((id.to_owned(), settings.clone()));
+            .push((id.to_owned(), request.clone()));
         if !self.delay.is_zero() {
             tokio::time::sleep(self.delay).await;
         }
-        let result = self.check(id).map(|()| {
+        let settings = &request.settings;
+        let result = self.check(id).and_then(|()| {
             let area = settings.area.or(self.capabilities.area).unwrap_or(Area {
                 left: 0.0,
                 top: 0.0,
@@ -142,10 +143,12 @@ impl ScannerService for MockScannerService {
                 |mm: f64| ((mm * f64::from(settings.resolution) / 25.4).round() as u32).max(1);
             let image =
                 GrayImage::from_pixel(pixels(area.width()), pixels(area.height()), Luma([128]));
-            vec![ScannedPage {
-                image: DynamicImage::ImageLuma8(image),
-                dpi: settings.resolution,
-            }]
+            let page = ScannedPage::encode(
+                &DynamicImage::ImageLuma8(image),
+                settings.resolution,
+                request.format,
+            )?;
+            Ok(vec![page])
         });
         self.active.fetch_sub(1, Ordering::SeqCst);
         result
@@ -157,18 +160,23 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::{OutputFormat, ScanSettings};
 
-    fn settings() -> ScanSettings {
-        ScanSettings {
-            resolution: 100,
-            mode: ScanMode::Gray,
-            source: None,
-            area: Some(Area {
-                left: 0.0,
-                top: 0.0,
-                right: 50.0,
-                bottom: 25.4,
-            }),
+    fn settings() -> ScanRequest {
+        ScanRequest {
+            settings: ScanSettings {
+                resolution: 100,
+                mode: ScanMode::Gray,
+                source: None,
+                area: Some(Area {
+                    left: 0.0,
+                    top: 0.0,
+                    right: 50.0,
+                    bottom: 25.4,
+                }),
+            },
+            format: OutputFormat::Png,
+            single_page: false,
         }
     }
 
@@ -176,10 +184,8 @@ mod tests {
     async fn generates_a_page_of_the_requested_size() {
         let mock = MockScannerService::default();
         let pages = mock.scan("mock:0", settings()).await.unwrap();
-        assert_eq!(
-            (pages[0].image.width(), pages[0].image.height()),
-            (197, 100)
-        );
+        assert_eq!((pages[0].width, pages[0].height), (197, 100));
+        assert!(pages[0].data.starts_with(b"\x89PNG"));
         assert_eq!(pages[0].dpi, 100);
     }
 

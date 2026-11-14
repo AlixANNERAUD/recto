@@ -425,7 +425,9 @@ async fn preview_and_scan_store_results_for_the_user() {
     assert_eq!(response.status(), StatusCode::OK);
     let outcome: serde_json::Value = serde_json::from_str(&text(response).await).unwrap();
     assert!(outcome["file_name"].as_str().unwrap().ends_with(".pdf"));
-    let (_, settings) = harness.scan.scan_requests().pop().unwrap();
+    let (_, request) = harness.scan.scan_requests().pop().unwrap();
+    assert!(!request.single_page);
+    let settings = request.settings;
     assert_eq!(settings.resolution, 150);
     assert_eq!(settings.source.as_deref(), Some("Flatbed"));
     let area = settings.area.unwrap();
@@ -513,4 +515,29 @@ async fn unlisted_scanner_ids_are_never_opened() {
         .await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(harness.scan.opened(), ["mock:0"]);
+}
+
+#[tokio::test]
+async fn preview_reads_one_page_from_the_chosen_source() {
+    let harness = Harness::new(vec![kitchen()], vec![]);
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let form = "application/x-www-form-urlencoded";
+    let response = harness
+        .call("preview", &cookie, form, "id=mock%3A0&source=ADF".into())
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let (_, request) = harness.scan.scan_requests().pop().unwrap();
+    assert_eq!(request.settings.source.as_deref(), Some("ADF"));
+    assert!(request.single_page, "a preview never pulls a stack through");
+
+    // A source the scanner does not have is refused before scanning.
+    let response = harness
+        .call("preview", &cookie, form, "id=mock%3A0&source=Tray".into())
+        .await;
+    assert!(
+        text(response)
+            .await
+            .contains("The scanner does not support this")
+    );
+    assert_eq!(harness.scan.scan_requests().len(), 1);
 }

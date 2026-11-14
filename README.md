@@ -194,6 +194,10 @@ be briefly partial; Paperless copes with that.
 Uploads over `RECTO_MAX_UPLOAD_SIZE` are refused in the browser. Without JavaScript, some browsers
 show a connection reset instead of the error message.
 
+Each scanned page is compressed as soon as it is read, so a feeder batch takes little memory. A
+single page may take at most 300 MB before compression (an A4 page in colour at about 1000 dpi);
+a larger scan is refused with a message to lower the resolution or select a smaller area.
+
 ## Security
 
 The image runs as a non-root user (65532), and `compose.yml` sets a read-only root filesystem,

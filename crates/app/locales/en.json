@@ -182,6 +182,7 @@
     },
     "first_page_only": "PNG and JPEG keep only the first page from the feeder.",
     "preview": "Preview",
+    "preview_needs_flatbed": "Preview works from the flatbed only: from the feeder it would pull the first sheet through. Feeder pages are scanned whole.",
     "scan": "Scan",
     "activity": {
       "refreshing": "Looking for scanners…",
@@ -212,6 +213,7 @@
       "cover_open": "The scanner cover is open.",
       "unsupported": "The scanner does not support this: {what}",
       "device": "Scanner error: {reason}",
+      "too_large": "This scan would be too large for recto. Lower the resolution or select a smaller area.",
       "encoding": "The scan could not be encoded: {reason}",
       "result_not_found": "This scan does not exist or has expired.",
       "save_disabled": "Saving to a folder is not set up.",

@@ -1,6 +1,18 @@
 use async_trait::async_trait;
 
-use crate::{ScanError, ScanSettings, ScannedPage, ScannerCapabilities, ScannerInfo};
+use crate::{OutputFormat, ScanError, ScanSettings, ScannedPage, ScannerCapabilities, ScannerInfo};
+
+/// What to scan, and how to keep it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScanRequest {
+    pub settings: ScanSettings,
+    /// How each page is compressed as soon as it is read (see [`ScannedPage`]). PNG and JPEG
+    /// hold one image, so with them only the first page of a feeder batch is kept.
+    pub format: OutputFormat,
+    /// Stops after the first page, even from a feeder: a preview must never pull a whole stack
+    /// through.
+    pub single_page: bool,
+}
 
 /// What the server needs from a scanner stack. Implemented over libsane for real use and by a mock
 /// for the tests of the consumers. Scans queue: only one runs at a time because a scanner has one
@@ -13,6 +25,6 @@ pub trait ScannerService: Send + Sync + 'static {
 
     async fn capabilities(&self, id: &str) -> Result<ScannerCapabilities, ScanError>;
 
-    /// One page for a flatbed, every page of the feeder for a feeder source.
-    async fn scan(&self, id: &str, settings: ScanSettings) -> Result<Vec<ScannedPage>, ScanError>;
+    /// One page for a flatbed or a single-page request, every page of the feeder otherwise.
+    async fn scan(&self, id: &str, request: ScanRequest) -> Result<Vec<ScannedPage>, ScanError>;
 }

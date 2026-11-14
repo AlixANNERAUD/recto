@@ -9,6 +9,8 @@
 
 use leptos::{prelude::*, server_fn::codec::Json};
 use recto_printing::{Job, Printer};
+#[cfg(feature = "ssr")]
+use recto_scanning::ScanRequest;
 use recto_scanning::{OutputFormat, ScanSettings, ScannerCapabilities, ScannerInfo, Selection};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -57,15 +59,22 @@ pub async fn scanner_capabilities(id: String) -> Result<ScannerCapabilities, Ser
         .map_err(|error| context.scan_failure(&error))
 }
 
-/// A quick low-resolution scan of the whole glass, stored as PNG for the preview image.
+/// A quick low-resolution scan of the whole glass from `source` (the device's current one when
+/// absent), stored as PNG for the preview image. It reads one page only, even from a feeder.
 #[server(endpoint = "preview")]
-pub async fn preview(id: String) -> Result<ScanOutcome, ServerFnError> {
+pub async fn preview(id: String, source: Option<String>) -> Result<ScanOutcome, ServerFnError> {
     let context = server::Context::new()?;
     let scanned = async {
         context.listed(&id).await?;
         let capabilities = context.state.scan.capabilities(&id).await?;
-        let settings = recto_scanning::preview_settings(&capabilities);
-        let pages = context.state.scan.scan(&id, settings).await?;
+        let settings = recto_scanning::preview_settings(&capabilities, source);
+        let settings = server::checked(settings, None, &capabilities)?;
+        let request = ScanRequest {
+            settings,
+            format: OutputFormat::Png,
+            single_page: true,
+        };
+        let pages = context.state.scan.scan(&id, request).await?;
         context.store(pages, OutputFormat::Png).await
     };
     scanned.await.map_err(|error| context.scan_failure(&error))
@@ -85,7 +94,12 @@ pub async fn scan(
         context.listed(&id).await?;
         let capabilities = context.state.scan.capabilities(&id).await?;
         let settings = server::checked(settings, selection, &capabilities)?;
-        let pages = context.state.scan.scan(&id, settings).await?;
+        let request = ScanRequest {
+            settings,
+            format,
+            single_page: false,
+        };
+        let pages = context.state.scan.scan(&id, request).await?;
         context.store(pages, format).await
     };
     scanned.await.map_err(|error| context.scan_failure(&error))
@@ -163,8 +177,8 @@ mod server {
             ServerFnError::new(messages::scan_error(error, self.locale))
         }
 
-        /// Encodes the pages and keeps the file for the user. Both block, so they run off the
-        /// async workers.
+        /// Assembles the pages into the file and keeps it for the user. Both block, so they run
+        /// off the async workers.
         pub async fn store(
             &self,
             pages: Vec<ScannedPage>,
@@ -173,8 +187,9 @@ mod server {
             let results = Arc::clone(&self.state.results);
             let owner = self.user.subject.clone();
             let stored = tokio::task::spawn_blocking(move || {
-                let bytes = recto_scanning::encode(&pages, format)?;
-                results.put(&owner, format, pages.len(), &bytes)
+                let count = pages.len();
+                let bytes = recto_scanning::assemble(pages, format)?;
+                results.put(&owner, format, count, &bytes)
             })
             .await
             .map_err(|_| ScanError::Encoding("the encoding task stopped".into()))??;
@@ -187,9 +202,10 @@ mod server {
         }
     }
 
-    /// The settings to scan with: refused when the scanner does not offer them, and with the
-    /// area cut from the selection. The scanner's full area is always set explicitly, so a
-    /// window left over from a previous selection is never reused.
+    /// The settings to scan with: refused when the scanner does not offer them or when a page
+    /// would exceed the memory budget, and with the area cut from the selection. The scanner's
+    /// full area is always set explicitly, so a window left over from a previous selection is
+    /// never reused.
     pub fn checked(
         settings: ScanSettings,
         selection: Option<Selection>,
@@ -216,7 +232,11 @@ mod server {
             (Some(selection), Some(full)) => selection.to_area(&full).or(Some(full)),
             (_, full) => full,
         };
-        Ok(ScanSettings { area, ..settings })
+        let settings = ScanSettings { area, ..settings };
+        if let Some(bytes) = settings.page_bytes() {
+            recto_scanning::check_page_bytes(bytes)?;
+        }
+        Ok(settings)
     }
 
     #[cfg(test)]
@@ -275,6 +295,41 @@ mod server {
             };
             let scanned = checked(settings(), Some(half), &without_geometry).unwrap();
             assert_eq!(scanned.area, None);
+        }
+
+        #[test]
+        fn pages_over_the_memory_budget_are_refused() {
+            let large = ScannerCapabilities {
+                resolutions: vec![300, 1200],
+                ..capabilities()
+            };
+            // 200 x 300 mm in colour at 1200 dpi is about 390 MB raw.
+            let refused = checked(
+                ScanSettings {
+                    resolution: 1200,
+                    ..settings()
+                },
+                None,
+                &large,
+            );
+            assert_eq!(refused, Err(ScanError::TooLarge));
+            // A smaller area at the same resolution fits.
+            let quarter = Selection {
+                x: 0.0,
+                y: 0.0,
+                width: 0.5,
+                height: 0.5,
+            };
+            let fits = checked(
+                ScanSettings {
+                    resolution: 1200,
+                    ..settings()
+                },
+                Some(quarter),
+                &large,
+            );
+            assert!(fits.is_ok(), "{fits:?}");
+            assert!(checked(settings(), None, &large).is_ok());
         }
 
         #[test]

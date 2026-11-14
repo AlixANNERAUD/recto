@@ -21,6 +21,9 @@ pub enum ScanError {
     Unsupported(String),
     #[error("scanner error: {0}")]
     Device(String),
+    /// One page would need more memory than recto allows ([`crate::MAX_PAGE_BYTES`]).
+    #[error("the scan is too large")]
+    TooLarge,
     #[error("cannot encode the scan: {0}")]
     Encoding(String),
     #[error("cannot write to {}: {reason}", path.display())]

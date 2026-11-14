@@ -3,12 +3,16 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use async_trait::async_trait;
-use libsane::{Constraint, Device, Fixed, Sane, Unit, Value, ValueType, well_known};
+use image::{DynamicImage, ImageBuffer};
+use libsane::{
+    Constraint, Device, Fixed, Frame, FrameFormat, Parameters, Sane, Unit, Value, ValueType,
+    well_known,
+};
 use tokio::sync::oneshot;
 
 use crate::{
-    OptionConstraint, OptionInfo, OptionUnit, ScanError, ScanSettings, ScannedPage,
-    ScannerCapabilities, ScannerInfo, Source, capabilities,
+    OptionConstraint, OptionInfo, OptionUnit, OutputFormat, ScanError, ScanRequest, ScanSettings,
+    ScannedPage, ScannerCapabilities, ScannerInfo, Source, capabilities, check_page_bytes,
 };
 
 use crate::service::ScannerService;
@@ -18,7 +22,7 @@ type Reply<T> = oneshot::Sender<Result<T, ScanError>>;
 enum Command {
     List(Reply<Vec<ScannerInfo>>),
     Capabilities(String, Reply<ScannerCapabilities>),
-    Scan(String, ScanSettings, Reply<Vec<ScannedPage>>),
+    Scan(String, ScanRequest, Reply<Vec<ScannedPage>>),
     /// Lets a test prove that a dead worker comes back on the next command. The reply sender
     /// is dropped while unwinding, like the one of a real command that panics.
     #[cfg(test)]
@@ -176,8 +180,8 @@ impl ScannerService for SaneScanners {
             .await
     }
 
-    async fn scan(&self, id: &str, settings: ScanSettings) -> Result<Vec<ScannedPage>, ScanError> {
-        self.ask(|reply| Command::Scan(id.to_owned(), settings, reply))
+    async fn scan(&self, id: &str, request: ScanRequest) -> Result<Vec<ScannedPage>, ScanError> {
+        self.ask(|reply| Command::Scan(id.to_owned(), request, reply))
             .await
     }
 }
@@ -191,8 +195,8 @@ fn run(sane: &Sane, command: Command) {
         Command::Capabilities(id, reply) => {
             let _ = reply.send(read_capabilities(sane, &id));
         }
-        Command::Scan(id, settings, reply) => {
-            let _ = reply.send(scan(sane, &id, &settings));
+        Command::Scan(id, request, reply) => {
+            let _ = reply.send(scan(sane, &id, &request));
         }
         #[cfg(test)]
         Command::Crash(reply) => {
@@ -342,9 +346,62 @@ fn apply(device: &mut Device<'_>, settings: &ScanSettings) -> Result<(), ScanErr
     Ok(())
 }
 
-fn scan(sane: &Sane, id: &str, settings: &ScanSettings) -> Result<Vec<ScannedPage>, ScanError> {
+/// The raw size of the image the parameters describe once read, the way [`Frame::to_image`]
+/// expands it: a byte per sample (two at 16 bits), three samples per pixel unless gray.
+fn image_bytes(parameters: &Parameters, lines: usize) -> u64 {
+    let samples: u64 = if parameters.format == FrameFormat::Gray {
+        1
+    } else {
+        3
+    };
+    let depth: u64 = if parameters.depth == 16 { 2 } else { 1 };
+    (parameters.pixels_per_line as u64)
+        .saturating_mul(lines as u64)
+        .saturating_mul(samples * depth)
+}
+
+/// The frame as an image. 8-bit frames without line padding, what scanners send almost always,
+/// become the image's buffer as they are: converting them would hold the page twice.
+fn into_image(frame: Frame) -> Result<DynamicImage, ScanError> {
+    let parameters = frame.parameters;
+    let samples = match parameters.format {
+        FrameFormat::Gray => 1,
+        FrameFormat::Rgb => 3,
+        _ => 0,
+    };
+    if parameters.depth == 8
+        && samples > 0
+        && parameters.bytes_per_line == frame.width() * samples
+        && let (Ok(width), Ok(height)) =
+            (u32::try_from(frame.width()), u32::try_from(frame.height()))
+    {
+        let truncated = || ScanError::Device("the scanner sent a truncated image".into());
+        let data = frame.data;
+        return if samples == 1 {
+            ImageBuffer::from_raw(width, height, data)
+                .map(DynamicImage::ImageLuma8)
+                .ok_or_else(truncated)
+        } else {
+            ImageBuffer::from_raw(width, height, data)
+                .map(DynamicImage::ImageRgb8)
+                .ok_or_else(truncated)
+        };
+    }
+    frame.to_image().map_err(|e| map_error(&e))
+}
+
+fn scan(sane: &Sane, id: &str, request: &ScanRequest) -> Result<Vec<ScannedPage>, ScanError> {
+    let settings: &ScanSettings = &request.settings;
     let mut device = open(sane, id)?;
     apply(&mut device, settings)?;
+    // The device's own estimate also covers scanners without geometry options, whose size the
+    // server cannot work out from the settings. A feeder that finds the page end itself does
+    // not know the line count; the server's estimate from the area is all there is then.
+    if let Ok(parameters) = device.parameters()
+        && let Some(lines) = parameters.lines
+    {
+        check_page_bytes(image_bytes(&parameters, lines))?;
+    }
     let feeder = match &settings.source {
         Some(source) => Source::new(source).is_feeder,
         None => device
@@ -353,16 +410,25 @@ fn scan(sane: &Sane, id: &str, settings: &ScanSettings) -> Result<Vec<ScannedPag
             .and_then(|v| v.as_str().map(|s| Source::new(s).is_feeder))
             .unwrap_or(false),
     };
+    // PNG and JPEG keep the first page only; the rest of the stack still goes through the
+    // feeder, as the scan page says, but is not kept.
+    let keeps_every_page = request.format == OutputFormat::Pdf;
     let mut scan = device.start().map_err(|e| map_error(&e))?;
     let mut pages = Vec::new();
     loop {
         let frame = scan.read_image().map_err(|e| map_error(&e))?;
-        let image = frame.to_image().map_err(|e| map_error(&e))?;
-        pages.push(ScannedPage {
-            image,
-            dpi: settings.resolution,
-        });
-        if !feeder {
+        // Each page is compressed before the next one is read, so a feeder batch never sits
+        // in memory as raw pixels. This runs on the SANE thread, which is busy with this scan
+        // anyway.
+        if pages.is_empty() || keeps_every_page {
+            let image = into_image(frame)?;
+            pages.push(ScannedPage::encode(
+                &image,
+                settings.resolution,
+                request.format,
+            )?);
+        }
+        if !feeder || request.single_page {
             break;
         }
         // `next_page` reports an empty feeder as `false`; a no-documents status from the

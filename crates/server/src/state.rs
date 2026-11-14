@@ -7,7 +7,7 @@ use recto_app::state::AppState;
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_printing::Cups;
 use recto_scanning::{
-    ResultStore, SaneScanners, ScanError, ScanSettings, ScannedPage, ScannerCapabilities,
+    ResultStore, SaneScanners, ScanError, ScanRequest, ScannedPage, ScannerCapabilities,
     ScannerInfo, ScannerService,
 };
 use url::Url;
@@ -140,11 +140,7 @@ impl ScannerService for NoScanners {
         Err(self.error())
     }
 
-    async fn scan(
-        &self,
-        _id: &str,
-        _settings: ScanSettings,
-    ) -> Result<Vec<ScannedPage>, ScanError> {
+    async fn scan(&self, _id: &str, _request: ScanRequest) -> Result<Vec<ScannedPage>, ScanError> {
         Err(self.error())
     }
 }
