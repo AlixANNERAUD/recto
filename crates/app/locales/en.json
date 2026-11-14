@@ -1,18 +1,46 @@
 {
   "app": {
     "name": "recto",
-    "tagline": "Print and scan from your browser."
+    "page_title": "{page} · recto"
+  },
+  "nav": {
+    "label": "Main",
+    "skip": "Skip to content",
+    "print": "Print",
+    "printers": "Printers",
+    "jobs": "Jobs",
+    "scan": "Scan",
+    "signed_in_as": "Signed in as {name}",
+    "sign_out_as": "Sign out {name}"
+  },
+  "common": {
+    "network_error": "Could not reach recto. Check your connection and try again."
+  },
+  "time": {
+    "just_now": "just now",
+    "minutes_ago": {
+      "one": "{count} minute ago",
+      "other": "{count} minutes ago"
+    },
+    "hours_ago": {
+      "one": "{count} hour ago",
+      "other": "{count} hours ago"
+    },
+    "utc": "{time} UTC"
+  },
+  "size": {
+    "megabytes": "{value} MB",
+    "kilobytes": "{value} KB"
   },
   "not_found": {
-    "title": "Not found",
-    "heading": "Page not found"
+    "heading": "Page not found",
+    "home": "Go to the print page"
   },
   "auth": {
     "sign_in_required": "Sign in to continue.",
     "sign_in": "Sign in",
     "sign_out": "Sign out",
     "errors": {
-      "title": "Sign-in failed",
       "heading": "Sign-in failed",
       "unavailable": "Sign-in provider unavailable. Try again in a moment.",
       "state": "This sign-in expired or was started in another window.",
@@ -20,17 +48,44 @@
       "retry": "Try again"
     },
     "no_access": {
-      "title": "No access",
       "heading": "No access to recto",
-      "body": "You are signed in, but your account does not have the role needed to use recto. Ask whoever runs it for access."
+      "body": "You are signed in, but your account does not have the role needed to use recto. Ask whoever runs it for access, or sign out and use another account."
     },
     "signed_out": {
-      "title": "Signed out",
       "heading": "You are signed out",
       "sign_in": "Sign in again"
     }
   },
   "print": {
+    "title": "Print",
+    "file": "File",
+    "file_hint": "PDF, JPEG or PNG, up to {size}.",
+    "printer": "Printer",
+    "markers": {
+      "label": "{name} ({details})",
+      "default": "default",
+      "offline": "offline",
+      "not_accepting": "not accepting jobs"
+    },
+    "copies": "Copies",
+    "sides": {
+      "label": "Sides",
+      "one_sided": "One-sided",
+      "long_edge": "Two-sided, flip on long edge",
+      "short_edge": "Two-sided, flip on short edge"
+    },
+    "color": {
+      "label": "Color",
+      "color": "Color",
+      "monochrome": "Black and white"
+    },
+    "pages": {
+      "label": "Pages (PDF only)",
+      "hint": "e.g. 1-3, 5",
+      "placeholder": "All pages"
+    },
+    "submit": "Print",
+    "status": "Printer status",
     "unavailable_banner": "Printing service unavailable: {reason}",
     "errors": {
       "too_large": "The file is too large to print.",
@@ -49,7 +104,106 @@
       "refused": "The printing service refused the request."
     }
   },
+  "printers": {
+    "title": "Printers",
+    "empty": "No printers yet",
+    "empty_body": "Add a printer in the CUPS web interface, then reload this page.",
+    "default": "Default",
+    "offline": "Offline",
+    "not_accepting": "Not accepting jobs",
+    "state": {
+      "idle": "Ready",
+      "processing": "Printing",
+      "stopped": "Stopped"
+    },
+    "reasons": {
+      "offline": "The printer cannot be reached.",
+      "media_empty": "Out of paper",
+      "media_low": "Paper low",
+      "media_jam": "Paper jam",
+      "toner_empty": "Out of toner",
+      "toner_low": "Toner low",
+      "marker_supply_empty": "Out of ink",
+      "marker_supply_low": "Ink low",
+      "door_open": "A door is open",
+      "cover_open": "The cover is open",
+      "paused": "Paused in CUPS",
+      "other": "Printer reports: {keyword}"
+    },
+    "supplies": "Supplies",
+    "level": "{level}%",
+    "unknown_level": "Unknown level"
+  },
+  "jobs": {
+    "title": "Jobs",
+    "list": "Print jobs",
+    "submitted": "Sent to the printer as job {id}.",
+    "number": "Job {id}",
+    "untitled": "Untitled document",
+    "another_user": "another user",
+    "pages": {
+      "one": "{count} page",
+      "other": "{count} pages"
+    },
+    "cancel": "Cancel",
+    "cancel_label": "Cancel {name}",
+    "empty": "No print jobs",
+    "empty_body": "Documents you print show up here.",
+    "state": {
+      "pending": "Queued",
+      "held": "Held",
+      "processing": "Printing",
+      "stopped": "Stopped",
+      "canceled": "Canceled",
+      "aborted": "Failed",
+      "completed": "Printed"
+    }
+  },
   "scan": {
+    "title": "Scan",
+    "needs_javascript": "Scanning needs JavaScript. Turn it on in your browser to preview and scan.",
+    "scanner": "Scanner",
+    "refresh": "Look for scanners again",
+    "no_scanners": "No scanners found. Check that the scanner is on, then look again.",
+    "resolution": "Resolution",
+    "dpi": "{value} dpi",
+    "mode": "Colors",
+    "modes": {
+      "color": "Color",
+      "gray": "Grayscale",
+      "lineart": "Black and white"
+    },
+    "source": "Source",
+    "format": "Format",
+    "formats": {
+      "pdf": "PDF",
+      "png": "PNG image",
+      "jpeg": "JPEG image"
+    },
+    "first_page_only": "PNG and JPEG keep only the first page from the feeder.",
+    "preview": "Preview",
+    "scan": "Scan",
+    "activity": {
+      "refreshing": "Looking for scanners…",
+      "loading": "Reading the scanner's settings…",
+      "previewing": "Previewing…",
+      "scanning": "Scanning… If the scanner is in use, your scan waits its turn.",
+      "saving": "Saving…"
+    },
+    "preview_title": "Preview",
+    "preview_alt": "Preview of the scanner glass",
+    "select_hint": "Drag on the preview to scan only part of it.",
+    "selected": "Only the selected part will be scanned.",
+    "no_area": "This scanner always scans its whole area.",
+    "clear_selection": "Clear selection",
+    "result": "Scan ready",
+    "pages": {
+      "one": "{count} page",
+      "other": "{count} pages"
+    },
+    "download": "Download",
+    "save": "Save to folder",
+    "saved": "Saved as {path}",
     "errors": {
       "busy": "The scanner is busy. Try again in a moment.",
       "not_found": "Scanner not found. It may be off or unplugged; refresh the list.",

@@ -2,10 +2,13 @@
 //! or a sign-out leaves the visitor without one.
 
 use leptos::prelude::*;
-use leptos_meta::Title;
 use leptos_router::hooks::use_query_map;
 
-use crate::t;
+use crate::{
+    components::ui::{ButtonVariant, button_class},
+    layout::Bare,
+    t,
+};
 
 /// `/auth/error?reason=<unavailable|state|rejected>&next=<path>`: why the sign-in failed, with
 /// a link starting it again and coming back to `next`.
@@ -22,27 +25,14 @@ pub fn SignInErrorPage() -> impl IntoView {
         format!("/auth/login?next={}", encode_component(&next))
     };
     view! {
-        <Title text=t!("auth.errors.title") />
-        <main class="mx-auto max-w-xl p-8">
-            <h1 class="text-2xl font-semibold">{t!("auth.errors.heading")}</h1>
+        <Bare title=t!("auth.errors.heading")>
             <p role="alert">{message}</p>
             <p>
-                <a href=retry>{t!("auth.errors.retry")}</a>
+                <a href=retry class=button_class(ButtonVariant::Primary)>
+                    {t!("auth.errors.retry")}
+                </a>
             </p>
-        </main>
-    }
-}
-
-/// `/no-access`: the provider signed the user in, but the required claim was missing.
-#[component]
-pub fn NoAccessPage() -> impl IntoView {
-    view! {
-        <Title text=t!("auth.no_access.title") />
-        <main class="mx-auto max-w-xl p-8">
-            <h1 class="text-2xl font-semibold">{t!("auth.no_access.heading")}</h1>
-            <p>{t!("auth.no_access.body")}</p>
-            <SignOutButton />
-        </main>
+        </Bare>
     }
 }
 
@@ -50,13 +40,13 @@ pub fn NoAccessPage() -> impl IntoView {
 #[component]
 pub fn SignedOutPage() -> impl IntoView {
     view! {
-        <Title text=t!("auth.signed_out.title") />
-        <main class="mx-auto max-w-xl p-8">
-            <h1 class="text-2xl font-semibold">{t!("auth.signed_out.heading")}</h1>
+        <Bare title=t!("auth.signed_out.heading")>
             <p>
-                <a href="/auth/login">{t!("auth.signed_out.sign_in")}</a>
+                <a href="/auth/login" class=button_class(ButtonVariant::Primary)>
+                    {t!("auth.signed_out.sign_in")}
+                </a>
             </p>
-        </main>
+        </Bare>
     }
 }
 
@@ -65,7 +55,9 @@ pub fn SignedOutPage() -> impl IntoView {
 pub fn SignOutButton() -> impl IntoView {
     view! {
         <form method="post" action="/auth/logout">
-            <button type="submit">{t!("auth.sign_out")}</button>
+            <button type="submit" class=button_class(ButtonVariant::Secondary)>
+                {t!("auth.sign_out")}
+            </button>
         </form>
     }
 }

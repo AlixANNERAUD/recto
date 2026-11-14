@@ -9,6 +9,9 @@
 //! Every string goes through [`t!`], [`tf!`] or [`tp!`] ([`i18n`]), with keys in
 //! `locales/en.json`.
 
+// Leptos views are deeply nested types; the print form's goes past the default limit.
+#![recursion_limit = "256"]
+
 // Every embedded locale must translate every message (strict): a missing key fails the build.
 // Each request translates into its own locale (`locale = ...`, see [`i18n`]); the global locale
 // of embedded-i18n stays unset, so concurrent requests cannot overwrite each other's language.
@@ -19,7 +22,12 @@ embedded_i18n::i18n!(
     strict = true
 );
 
+pub mod components;
+pub mod display;
+pub mod functions;
 pub mod i18n;
+pub mod islands;
+pub mod layout;
 pub mod messages;
 pub mod pages;
 pub mod refusal;
@@ -27,15 +35,19 @@ pub mod refusal;
 pub mod state;
 
 use leptos::prelude::*;
-use leptos_meta::{MetaTags, Title, provide_meta_context};
+use leptos_meta::{MetaTags, provide_meta_context};
 use leptos_router::{
     SsrMode,
     components::{Route, Router, Routes},
     path,
 };
 use pages::{
-    auth::{NoAccessPage, SignInErrorPage, SignedOutPage},
-    home::HomePage,
+    auth::{SignInErrorPage, SignedOutPage},
+    jobs::JobsPage,
+    no_access::NoAccessPage,
+    print::PrintPage,
+    printers::PrintersPage,
+    scan::ScanPage,
 };
 
 /// The HTML document around every page. Its `lang` attribute is the request's language, which
@@ -48,13 +60,14 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
             <head>
                 <meta charset="utf-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1" />
+                <meta name="color-scheme" content="light dark" />
                 <link rel="stylesheet" id="leptos" href="/pkg/recto.css" />
                 <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
                 <AutoReload options=options.clone() />
                 <HydrationScripts options islands=true />
                 <MetaTags />
             </head>
-            <body class="min-h-screen antialiased">
+            <body class="bg-background text-foreground min-h-screen font-sans antialiased">
                 <App />
             </body>
         </html>
@@ -69,7 +82,10 @@ pub fn App() -> impl IntoView {
     view! {
         <Router>
             <Routes fallback=NotFound>
-                <Route path=path!("/") view=HomePage ssr=SsrMode::Async />
+                <Route path=path!("/") view=PrintPage ssr=SsrMode::Async />
+                <Route path=path!("/printers") view=PrintersPage ssr=SsrMode::Async />
+                <Route path=path!("/jobs") view=JobsPage ssr=SsrMode::Async />
+                <Route path=path!("/scan") view=ScanPage ssr=SsrMode::Async />
                 <Route path=path!("/no-access") view=NoAccessPage />
                 <Route path=path!("/auth/error") view=SignInErrorPage />
                 <Route path=path!("/auth/signed-out") view=SignedOutPage />
@@ -85,9 +101,12 @@ fn NotFound() -> impl IntoView {
         response.set_status(axum::http::StatusCode::NOT_FOUND);
     }
     view! {
-        <Title text=t!("not_found.title") />
-        <main class="mx-auto max-w-xl p-8">
-            <h1 class="text-2xl font-semibold">{t!("not_found.heading")}</h1>
-        </main>
+        <layout::Layout title=t!("not_found.heading").to_string()>
+            <p>
+                <a class="text-brand underline underline-offset-4" href="/">
+                    {t!("not_found.home")}
+                </a>
+            </p>
+        </layout::Layout>
     }
 }

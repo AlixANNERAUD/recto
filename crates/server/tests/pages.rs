@@ -1,0 +1,475 @@
+//! The pages of the interface and the server functions behind them, rendered through the router
+//! with mock printing and scanning services. Users are signed in by writing their session into
+//! the router's session store, as in `tests/server.rs`.
+
+use std::{path::Path, sync::Arc, time::Duration};
+
+use axum::{
+    Router,
+    body::Body,
+    http::{Request, Response, StatusCode, header},
+};
+use leptos::config::LeptosOptions;
+use recto::serve::{AuthState, router};
+use recto::session::Store;
+use recto_app::state::AppState;
+use recto_authentication::{OpenId, OpenIdSettings, User};
+use recto_printing::{
+    Capabilities, ColorMode, Job, JobState, Printer, PrinterState, Sides, StateReason, Supply,
+    testing::MockPrintService,
+};
+use recto_scanning::{MockScannerService, ResultStore, ScanError};
+use tempfile::TempDir;
+use tower::ServiceExt;
+use tower_sessions::Session;
+use url::Url;
+
+const PUBLIC_URL: &str = "http://recto.test/";
+const ORIGIN: &str = "http://recto.test";
+
+fn printer(name: &str, is_default: bool) -> Printer {
+    Printer {
+        name: name.into(),
+        description: None,
+        location: None,
+        make_and_model: None,
+        is_default,
+        state: PrinterState::Idle,
+        reasons: vec![],
+        accepting_jobs: true,
+        supplies: vec![],
+        capabilities: Capabilities {
+            max_copies: 10,
+            sides: vec![Sides::OneSided],
+            color_modes: vec![ColorMode::Monochrome],
+        },
+    }
+}
+
+/// The default printer: single-sided, black and white.
+fn kitchen() -> Printer {
+    printer("kitchen", true)
+}
+
+/// Offline, with duplex and color.
+fn garage() -> Printer {
+    Printer {
+        state: PrinterState::Stopped,
+        reasons: StateReason::parse("offline-report").into_iter().collect(),
+        capabilities: Capabilities {
+            max_copies: 10,
+            sides: vec![Sides::OneSided, Sides::TwoSidedLongEdge],
+            color_modes: vec![ColorMode::Color, ColorMode::Monochrome],
+        },
+        ..printer("garage", false)
+    }
+}
+
+fn temp_dir() -> TempDir {
+    let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("page-tests");
+    std::fs::create_dir_all(&base).unwrap();
+    TempDir::new_in(base).unwrap()
+}
+
+struct Harness {
+    router: Router,
+    scan: Arc<MockScannerService>,
+    sessions: Store,
+    _dir: TempDir,
+}
+
+impl Harness {
+    fn new(printers: Vec<Printer>, jobs: Vec<Job>) -> Self {
+        let dir = temp_dir();
+        let print = Arc::new(
+            MockPrintService::new()
+                .with_printers(printers)
+                .with_jobs(jobs),
+        );
+        let scan = Arc::new(MockScannerService::default());
+        let site = dir.path().join("site");
+        std::fs::create_dir_all(&site).unwrap();
+        let state = AppState {
+            print,
+            scan: scan.clone(),
+            results: Arc::new(ResultStore::new(
+                dir.path().join("results"),
+                Duration::from_secs(3600),
+            )),
+            output_dir: Some(dir.path().join("saved")),
+            max_upload_size: 1024 * 1024,
+            leptos_options: LeptosOptions::builder()
+                .output_name("recto")
+                .site_root(site.to_string_lossy().into_owned())
+                .build(),
+        };
+        let public_url = Url::parse(PUBLIC_URL).unwrap();
+        let openid = OpenId::new(OpenIdSettings {
+            issuer: Url::parse("http://127.0.0.1:9/").unwrap(),
+            client_id: "recto".into(),
+            redirect_url: public_url.join("auth/callback").unwrap(),
+            extra_scopes: vec![],
+            required_claim: None,
+            required_value: None,
+        });
+        let auth = AuthState::new(Arc::new(openid), public_url);
+        let sessions = auth.sessions.clone();
+        Self {
+            router: router(state, auth),
+            scan,
+            sessions,
+            _dir: dir,
+        }
+    }
+
+    async fn send(&self, request: Request<Body>) -> Response<Body> {
+        self.router.clone().oneshot(request).await.unwrap()
+    }
+
+    /// Signs a user in and returns the session cookie to send back.
+    async fn sign_in(&self, subject: &str, username: &str) -> String {
+        let session = Session::new(None, Arc::new(self.sessions.clone()), None);
+        let user = User {
+            subject: subject.into(),
+            username: username.into(),
+            name: None,
+        };
+        recto::session::sign_in(&session, &user, "").await.unwrap();
+        session.save().await.unwrap();
+        format!("recto_session={}", session.id().unwrap())
+    }
+
+    /// The HTML of a page for a signed-in user.
+    async fn page(&self, uri: &str, cookie: &str) -> String {
+        let request = Request::get(uri)
+            .header(header::ACCEPT, "text/html")
+            .header(header::COOKIE, cookie)
+            .body(Body::empty())
+            .unwrap();
+        let response = self.send(request).await;
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        text(response).await
+    }
+
+    /// Calls a server function the way an island does.
+    async fn call(
+        &self,
+        endpoint: &str,
+        cookie: &str,
+        content_type: &str,
+        body: String,
+    ) -> Response<Body> {
+        let request = Request::post(format!("/api/{endpoint}"))
+            .header(header::COOKIE, cookie)
+            .header(header::ORIGIN, ORIGIN)
+            .header("sec-fetch-site", "same-origin")
+            .header(header::CONTENT_TYPE, content_type)
+            .body(Body::from(body))
+            .unwrap();
+        self.send(request).await
+    }
+}
+
+async fn text(response: Response<Body>) -> String {
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+fn job(id: i32, owner: Option<&str>, state: JobState) -> Job {
+    Job {
+        id,
+        printer: "kitchen".into(),
+        name: Some(format!("document-{id}.pdf")),
+        owner: owner.map(str::to_owned),
+        state,
+        pages: Some(3),
+        created: Some(1_700_000_000),
+    }
+}
+
+#[tokio::test]
+async fn print_page_lists_printers_and_supported_options() {
+    let harness = Harness::new(vec![garage(), kitchen()], vec![]);
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let html = harness.page("/", &cookie).await;
+
+    // A plain multipart form posting to the print route.
+    assert!(html.contains(r#"action="/print""#), "{html}");
+    assert!(html.contains(r#"enctype="multipart/form-data""#), "{html}");
+    assert!(html.contains(r#"accept=".pdf,.jpg,.jpeg,.png""#), "{html}");
+    // Both printers, the default one preselected and the offline one marked.
+    assert!(
+        html.contains(r#"<option value="kitchen" selected"#),
+        "{html}"
+    );
+    assert!(html.contains(r#"<option value="garage""#), "{html}");
+    assert!(html.contains("garage (offline)"), "{html}");
+    // The default printer has neither duplex nor color: no field offers them.
+    assert!(html.contains(r#"name="copies""#), "{html}");
+    assert!(html.contains(r#"name="page_ranges""#), "{html}");
+    assert!(html.contains("e.g. 1-3, 5"), "{html}");
+    assert!(!html.contains(r#"name="sides""#), "{html}");
+    assert!(!html.contains(r#"name="color_mode""#), "{html}");
+
+    // A default printer with duplex and color offers both.
+    let harness = Harness::new(
+        vec![
+            Printer {
+                is_default: true,
+                ..garage()
+            },
+            printer("kitchen", false),
+        ],
+        vec![],
+    );
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let html = harness.page("/", &cookie).await;
+    assert!(html.contains(r#"name="sides""#), "{html}");
+    assert!(html.contains(r#"value="two-sided-long-edge""#), "{html}");
+    assert!(!html.contains(r#"value="two-sided-short-edge""#), "{html}");
+    assert!(html.contains(r#"name="color_mode""#), "{html}");
+    // The status card of the selected printer.
+    assert!(html.contains("Offline"), "{html}");
+}
+
+#[tokio::test]
+async fn jobs_page_shows_another_user_for_hidden_owner() {
+    let harness = Harness::new(
+        vec![kitchen()],
+        vec![
+            job(7, None, JobState::Processing),
+            job(8, Some("bob"), JobState::Completed),
+        ],
+    );
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let html = harness.page("/jobs?submitted=7", &cookie).await;
+
+    assert!(html.contains("another user"), "{html}");
+    assert!(html.contains("bob"), "{html}");
+    assert!(html.contains("document-7.pdf"), "{html}");
+    // Only active jobs can be canceled, through a plain form.
+    assert!(html.contains(r#"action="/jobs/7/cancel""#), "{html}");
+    assert!(!html.contains(r#"action="/jobs/8/cancel""#), "{html}");
+    assert!(html.contains("Sent to the printer as job 7."), "{html}");
+
+    let html = harness.page("/jobs?error=job_not_found", &cookie).await;
+    assert!(html.contains("That job no longer exists."), "{html}");
+}
+
+#[tokio::test]
+async fn printers_page_shows_supply_levels() {
+    let supplies = vec![
+        Supply {
+            name: "Black toner".into(),
+            level: Some(80),
+            color: Some("#000000".into()),
+            kind: "toner".into(),
+        },
+        Supply {
+            name: "Waste toner".into(),
+            level: None,
+            color: None,
+            kind: "waste-toner".into(),
+        },
+    ];
+    let office = Printer {
+        supplies,
+        reasons: StateReason::parse("toner-low-warning")
+            .into_iter()
+            .collect(),
+        ..kitchen()
+    };
+    let harness = Harness::new(vec![office, garage()], vec![]);
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let html = harness.page("/printers", &cookie).await;
+
+    assert!(
+        html.contains("kitchen") && html.contains("garage"),
+        "{html}"
+    );
+    assert!(html.contains("Black toner"), "{html}");
+    assert!(html.contains("80%"), "{html}");
+    assert!(html.contains("width:80%"), "{html}");
+    assert!(html.contains("background-color:#000000"), "{html}");
+    assert!(html.contains("Unknown level"), "{html}");
+    assert!(html.contains("Toner low"), "{html}");
+    assert!(html.contains("Offline"), "{html}");
+}
+
+#[tokio::test]
+async fn scan_page_renders_noscript_notice() {
+    let harness = Harness::new(vec![kitchen()], vec![]);
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let html = harness.page("/scan", &cookie).await;
+
+    assert!(html.contains("<noscript>"), "{html}");
+    assert!(html.contains("Scanning needs JavaScript"), "{html}");
+    assert!(html.contains("<leptos-island"), "{html}");
+    assert!(html.contains("Mock scanner"), "{html}");
+}
+
+/// Every key of the English locale, as `a.b.c`.
+fn locale_keys() -> Vec<String> {
+    fn walk(prefix: &str, value: &serde_json::Value, keys: &mut Vec<String>) {
+        if let serde_json::Value::Object(map) = value {
+            for (name, child) in map {
+                let key = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{prefix}.{name}")
+                };
+                walk(&key, child, keys);
+                keys.push(key);
+            }
+        }
+    }
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../app/locales/en.json");
+    let locale: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let mut keys = Vec::new();
+    walk("", &locale, &mut keys);
+    // Single words ("app") can appear in any text; dotted keys cannot.
+    keys.retain(|key| key.contains('.'));
+    keys
+}
+
+#[tokio::test]
+async fn pages_have_no_missing_translations() {
+    let harness = Harness::new(
+        vec![kitchen(), garage()],
+        vec![job(7, None, JobState::Processing)],
+    );
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let keys = locale_keys();
+    assert!(keys.iter().any(|key| key == "print.errors.too_large"));
+    for uri in [
+        "/",
+        "/?error=too_large",
+        "/printers",
+        "/jobs",
+        "/jobs?submitted=7",
+        "/scan",
+        "/no-access",
+    ] {
+        let html = harness.page(uri, &cookie).await;
+        assert!(!html.contains("[missing"), "{uri}: {html}");
+        for key in &keys {
+            assert!(
+                !html.contains(key.as_str()),
+                "{uri} shows the raw key {key}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn layout_names_the_user_and_marks_the_current_page() {
+    let harness = Harness::new(vec![kitchen()], vec![]);
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let html = harness.page("/printers", &cookie).await;
+
+    assert!(html.contains("alice"), "{html}");
+    assert!(html.contains(r#"action="/auth/logout""#), "{html}");
+    for target in ["/", "/printers", "/jobs", "/scan"] {
+        assert!(html.contains(&format!(r#"href="{target}""#)), "{target}");
+    }
+    assert!(html.contains(r#"aria-current="page""#), "{html}");
+}
+
+#[tokio::test]
+async fn preview_and_scan_store_results_for_the_user() {
+    let harness = Harness::new(vec![kitchen()], vec![]);
+    let alice = harness.sign_in("alice-subject", "alice").await;
+    let bob = harness.sign_in("bob-subject", "bob").await;
+
+    let response = harness
+        .call(
+            "preview",
+            &alice,
+            "application/x-www-form-urlencoded",
+            "id=mock%3A0".into(),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let outcome: serde_json::Value = serde_json::from_str(&text(response).await).unwrap();
+    assert!(outcome["file_name"].as_str().unwrap().ends_with(".png"));
+    assert_eq!(outcome["pages"], 1);
+    assert_eq!(outcome["can_save"], true);
+    let image = format!("/scan/results/{}", outcome["id"].as_str().unwrap());
+    let get = |cookie: &str| {
+        Request::get(&image)
+            .header(header::COOKIE, cookie)
+            .body(Body::empty())
+            .unwrap()
+    };
+    let response = harness.send(get(&alice)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "image/png");
+    assert_eq!(
+        harness.send(get(&bob)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // The selection, as fractions of the preview, becomes millimetres of the scanner's area.
+    let body = serde_json::json!({
+        "id": "mock:0",
+        "settings": { "resolution": 150, "mode": "Gray", "source": "Flatbed", "area": null },
+        "selection": { "x": 0.5, "y": 0.0, "width": 0.5, "height": 0.5 },
+        "format": "Pdf",
+    });
+    let response = harness
+        .call("scan", &alice, "application/json", body.to_string())
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let outcome: serde_json::Value = serde_json::from_str(&text(response).await).unwrap();
+    assert!(outcome["file_name"].as_str().unwrap().ends_with(".pdf"));
+    let (_, settings) = harness.scan.scan_requests().pop().unwrap();
+    assert_eq!(settings.resolution, 150);
+    assert_eq!(settings.source.as_deref(), Some("Flatbed"));
+    let area = settings.area.unwrap();
+    assert!((area.left - 107.95).abs() < 0.01, "{area:?}");
+    assert!((area.bottom - 148.5).abs() < 0.01, "{area:?}");
+}
+
+#[tokio::test]
+async fn scan_errors_are_readable() {
+    let harness = Harness::new(vec![kitchen()], vec![]);
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let form = "application/x-www-form-urlencoded";
+
+    harness.scan.fail_with(Some(ScanError::Busy));
+    let response = harness
+        .call("preview", &cookie, form, "id=mock%3A0".into())
+        .await;
+    assert!(!response.status().is_success());
+    assert!(
+        text(response)
+            .await
+            .contains("The scanner is busy. Try again in a moment.")
+    );
+
+    harness.scan.fail_with(None);
+    let response = harness
+        .call("preview", &cookie, form, "id=unplugged".into())
+        .await;
+    assert!(text(response).await.contains("Scanner not found"));
+
+    // A setting the scanner does not offer is refused before scanning.
+    let body = serde_json::json!({
+        "id": "mock:0",
+        "settings": { "resolution": 123, "mode": "Gray", "source": null, "area": null },
+        "selection": null,
+        "format": "Png",
+    });
+    let response = harness
+        .call("scan", &cookie, "application/json", body.to_string())
+        .await;
+    assert!(
+        text(response)
+            .await
+            .contains("The scanner does not support this")
+    );
+    assert!(harness.scan.scan_requests().is_empty());
+}

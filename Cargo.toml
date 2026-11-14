@@ -30,6 +30,9 @@ tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = "0.3"
 console_error_panic_hook = "0.1"
 embedded-i18n = "0.2"
 serde = { version = "1", features = ["derive"] }
@@ -60,6 +63,11 @@ all = { level = "warn", priority = -1 }
 # Dependencies without debug information keep test binaries small and quick to link.
 [profile.dev.package."*"]
 debug = false
+
+# Leptos views are nested generic types; their full debug information made linking the test
+# binaries need several gigabytes. Line tables keep backtraces readable.
+[profile.dev.package.recto-app]
+debug = "line-tables-only"
 
 [profile.release]
 codegen-units = 1

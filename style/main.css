@@ -1,2 +1,98 @@
 @import "tailwindcss";
 @source "../crates/app/src";
+
+/* Design tokens after Fluent 2: calm neutral surfaces and one accent, the Fluent brand blue.
+   Text colors keep at least 4.5:1 contrast with the surfaces they sit on, and input borders
+   3:1, in both themes. The theme follows the system; there is no switch to remember. */
+:root {
+  color-scheme: light dark;
+  --background: #f5f5f5;
+  --foreground: #242424;
+  --card: #ffffff;
+  --muted: #f0f0f0;
+  --muted-foreground: #616161;
+  --border: #e0e0e0;
+  --input: #8a8a8a;
+  /* Buttons: white text on it. */
+  --primary: #0f6cbd;
+  --primary-hover: #115ea3;
+  --primary-foreground: #ffffff;
+  /* Links, the current page and selections, on cards and the page. */
+  --brand: #0f6cbd;
+  --brand-subtle: #ebf3fc;
+  --danger: #b10e1c;
+  --danger-subtle: #fdf3f4;
+  --warning: #8a4b00;
+  --warning-subtle: #fff9f5;
+  --success: #0e700e;
+  --success-subtle: #f1faf1;
+  --ring: #0f6cbd;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #1f1f1f;
+    --foreground: #ffffff;
+    --card: #292929;
+    --muted: #333333;
+    --muted-foreground: #adadad;
+    --border: #3d3d3d;
+    --input: #8a8a8a;
+    --primary: #115ea3;
+    --primary-hover: #0f6cbd;
+    --primary-foreground: #ffffff;
+    --brand: #479ef5;
+    --brand-subtle: #082338;
+    --danger: #f1707b;
+    --danger-subtle: #3b1a1d;
+    --warning: #f2c661;
+    --warning-subtle: #3a2b0c;
+    --success: #54b054;
+    --success-subtle: #0f2e0f;
+    --ring: #479ef5;
+  }
+}
+
+@theme inline {
+  --font-sans: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue",
+    sans-serif;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-brand: var(--brand);
+  --color-brand-subtle: var(--brand-subtle);
+  --color-danger: var(--danger);
+  --color-danger-subtle: var(--danger-subtle);
+  --color-warning: var(--warning);
+  --color-warning-subtle: var(--warning-subtle);
+  --color-success: var(--success);
+  --color-success-subtle: var(--success-subtle);
+  --color-ring: var(--ring);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  /* One focus ring for every control, drawn outside it so it never hides its border. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* The file picker's button, styled like the secondary buttons. */
+  input[type="file"]::file-selector-button {
+    @apply border-input bg-card text-foreground mr-3 rounded-md border px-3 py-1.5 text-sm font-medium;
+  }
+}
