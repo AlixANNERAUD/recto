@@ -20,6 +20,11 @@ embedded_i18n::i18n!(
 );
 
 pub mod i18n;
+pub mod messages;
+pub mod pages;
+pub mod refusal;
+#[cfg(feature = "ssr")]
+pub mod state;
 
 use leptos::prelude::*;
 use leptos_meta::{MetaTags, Title, provide_meta_context};
@@ -27,6 +32,10 @@ use leptos_router::{
     SsrMode,
     components::{Route, Router, Routes},
     path,
+};
+use pages::{
+    auth::{NoAccessPage, SignInErrorPage, SignedOutPage},
+    home::HomePage,
 };
 
 /// The HTML document around every page. Its `lang` attribute is the request's language, which
@@ -61,19 +70,11 @@ pub fn App() -> impl IntoView {
         <Router>
             <Routes fallback=NotFound>
                 <Route path=path!("/") view=HomePage ssr=SsrMode::Async />
+                <Route path=path!("/no-access") view=NoAccessPage />
+                <Route path=path!("/auth/error") view=SignInErrorPage />
+                <Route path=path!("/auth/signed-out") view=SignedOutPage />
             </Routes>
         </Router>
-    }
-}
-
-#[component]
-fn HomePage() -> impl IntoView {
-    view! {
-        <Title text=t!("app.name") />
-        <main class="mx-auto max-w-xl p-8">
-            <h1 class="text-2xl font-semibold">{t!("app.name")}</h1>
-            <p>{t!("app.tagline")}</p>
-        </main>
     }
 }
 

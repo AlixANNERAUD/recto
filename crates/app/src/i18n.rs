@@ -79,12 +79,16 @@ fn primary_language(tag: &str) -> &str {
 
 #[cfg(feature = "ssr")]
 fn detect() -> Locale {
-    use axum::http::{header, request::Parts};
-    let Some(parts) = use_context::<Parts>() else {
-        return default_locale();
-    };
-    let chosen = parts
-        .headers
+    use axum::http::request::Parts;
+    use_context::<Parts>().map_or_else(default_locale, |parts| from_headers(&parts.headers))
+}
+
+/// The locale of a request from its headers: the locale cookie, else `Accept-Language`, else
+/// English. For server code answering outside a page, where [`locale`] has no request to read.
+#[cfg(feature = "ssr")]
+pub fn from_headers(headers: &axum::http::HeaderMap) -> Locale {
+    use axum::http::header;
+    let chosen = headers
         .get_all(header::COOKIE)
         .iter()
         .filter_map(|value| value.to_str().ok())
@@ -94,8 +98,7 @@ fn detect() -> Locale {
         .and_then(|(_, value)| find(value));
     chosen
         .or_else(|| {
-            parts
-                .headers
+            headers
                 .get(header::ACCEPT_LANGUAGE)
                 .and_then(|value| value.to_str().ok())
                 .and_then(negotiate)

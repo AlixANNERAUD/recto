@@ -2,15 +2,31 @@
 
 use std::{
     net::{IpAddr, SocketAddr},
-    time::Duration,
+    sync::Arc,
+    time::{Duration, SystemTime},
 };
 
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    extract::DefaultBodyLimit,
+    middleware,
+    routing::{get, post},
+};
 use leptos::config::LeptosOptions;
 use leptos_axum::{LeptosRoutes, generate_route_list};
-use recto_app::{App, shell};
+use recto_app::{App, shell, state::AppState};
+use recto_authentication::csrf::{self, AllowedOrigin};
+use recto_scanning::ResultStore;
 
-use crate::config::Config;
+pub use crate::state::AuthState;
+use crate::{
+    config::Config,
+    routes::{auth, print, scan},
+    session, state,
+};
+
+/// How often expired scan results are deleted.
+const PURGE_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
 /// Where the interface's assets are and how they are named.
 pub fn leptos_options(config: &Config) -> LeptosOptions {
@@ -22,27 +38,73 @@ pub fn leptos_options(config: &Config) -> LeptosOptions {
         .build()
 }
 
-/// Every route of the server. `/health` answers without touching CUPS or the identity provider,
-/// so a container stays healthy while they are down.
-pub fn router(options: LeptosOptions) -> Router {
+/// Every route of the server.
+///
+/// Pages, forms, scan results and server functions need a signed-in user. Left open are
+/// `/health` (it touches neither CUPS nor the identity provider, so a container stays healthy
+/// while they are down), the `/auth/*` routes and pages, `/no-access`, and what the fallback
+/// serves: assets and the not-found page.
+pub fn router(state: AppState, auth: AuthState) -> Router {
     let routes = generate_route_list(App);
-    let shell_options = options.clone();
-    Router::new()
+    let shell_options = state.leptos_options.clone();
+    let body_limit = state.max_upload_size.saturating_add(print::FORM_SLACK);
+    let interface = Router::new()
+        .route(
+            "/print",
+            post(print::submit).layer(DefaultBodyLimit::max(body_limit)),
+        )
+        .route("/jobs/{id}/cancel", post(print::cancel))
+        .route("/scan/results/{id}", get(scan::show))
+        .route("/scan/results/{id}/download", get(scan::download))
+        .route("/scan/results/{id}/save", post(scan::save))
+        .leptos_routes(&state, routes, move || shell(shell_options.clone()))
+        // Only the routes above: the fallback serving assets stays open.
+        .route_layer(middleware::from_fn(session::require_user))
+        .fallback(leptos_axum::file_and_error_handler::<AppState, _>(shell))
+        .with_state(state);
+    let router = Router::new()
         .route("/health", get(|| async { "ok" }))
-        .leptos_routes(&options, routes, move || shell(shell_options.clone()))
-        .fallback(leptos_axum::file_and_error_handler(shell))
-        .with_state(options)
+        .merge(auth::router().with_state(auth.clone()))
+        .merge(interface);
+    #[cfg(feature = "testing")]
+    let router = router.merge(crate::testing::router());
+    router
+        .layer(middleware::from_fn(session::load_user))
+        .layer(session::layer(auth.secure_cookies))
+        .layer(middleware::from_fn_with_state(
+            AllowedOrigin::new(&auth.public_url),
+            csrf::protect,
+        ))
 }
 
 /// Serves until ctrl-c or SIGTERM; requests in flight finish.
 pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let address = config.listen_address;
+    let (state, auth) = state::build(&config, leptos_options(&config)).await;
+    purge_expired_results(Arc::clone(&state.results));
     let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!(%address, "listening");
-    axum::serve(listener, router(leptos_options(&config)))
+    axum::serve(listener, router(state, auth))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+/// Deletes expired scan results in the background, every [`PURGE_INTERVAL`].
+fn purge_expired_results(results: Arc<ResultStore>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(PURGE_INTERVAL);
+        loop {
+            interval.tick().await;
+            let results = Arc::clone(&results);
+            // Deleting files blocks.
+            let purged =
+                tokio::task::spawn_blocking(move || results.purge_expired(SystemTime::now())).await;
+            if let Err(error) = purged {
+                tracing::warn!(%error, "purging expired scan results failed");
+            }
+        }
+    });
 }
 
 /// Succeeds when the server listening on `address` answers `/health` with 200.
@@ -86,26 +148,4 @@ async fn shutdown_signal() {
         () = terminate => {},
     }
     tracing::info!("shutting down");
-}
-
-#[cfg(test)]
-mod tests {
-    use axum::{body::Body, http::Request};
-    use tower::ServiceExt;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn health_answers_ok() {
-        let options = LeptosOptions::builder().output_name("recto").build();
-        let response = router(options)
-            .oneshot(Request::get("/health").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200);
-        let body = axum::body::to_bytes(response.into_body(), 1024)
-            .await
-            .unwrap();
-        assert_eq!(&body[..], b"ok");
-    }
 }

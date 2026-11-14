@@ -16,6 +16,11 @@ leptos_meta.workspace = true
 leptos_axum = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 embedded-i18n.workspace = true
+serde.workspace = true
+# Without their `service` feature these are the models only, which also build for the browser.
+recto-printing.workspace = true
+recto-scanning.workspace = true
+recto-authentication = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -26,6 +31,9 @@ ssr = [
     "leptos_router/ssr",
     "dep:leptos_axum",
     "dep:axum",
+    "dep:recto-authentication",
+    "recto-printing/service",
+    "recto-scanning/service",
 ]
 
 [lints]

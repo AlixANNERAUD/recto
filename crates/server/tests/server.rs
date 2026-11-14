@@ -1,0 +1,773 @@
+//! The routes of the server, driven through the router with mock printing and scanning services.
+//! Users are signed in through the route of the `testing` feature, never a real provider.
+
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
+
+use axum::{
+    Router,
+    body::Body,
+    http::{HeaderMap, Request, Response, StatusCode, header},
+};
+use leptos::config::LeptosOptions;
+use recto::serve::{AuthState, router};
+use recto_app::state::AppState;
+use recto_authentication::{OpenId, OpenIdSettings};
+use recto_printing::{
+    Capabilities, ColorMode, DocumentFormat, Job, JobState, PageRanges, PrintOptions, Printer,
+    PrinterState, Sides, testing::MockPrintService,
+};
+use recto_scanning::{MockScannerService, OutputFormat, ResultStore};
+use tempfile::TempDir;
+use tower::ServiceExt;
+use url::Url;
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
+};
+
+const PUBLIC_URL: &str = "http://recto.test/";
+const ORIGIN: &str = "http://recto.test";
+/// Nothing listens there, so the identity provider is down.
+const UNREACHABLE_ISSUER: &str = "http://127.0.0.1:9/";
+const PDF: &[u8] = b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n";
+const PNG: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
+
+fn office() -> Printer {
+    Printer {
+        name: "office".into(),
+        description: None,
+        location: None,
+        make_and_model: None,
+        is_default: true,
+        state: PrinterState::Idle,
+        reasons: vec![],
+        accepting_jobs: true,
+        supplies: vec![],
+        capabilities: Capabilities {
+            max_copies: 10,
+            sides: vec![Sides::OneSided, Sides::TwoSidedLongEdge],
+            color_modes: vec![ColorMode::Color, ColorMode::Monochrome],
+        },
+    }
+}
+
+/// Under the target directory, never the system temporary directory.
+fn temp_dir() -> TempDir {
+    let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("server-tests");
+    std::fs::create_dir_all(&base).unwrap();
+    TempDir::new_in(base).unwrap()
+}
+
+struct Setup {
+    max_upload_size: usize,
+    output_dir: Option<PathBuf>,
+    result_ttl: Duration,
+    issuer: String,
+}
+
+impl Default for Setup {
+    fn default() -> Self {
+        Self {
+            max_upload_size: 1024 * 1024,
+            output_dir: None,
+            result_ttl: Duration::from_secs(3600),
+            issuer: UNREACHABLE_ISSUER.into(),
+        }
+    }
+}
+
+struct Harness {
+    router: Router,
+    print: Arc<MockPrintService>,
+    results: Arc<ResultStore>,
+    _dir: TempDir,
+}
+
+impl Harness {
+    fn new() -> Self {
+        Self::with(Setup::default())
+    }
+
+    fn with(setup: Setup) -> Self {
+        let dir = temp_dir();
+        let print = Arc::new(
+            MockPrintService::new()
+                .with_printers(vec![office()])
+                .with_jobs(vec![Job {
+                    id: 7,
+                    printer: "office".into(),
+                    name: Some("minutes.pdf".into()),
+                    owner: Some("bob".into()),
+                    state: JobState::Processing,
+                    pages: None,
+                    created: None,
+                }]),
+        );
+        let results = Arc::new(ResultStore::new(
+            dir.path().join("results"),
+            setup.result_ttl,
+        ));
+        let state = AppState {
+            print: print.clone(),
+            scan: Arc::new(MockScannerService::default()),
+            results: results.clone(),
+            output_dir: setup.output_dir,
+            max_upload_size: setup.max_upload_size,
+            leptos_options: LeptosOptions::builder()
+                .output_name("recto")
+                .site_root(dir.path().join("site").to_string_lossy().into_owned())
+                .build(),
+        };
+        let public_url = Url::parse(PUBLIC_URL).unwrap();
+        let openid = OpenId::new(OpenIdSettings {
+            issuer: Url::parse(&setup.issuer).unwrap(),
+            client_id: "recto".into(),
+            redirect_url: public_url.join("auth/callback").unwrap(),
+            extra_scopes: vec![],
+            required_claim: None,
+            required_value: None,
+        })
+        .retry_after(Duration::ZERO);
+        let auth = AuthState::new(Arc::new(openid), public_url);
+        Self {
+            router: router(state, auth),
+            print,
+            results,
+            _dir: dir,
+        }
+    }
+
+    async fn send(&self, request: Request<Body>) -> Response<Body> {
+        self.router.clone().oneshot(request).await.unwrap()
+    }
+
+    /// Signs a user in and returns the session cookie to send back.
+    async fn sign_in(&self, subject: &str, username: &str) -> String {
+        let response = self
+            .send(get(&format!(
+                "/testing/sign-in?subject={subject}&username={username}"
+            )))
+            .await;
+        assert!(response.status().is_success(), "{}", response.status());
+        session_cookie(response.headers()).expect("a session cookie")
+    }
+}
+
+fn get(uri: &str) -> Request<Body> {
+    Request::get(uri).body(Body::empty()).unwrap()
+}
+
+fn page(uri: &str, cookie: Option<&str>) -> Request<Body> {
+    let mut request = Request::get(uri).header(header::ACCEPT, "text/html");
+    if let Some(cookie) = cookie {
+        request = request.header(header::COOKIE, cookie);
+    }
+    request.body(Body::empty()).unwrap()
+}
+
+/// A form post from recto's own pages.
+fn post(uri: &str, cookie: &str, content_type: Option<&str>, body: Vec<u8>) -> Request<Body> {
+    let mut request = Request::post(uri)
+        .header(header::COOKIE, cookie)
+        .header(header::ORIGIN, ORIGIN)
+        .header("sec-fetch-site", "same-origin");
+    if let Some(content_type) = content_type {
+        request = request.header(header::CONTENT_TYPE, content_type);
+    }
+    request.body(Body::from(body)).unwrap()
+}
+
+fn session_cookie(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find(|value| value.starts_with("recto_session="))
+        .map(|value| value.split(';').next().unwrap().to_owned())
+}
+
+fn location(response: &Response<Body>) -> String {
+    response
+        .headers()
+        .get(header::LOCATION)
+        .expect("a Location header")
+        .to_str()
+        .unwrap()
+        .to_owned()
+}
+
+async fn text(response: Response<Body>) -> String {
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+const BOUNDARY: &str = "recto-test-boundary";
+
+/// A `multipart/form-data` body with text fields and an optional file named `file`.
+fn multipart(fields: &[(&str, &str)], file: Option<(&str, &[u8])>) -> (String, Vec<u8>) {
+    let mut body = Vec::new();
+    for (name, value) in fields {
+        body.extend_from_slice(
+            format!(
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    if let Some((file_name, bytes)) = file {
+        body.extend_from_slice(
+            format!(
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; \
+                 filename=\"{file_name}\"\r\nContent-Type: application/pdf\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={BOUNDARY}"), body)
+}
+
+async fn print(
+    harness: &Harness,
+    cookie: &str,
+    fields: &[(&str, &str)],
+    file: Option<(&str, &[u8])>,
+) -> Response<Body> {
+    let (content_type, body) = multipart(fields, file);
+    harness
+        .send(post("/print", cookie, Some(&content_type), body))
+        .await
+}
+
+fn assert_redirect(response: &Response<Body>, expected: &str) {
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(response), expected);
+}
+
+#[tokio::test]
+async fn health_is_public() {
+    let response = Harness::new().send(get("/health")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(text(response).await, "ok");
+}
+
+#[tokio::test]
+async fn pages_redirect_to_login() {
+    let harness = Harness::new();
+    let response = harness.send(page("/", None)).await;
+    assert_redirect(&response, "/auth/login?next=%2F");
+
+    // Anything that is not a page answers 401 rather than a redirect a script cannot follow.
+    let (content_type, body) = multipart(&[("printer", "office")], Some(("a.pdf", PDF)));
+    let response = harness
+        .send(post(
+            "/print",
+            "recto_session=none",
+            Some(&content_type),
+            body,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let response = harness
+        .send(get(&format!("/scan/results/{}", uuid::Uuid::new_v4())))
+        .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // The pages explaining a failed sign-in must show without a session.
+    let response = harness.send(page("/no-access", None)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(text(response).await.contains("No access to recto"));
+
+    // Once signed in, the same page renders.
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let response = harness.send(page("/", Some(&cookie))).await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn print_submits_with_user_and_options() {
+    let harness = Harness::new();
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let response = print(
+        &harness,
+        &cookie,
+        &[
+            ("printer", "office"),
+            ("copies", "2"),
+            ("sides", "two-sided-long-edge"),
+            ("color_mode", "monochrome"),
+            ("page_ranges", "5, 1-3"),
+        ],
+        Some(("report.pdf", PDF)),
+    )
+    .await;
+    assert_redirect(&response, "/jobs?submitted=8");
+
+    let submitted = harness.print.submitted();
+    assert_eq!(submitted.len(), 1);
+    let request = &submitted[0];
+    assert_eq!(request.printer, "office");
+    assert_eq!(request.user, "alice");
+    assert_eq!(request.job_name, "report.pdf");
+    assert_eq!(request.format, DocumentFormat::Pdf);
+    assert_eq!(&request.document[..], PDF);
+    assert_eq!(
+        request.options,
+        PrintOptions {
+            copies: 2,
+            sides: Sides::TwoSidedLongEdge,
+            color_mode: ColorMode::Monochrome,
+            page_ranges: Some(PageRanges(vec![(1, 3), (5, 5)])),
+        }
+    );
+}
+
+#[tokio::test]
+async fn print_enforces_printer_capabilities() {
+    let harness = Harness::new();
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    for (fields, error) in [
+        (vec![("copies", "11")], "invalid_copies"),
+        (vec![("copies", "0")], "invalid_copies"),
+        (vec![("copies", "many")], "invalid_copies"),
+        (vec![("sides", "two-sided-short-edge")], "unsupported_sides"),
+        (vec![("color_mode", "sepia")], "unsupported_color"),
+        (vec![("page_ranges", "3-1")], "invalid_page_ranges"),
+    ] {
+        let mut fields = fields;
+        fields.push(("printer", "office"));
+        let response = print(&harness, &cookie, &fields, Some(("report.pdf", PDF))).await;
+        assert_redirect(&response, &format!("/?error={error}"));
+    }
+    let response = print(
+        &harness,
+        &cookie,
+        &[("printer", "basement")],
+        Some(("report.pdf", PDF)),
+    )
+    .await;
+    assert_redirect(&response, "/?error=printer_not_found");
+    let response = print(&harness, &cookie, &[("printer", "office")], None).await;
+    assert_redirect(&response, "/?error=no_file");
+    assert!(harness.print.submitted().is_empty());
+
+    // Images are one page: a page range means nothing for them and is not checked.
+    let response = print(
+        &harness,
+        &cookie,
+        &[("printer", "office"), ("page_ranges", "3-1")],
+        Some(("photo.png", PNG)),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let submitted = harness.print.submitted();
+    assert_eq!(submitted[0].format, DocumentFormat::Png);
+    assert_eq!(submitted[0].options, PrintOptions::default());
+}
+
+#[tokio::test]
+async fn print_refuses_renamed_docx() {
+    let harness = Harness::new();
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let docx = b"PK\x03\x04\x14\x00\x06\x00word/document.xml";
+    let response = print(
+        &harness,
+        &cookie,
+        &[("printer", "office")],
+        Some(("report.pdf", docx)),
+    )
+    .await;
+    assert_redirect(&response, "/?error=unsupported_format");
+    let response = print(
+        &harness,
+        &cookie,
+        &[("printer", "office")],
+        Some(("empty.pdf", b"")),
+    )
+    .await;
+    assert_redirect(&response, "/?error=empty_file");
+    assert!(harness.print.submitted().is_empty());
+
+    let response = harness
+        .send(page("/?error=unsupported_format", Some(&cookie)))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        text(response)
+            .await
+            .contains("Only PDF, JPEG and PNG files can be printed")
+    );
+}
+
+#[tokio::test]
+async fn print_refuses_oversized_upload() {
+    let harness = Harness::with(Setup {
+        max_upload_size: 4096,
+        ..Setup::default()
+    });
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let mut large = PDF.to_vec();
+    large.resize(64 * 1024, b' ');
+    let response = print(
+        &harness,
+        &cookie,
+        &[("printer", "office")],
+        Some(("large.pdf", &large)),
+    )
+    .await;
+    assert_redirect(&response, "/?error=too_large");
+    assert!(harness.print.submitted().is_empty());
+
+    // Just over the limit, within the slack allowed for the other form fields.
+    large.truncate(4097);
+    let response = print(
+        &harness,
+        &cookie,
+        &[("printer", "office")],
+        Some(("large.pdf", &large)),
+    )
+    .await;
+    assert_redirect(&response, "/?error=too_large");
+
+    let response = harness.send(page("/?error=too_large", Some(&cookie))).await;
+    assert!(text(response).await.contains("The file is too large"));
+}
+
+#[tokio::test]
+async fn print_shows_unavailable_cups() {
+    let harness = Harness::new();
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    harness.print.set_unavailable("connection refused");
+
+    let response = harness.send(page("/", Some(&cookie))).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        text(response)
+            .await
+            .contains("Printing service unavailable: connection refused")
+    );
+
+    let response = print(
+        &harness,
+        &cookie,
+        &[("printer", "office")],
+        Some(("report.pdf", PDF)),
+    )
+    .await;
+    assert_redirect(&response, "/?error=unavailable");
+}
+
+#[tokio::test]
+async fn cancel_uses_signed_in_user() {
+    let harness = Harness::new();
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let response = harness
+        .send(post("/jobs/7/cancel", &cookie, None, vec![]))
+        .await;
+    assert_redirect(&response, "/jobs");
+    assert_eq!(harness.print.canceled(), [(7, "alice".to_owned())]);
+
+    let response = harness
+        .send(post("/jobs/99/cancel", &cookie, None, vec![]))
+        .await;
+    assert_redirect(&response, "/jobs?error=job_not_found");
+}
+
+#[tokio::test]
+async fn cross_site_post_refused() {
+    let harness = Harness::new();
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let forged = Request::post("/jobs/7/cancel")
+        .header(header::COOKIE, &cookie)
+        .header(header::ORIGIN, "https://evil.example")
+        .header("sec-fetch-site", "cross-site")
+        .body(Body::empty())
+        .unwrap();
+    let response = harness.send(forged).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(harness.print.canceled().is_empty());
+
+    let (content_type, body) = multipart(&[("printer", "office")], Some(("a.pdf", PDF)));
+    let forged = Request::post("/print")
+        .header(header::COOKIE, &cookie)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::ORIGIN, "https://evil.example")
+        .body(Body::from(body))
+        .unwrap();
+    assert_eq!(harness.send(forged).await.status(), StatusCode::FORBIDDEN);
+    assert!(harness.print.submitted().is_empty());
+}
+
+#[tokio::test]
+async fn scan_result_download_and_owner_isolation() {
+    let harness = Harness::new();
+    let alice = harness.sign_in("alice-subject", "alice").await;
+    let bob = harness.sign_in("bob-subject", "bob").await;
+    let result = harness
+        .results
+        .put("alice-subject", OutputFormat::Pdf, 1, PDF)
+        .unwrap();
+    let preview = format!("/scan/results/{}", result.id);
+    let download = format!("{preview}/download");
+
+    let request = |uri: &str, cookie: &str| {
+        Request::get(uri)
+            .header(header::COOKIE, cookie)
+            .body(Body::empty())
+            .unwrap()
+    };
+    let response = harness.send(request(&preview, &alice)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "application/pdf");
+    assert!(
+        response.headers()[header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .starts_with("inline")
+    );
+    assert_eq!(text(response).await.as_bytes(), PDF);
+
+    let response = harness.send(request(&download, &alice)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_DISPOSITION],
+        format!("attachment; filename=\"{}\"", result.file_name).as_str()
+    );
+    assert_eq!(text(response).await.as_bytes(), PDF);
+
+    // Another user's result looks exactly like a missing one.
+    for uri in [&preview, &download] {
+        let response = harness.send(request(uri, &bob)).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
+    let response = harness
+        .send(post(&format!("{preview}/save"), &bob, None, vec![]))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = harness
+        .send(request(
+            &format!("/scan/results/{}", uuid::Uuid::new_v4()),
+            &alice,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = harness
+        .send(request("/scan/results/nonsense", &alice))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn expired_scan_result_is_gone() {
+    let harness = Harness::with(Setup {
+        result_ttl: Duration::ZERO,
+        ..Setup::default()
+    });
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let result = harness
+        .results
+        .put("alice-subject", OutputFormat::Png, 1, PNG)
+        .unwrap();
+    let response = harness
+        .send(
+            Request::get(format!("/scan/results/{}/download", result.id))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn save_writes_to_the_output_folder() {
+    let output = temp_dir();
+    let harness = Harness::with(Setup {
+        output_dir: Some(output.path().to_owned()),
+        ..Setup::default()
+    });
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let result = harness
+        .results
+        .put("alice-subject", OutputFormat::Pdf, 1, PDF)
+        .unwrap();
+    let response = harness
+        .send(post(
+            &format!("/scan/results/{}/save", result.id),
+            &cookie,
+            None,
+            vec![],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let answer: serde_json::Value = serde_json::from_str(&text(response).await).unwrap();
+    let saved = PathBuf::from(answer["path"].as_str().unwrap());
+    assert_eq!(saved, output.path().join(&result.file_name));
+    assert_eq!(std::fs::read(saved).unwrap(), PDF);
+}
+
+#[tokio::test]
+async fn save_reports_unwritable_folder() {
+    let base = temp_dir();
+    let missing = base.path().join("missing");
+    let harness = Harness::with(Setup {
+        output_dir: Some(missing.clone()),
+        ..Setup::default()
+    });
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let result = harness
+        .results
+        .put("alice-subject", OutputFormat::Pdf, 1, PDF)
+        .unwrap();
+    let response = harness
+        .send(post(
+            &format!("/scan/results/{}/save", result.id),
+            &cookie,
+            None,
+            vec![],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let answer: serde_json::Value = serde_json::from_str(&text(response).await).unwrap();
+    let error = answer["error"].as_str().unwrap();
+    assert!(
+        error.starts_with(&format!("Cannot write to {}", missing.display())),
+        "{error}"
+    );
+
+    // The download keeps working when the folder does not.
+    let response = harness
+        .send(
+            Request::get(format!("/scan/results/{}/download", result.id))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Without a configured folder, there is nothing to save to.
+    let harness = Harness::new();
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let result = harness
+        .results
+        .put("alice-subject", OutputFormat::Pdf, 1, PDF)
+        .unwrap();
+    let response = harness
+        .send(post(
+            &format!("/scan/results/{}/save", result.id),
+            &cookie,
+            None,
+            vec![],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn sign_in_with_unavailable_provider_offers_a_retry() {
+    let harness = Harness::new();
+    let response = harness.send(page("/auth/login?next=/jobs", None)).await;
+    assert_redirect(&response, "/auth/error?reason=unavailable&next=%2Fjobs");
+
+    let response = harness
+        .send(page("/auth/error?reason=unavailable&next=%2Fjobs", None))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    assert!(html.contains("Sign-in provider unavailable"), "{html}");
+    assert!(html.contains("href=\"/auth/login?next=%2Fjobs\""), "{html}");
+
+    // A path to another site is never kept as the place to come back to.
+    let response = harness
+        .send(page("/auth/login?next=//evil.example/x", None))
+        .await;
+    assert_redirect(&response, "/auth/error?reason=unavailable&next=%2F");
+}
+
+/// A provider that answers discovery, enough to start a sign-in.
+async fn provider() -> MockServer {
+    let server = MockServer::start().await;
+    let base = server.uri();
+    let document = serde_json::json!({
+        "issuer": base,
+        "authorization_endpoint": format!("{base}/authorize"),
+        "token_endpoint": format!("{base}/token"),
+        "jwks_uri": format!("{base}/jwks"),
+        "response_types_supported": ["code"],
+        "subject_types_supported": ["public"],
+        "id_token_signing_alg_values_supported": ["RS256"]
+    });
+    Mock::given(method("GET"))
+        .and(path("/.well-known/openid-configuration"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(document))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/jwks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"keys": []})))
+        .mount(&server)
+        .await;
+    server
+}
+
+#[tokio::test]
+async fn sign_in_state_is_single_use() {
+    let provider = provider().await;
+    let harness = Harness::with(Setup {
+        issuer: provider.uri(),
+        ..Setup::default()
+    });
+    let response = harness.send(page("/auth/login?next=/jobs", None)).await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let authorize = Url::parse(&location(&response)).unwrap();
+    assert!(
+        authorize
+            .as_str()
+            .starts_with(&format!("{}/authorize", provider.uri()))
+    );
+    let state = authorize
+        .query_pairs()
+        .find(|(name, _)| name == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    let cookie = session_cookie(response.headers()).expect("a session cookie");
+
+    let response = harness
+        .send(page("/auth/callback?code=c&state=forged", Some(&cookie)))
+        .await;
+    assert_redirect(&response, "/auth/error?reason=state&next=%2Fjobs");
+
+    // The failed attempt used up the pending sign-in: the right state no longer works either.
+    let response = harness
+        .send(page(
+            &format!("/auth/callback?code=c&state={state}"),
+            Some(&cookie),
+        ))
+        .await;
+    assert_redirect(&response, "/auth/error?reason=state&next=%2F");
+}
+
+#[tokio::test]
+async fn sign_out_ends_the_session() {
+    let harness = Harness::new();
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let response = harness
+        .send(post("/auth/logout", &cookie, None, vec![]))
+        .await;
+    // The provider was never discovered, so it has no end-session address to go to.
+    assert_redirect(&response, "/auth/signed-out");
+    let response = harness.send(page("/", Some(&cookie))).await;
+    assert_redirect(&response, "/auth/login?next=%2F");
+    let response = harness.send(page("/auth/signed-out", None)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+}

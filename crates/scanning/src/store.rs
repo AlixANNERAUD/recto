@@ -95,10 +95,19 @@ impl ResultStore {
         })
     }
 
+    /// Whether `result` has outlived the store's time to live at `now`. [`get`](Self::get) still
+    /// returns it until [`purge_expired`](Self::purge_expired) runs, so readers check this too.
+    pub fn is_expired(&self, result: &ScanResult, now: SystemTime) -> bool {
+        result
+            .created
+            .checked_add(self.ttl)
+            .is_none_or(|end| end <= now)
+    }
+
     pub fn purge_expired(&self, now: SystemTime) {
         let mut results = self.lock();
         results.retain(|_, r| {
-            let expired = r.created.checked_add(self.ttl).is_none_or(|end| end <= now);
+            let expired = self.is_expired(r, now);
             if expired {
                 // A file that is already gone is the goal state.
                 let _ = fs::remove_file(self.path(r));
@@ -132,6 +141,8 @@ mod tests {
         let dir = temp_dir();
         let store = ResultStore::new(dir.path().to_owned(), Duration::from_secs(60));
         let r = store.put("alice", OutputFormat::Png, 1, b"png").unwrap();
+        assert!(!store.is_expired(&r, r.created + Duration::from_secs(59)));
+        assert!(store.is_expired(&r, r.created + Duration::from_secs(60)));
         store.purge_expired(r.created + Duration::from_secs(59));
         assert!(store.get("alice", r.id).is_some());
         store.purge_expired(r.created + Duration::from_secs(61));
