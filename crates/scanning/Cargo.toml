@@ -16,7 +16,7 @@ workspace = true
 # Everything touching `image`, the filesystem or the clock stays out of the default build so the
 # models compile for wasm32 in the browser bundle. The server and the `ssr` feature of the
 # interface enable it. `uuid/v4` needs OS randomness, which the browser build must not pull in.
-service = ["dep:image", "dep:chrono", "uuid/v4", "dep:async-trait", "dep:tokio"]
+service = ["dep:image", "dep:chrono", "uuid/v4", "dep:async-trait", "dep:tokio", "dep:rustix"]
 # Test doubles for the consumers of `ScannerService`. Never enabled in the release build.
 testing = ["service"]
 # The real scanners through libsane, which needs the SANE development files to build. The server
@@ -31,6 +31,8 @@ image = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
+# renameat2 with RENAME_NOREPLACE, to publish saved scans without ever replacing a file.
+rustix = { version = "1.1", features = ["fs"], optional = true }
 libsane = { version = "0.1", features = ["image"], optional = true }
 
 [dev-dependencies]

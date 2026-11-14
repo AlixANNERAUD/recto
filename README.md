@@ -188,9 +188,10 @@ sudo chown 65532:65532 consume
 To write into a folder that someone else owns, such as the consume folder of Paperless, set
 `user: "<uid>:<gid>"` on the recto service to that owner instead.
 
-Files never overwrite an existing file. Normally they appear atomically, through a hard link. On
-SMB and NFS shares, which often refuse hard links, recto writes the file directly instead, so it may
-be briefly partial; Paperless copes with that.
+Files never overwrite an existing file. Normally they are written to a hidden file, then moved in
+atomically by a rename that refuses to replace, which every folder watcher notices. Where the
+filesystem does not support that, recto uses a hard link, and on SMB and NFS shares that refuse
+both, it writes the file directly, so it may be briefly partial; Paperless copes with that.
 
 ## Limits
 

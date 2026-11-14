@@ -7,7 +7,8 @@ use std::{
 use crate::error::ScanError;
 
 /// Writes `bytes` into `dir` under `file_name`, or `stem-1.ext`, `stem-2.ext` when taken. The data
-/// goes to a hidden temp file first so a folder watcher never sees a half-written scan.
+/// goes to a hidden temp file first, then is renamed into place, so a folder watcher never sees a
+/// half-written scan.
 pub fn save_to_folder(dir: &Path, file_name: &str, bytes: &[u8]) -> Result<PathBuf, ScanError> {
     let storage = |e: std::io::Error| ScanError::Storage {
         path: dir.to_owned(),
@@ -38,22 +39,74 @@ pub fn save_to_folder(dir: &Path, file_name: &str, bytes: &[u8]) -> Result<PathB
         return Err(storage(e));
     }
 
-    let mut n = 0u32;
-    let result = loop {
-        let target = dir.join(candidate_name(file_name, stem, ext, n));
-        // A hard link fails atomically with AlreadyExists and never replaces a file, unlike
-        // `rename`, which silently overwrites on Unix.
-        match fs::hard_link(&tmp, &target) {
-            Ok(()) => break Ok(target),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
-            Err(e) if links_unsupported(&e) => {
-                break publish_without_link(dir, file_name, &tmp).map_err(storage);
-            }
-            Err(e) => break Err(storage(e)),
-        }
-    };
+    let result = publish(dir, file_name, stem, ext, &tmp).map_err(storage);
+    // Gone already when it was renamed into place.
     let _ = fs::remove_file(&tmp);
     result
+}
+
+/// Gives the finished temp file its final name, from the best way to the last resort. None of
+/// them ever replaces an existing file; a taken name moves on to the next suffix.
+fn publish(
+    dir: &Path,
+    file_name: &str,
+    stem: &str,
+    ext: Option<&str>,
+    tmp: &Path,
+) -> std::io::Result<PathBuf> {
+    // An atomic rename that refuses to replace: folder watchers see a file moved in
+    // (`IN_MOVED_TO`), which every consume-folder watcher handles.
+    match place(dir, file_name, stem, ext, |target| {
+        rename_no_replace(tmp, target)
+    }) {
+        Err(e) if rename_unsupported(&e) => {}
+        other => return other,
+    }
+    // Just as atomic, but watchers only see a file created, which older ones that wait for a
+    // write to close or a move in can miss.
+    match place(dir, file_name, stem, ext, |target| {
+        fs::hard_link(tmp, target)
+    }) {
+        Err(e) if links_unsupported(&e) => {}
+        other => return other,
+    }
+    publish_without_link(dir, file_name, tmp)
+}
+
+/// Tries `put` on `file_name`, then `stem-1.ext`, `stem-2.ext`... while the name is taken.
+fn place(
+    dir: &Path,
+    file_name: &str,
+    stem: &str,
+    ext: Option<&str>,
+    mut put: impl FnMut(&Path) -> std::io::Result<()>,
+) -> std::io::Result<PathBuf> {
+    for n in 0.. {
+        let target = dir.join(candidate_name(file_name, stem, ext, n));
+        match put(&target) {
+            Ok(()) => return Ok(target),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!("the suffix counter does not run out")
+}
+
+/// `rename(2)` silently replaces an existing file on Unix; `RENAME_NOREPLACE` fails with
+/// `EEXIST` instead, atomically.
+fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use rustix::fs::{CWD, RenameFlags, renameat_with};
+    renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE).map_err(std::io::Error::from)
+}
+
+/// Filesystems that do not support `RENAME_NOREPLACE` (some SMB, NFS and FUSE mounts) answer
+/// `EINVAL`, and kernels before 3.15 `ENOSYS`.
+fn rename_unsupported(e: &std::io::Error) -> bool {
+    use rustix::io::Errno;
+    e.kind() == std::io::ErrorKind::Unsupported
+        || [Errno::INVAL, Errno::NOSYS, Errno::OPNOTSUPP]
+            .iter()
+            .any(|errno| e.raw_os_error() == Some(errno.raw_os_error()))
 }
 
 fn candidate_name(file_name: &str, stem: &str, ext: Option<&str>, n: u32) -> String {
@@ -74,7 +127,7 @@ fn links_unsupported(e: &std::io::Error) -> bool {
     ) || e.raw_os_error() == Some(95)
 }
 
-/// Fallback when hard links are unavailable: copy the finished temp file straight to the target
+/// Last resort when neither renames nor hard links work: copy the finished temp file straight to the target
 /// with `create_new`, which still never replaces a file. The trade-off is that the target is
 /// briefly partial; consumers such as Paperless act on close-after-write or on a stable file,
 /// so that is acceptable where a no-replace atomic publish is impossible.
@@ -151,6 +204,49 @@ mod tests {
         assert_eq!(b, dir.path().join("scan-2.pdf"));
         assert_eq!(fs::read(dir.path().join("scan.pdf")).unwrap(), b"original");
         assert_eq!(fs::read(&b).unwrap(), b"new");
+    }
+
+    #[test]
+    fn rename_never_replaces() {
+        let dir = temp_dir();
+        let new = dir.path().join(".new.tmp");
+        let taken = dir.path().join("taken.pdf");
+        fs::write(&new, b"new").unwrap();
+        fs::write(&taken, b"original").unwrap();
+        let refused = rename_no_replace(&new, &taken).unwrap_err();
+        assert_eq!(refused.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&taken).unwrap(), b"original");
+        let free = dir.path().join("free.pdf");
+        rename_no_replace(&new, &free).unwrap();
+        assert!(!new.exists());
+        assert_eq!(fs::read(&free).unwrap(), b"new");
+    }
+
+    #[test]
+    fn publishing_moves_the_temp_file_in() {
+        // A move, not a second name: watchers see the file arrive whole.
+        let dir = temp_dir();
+        let tmp = dir.path().join(".scan.tmp");
+        fs::write(&tmp, b"new").unwrap();
+        fs::write(dir.path().join("scan.pdf"), b"original").unwrap();
+        let saved = publish(dir.path(), "scan.pdf", "scan", Some("pdf"), &tmp).unwrap();
+        assert_eq!(saved, dir.path().join("scan-1.pdf"));
+        assert!(!tmp.exists(), "renamed, not linked");
+        assert_eq!(fs::read(&saved).unwrap(), b"new");
+        assert_eq!(fs::read(dir.path().join("scan.pdf")).unwrap(), b"original");
+    }
+
+    #[test]
+    fn unsupported_rename_errors_are_recognised() {
+        use std::io::{Error, ErrorKind};
+        assert!(rename_unsupported(&Error::from_raw_os_error(
+            rustix::io::Errno::INVAL.raw_os_error()
+        )));
+        assert!(rename_unsupported(&Error::from(ErrorKind::Unsupported)));
+        assert!(!rename_unsupported(&Error::from(ErrorKind::AlreadyExists)));
+        assert!(!rename_unsupported(&Error::from(
+            ErrorKind::PermissionDenied
+        )));
     }
 
     #[test]

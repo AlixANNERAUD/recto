@@ -3066,6 +3066,7 @@ dependencies = [
  "image",
  "libsane",
  "recto-scanning",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",
