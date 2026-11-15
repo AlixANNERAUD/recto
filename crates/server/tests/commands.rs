@@ -116,3 +116,51 @@ fn backup_command_refuses_postgres_urls() {
     }
     assert!(commands::check_backup_url("sqlite:///data/recto.db").is_ok());
 }
+
+/// Under the target directory, never the system temporary directory.
+fn temporary_directory() -> tempfile::TempDir {
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).unwrap();
+    tempfile::TempDir::new_in(base).unwrap()
+}
+
+#[tokio::test]
+async fn backup_copies_a_migrated_database() {
+    let directory = temporary_directory();
+    let source = directory.path().join("source.db");
+    let url = format!("sqlite://{}", source.display());
+    commands::migrate(&url).await.unwrap();
+    let destination = directory.path().join("copy.db");
+    commands::backup(&url, &destination).await.unwrap();
+
+    let copy = recto_domain::database::connect(&format!("sqlite://{}", destination.display()))
+        .await
+        .unwrap();
+    assert!(users::list(&copy).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn backup_refuses_an_existing_destination() {
+    let directory = temporary_directory();
+    let url = format!("sqlite://{}", directory.path().join("source.db").display());
+    commands::migrate(&url).await.unwrap();
+    let destination = directory.path().join("copy.db");
+    std::fs::write(&destination, b"keep").unwrap();
+    let error = commands::backup(&url, &destination).await.unwrap_err();
+    assert!(error.contains("already exists"), "{error}");
+    assert_eq!(std::fs::read(&destination).unwrap(), b"keep");
+}
+
+#[tokio::test]
+async fn backup_refuses_a_missing_database_and_creates_nothing() {
+    let directory = temporary_directory();
+    let missing = directory.path().join("typo.db");
+    let url = format!("sqlite://{}", missing.display());
+    let error = commands::backup(&url, &directory.path().join("copy.db"))
+        .await
+        .unwrap_err();
+    assert!(error.contains("does not exist"), "{error}");
+    assert!(error.contains("typo.db"), "{error}");
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    assert!(commands::require_existing_database(&url).is_err());
+}

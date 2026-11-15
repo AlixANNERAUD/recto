@@ -34,10 +34,31 @@ pub fn check_backup_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Refuses a SQLite database file that does not exist. The connection would create it, so a
+/// mistyped `--database-url` would otherwise "back up" or administer a new empty database and
+/// succeed. Only `create-administrator` may start a database, on a first install; PostgreSQL is
+/// not checked here, since connecting never creates it.
+pub fn require_existing_database(url: &str) -> Result<(), String> {
+    let Some(rest) = url.strip_prefix("sqlite:") else {
+        return Ok(());
+    };
+    let path = rest.strip_prefix("//").unwrap_or(rest);
+    let path = path.split('?').next().unwrap_or(path);
+    if path.is_empty() || path.starts_with(':') || rest.starts_with("file:") {
+        return Ok(());
+    }
+    if Path::new(path).is_file() {
+        Ok(())
+    } else {
+        Err(format!("the database {path} does not exist"))
+    }
+}
+
 /// Writes a consistent copy of the SQLite database to `destination`. It connects without
 /// migrating, so a backup never changes the database it copies.
 pub async fn backup(url: &str, destination: &Path) -> Result<(), String> {
     check_backup_url(url)?;
+    require_existing_database(url)?;
     let database = database::connect(url).await.map_err(|error| {
         format!(
             "cannot open the database {}: {error}",

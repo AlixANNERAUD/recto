@@ -38,12 +38,19 @@ async fn main() -> ExitCode {
                 Err(error) => Err(error.into()),
             }
         }
-        Command::Administrator(options) => match open_for_command(&options.database).await {
-            Ok(database) => commands::administrator(&database, &options)
-                .await
-                .map_err(Into::into),
-            Err(error) => Err(error.into()),
-        },
+        Command::Administrator(options) => {
+            // Never start a database here: a wrong path would get an empty one and report that
+            // the user does not exist.
+            match commands::require_existing_database(&options.database.database_url) {
+                Err(error) => Err(error.into()),
+                Ok(()) => match open_for_command(&options.database).await {
+                    Ok(database) => commands::administrator(&database, &options)
+                        .await
+                        .map_err(Into::into),
+                    Err(error) => Err(error.into()),
+                },
+            }
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
