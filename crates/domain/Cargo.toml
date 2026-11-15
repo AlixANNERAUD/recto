@@ -1,0 +1,28 @@
+[package]
+name = "recto-domain"
+description = "Users, groups and the database of recto."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+recto-entity.workspace = true
+recto-migration.workspace = true
+sea-orm.workspace = true
+thiserror.workspace = true
+
+[features]
+# Test helpers shared with the server crate's tests.
+testing = []
+
+[dev-dependencies]
+recto-domain = { path = ".", features = ["testing"] }
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

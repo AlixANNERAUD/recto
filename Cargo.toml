@@ -16,6 +16,9 @@ recto-printing = { path = "crates/printing" }
 recto-scanning = { path = "crates/scanning" }
 recto-authentication = { path = "crates/authentication" }
 recto-app = { path = "crates/app", default-features = false }
+recto-entity = { path = "crates/entity" }
+recto-migration = { path = "crates/migration" }
+recto-domain = { path = "crates/domain" }
 
 leptos = { version = "0.8.23", features = ["islands"] }
 leptos_axum = "0.8.10"
@@ -44,7 +47,7 @@ async-trait = "0.1"
 percent-encoding = "2.3"
 wiremock = "0.6.5"
 uuid = { version = "1", features = ["serde"] }
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 # Only the codecs recto writes; scanned pages are never decoded from untrusted files.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 tempfile = "3"
@@ -53,6 +56,9 @@ openidconnect = { version = "4.1.0", default-features = false, features = ["reqw
 # Sessions live in memory: a restart signs everyone out, which a home server can afford.
 tower-sessions = { version = "0.14.0", default-features = false, features = ["axum-core"] }
 tower = { version = "0.5.3", features = ["util"] }
+# rustls lets PostgreSQL connections use TLS (`sslmode` in the URL), as managed databases require.
+sea-orm = { version = "2.0.4", default-features = false, features = ["sqlx-sqlite", "sqlx-postgres", "runtime-tokio-rustls", "macros", "with-chrono", "with-json"] }
+sea-orm-migration = { version = "2.0.4", default-features = false, features = ["sqlx-sqlite", "sqlx-postgres", "runtime-tokio-rustls"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

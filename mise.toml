@@ -5,6 +5,8 @@ mr-boxington = "latest"
 "aqua:nextest-rs/nextest/cargo-nextest" = "0.9.149"
 "aqua:EmbarkStudios/cargo-deny" = "0.20.2"
 "aqua:taiki-e/cargo-llvm-cov" = "0.9.1"
+# Generates the entities from the migrated schema (mise run entities).
+"github:SeaQL/sea-orm" = { version = "2.0.4", version_prefix = "sea-orm-cli@", bin = "sea-orm-cli" }
 # Must match the wasm-bindgen version in Cargo.lock. The statically linked (musl) build runs on
 # any Linux, including the Debian 12 image builder whose glibc is older than the gnu build needs.
 "github:wasm-bindgen/wasm-bindgen" = { version = "0.2.130", matching = "unknown-linux-musl" }
@@ -43,6 +45,15 @@ run = "cargo doc $RECTO_SERVER_PACKAGES --no-deps --document-private-items"
 
 [tasks.doc.env]
 RUSTDOCFLAGS = "-D warnings"
+
+# The tests recreate the schema of the database in RECTO_TEST_DATABASE_URL for each test, so
+# they run one at a time. Without the variable they would quietly run on SQLite instead.
+[tasks.test-postgres]
+description = "Run the test suite on the PostgreSQL database in RECTO_TEST_DATABASE_URL"
+run = [
+  'case "$RECTO_TEST_DATABASE_URL" in postgres://*|postgresql://*) ;; *) echo "Set RECTO_TEST_DATABASE_URL to an empty PostgreSQL database, such as postgres://recto:recto@localhost:5432/recto" >&2; exit 1 ;; esac',
+  "cargo nextest run $RECTO_SERVER_PACKAGES --no-tests=pass --test-threads 1",
+]
 
 [tasks.docs]
 description = "Build the documentation into docs/book"
@@ -93,3 +104,19 @@ run = "cargo nextest run --package recto-scanning --run-ignored only --no-tests=
 [tasks.test-sane.env]
 RECTO_SANE_TESTS = "1"
 SANE_CONFIG_DIR = "{{config_root}}/crates/scanning/tests/sane-config"
+
+# The throwaway database lives under target/ rather than the system temporary directory. The
+# server has no `migrate` command yet, so the domain crate's `migrate` example applies the
+# migrations.
+[tasks.entities]
+description = "Regenerate the SeaORM entities from the migrations"
+run = '''
+directory=target/entities-schema
+rm -rf "$directory"
+mkdir -p "$directory"
+cargo run --quiet --package recto-domain --example migrate -- "sqlite://$PWD/$directory/schema.db"
+rm -rf crates/entity/src/entities
+sea-orm-cli generate entity --database-url "sqlite://$PWD/$directory/schema.db" --output-dir crates/entity/src/entities --with-serde both --date-time-crate chrono --ignore-tables seaql_migrations --banner-version off
+rm -rf "$directory"
+cargo fmt --package recto-entity
+'''
