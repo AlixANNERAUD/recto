@@ -46,6 +46,8 @@ services:
       # RECTO_OIDC_REQUIRED_CLAIM: urn:zitadel:iam:org:project:roles
       # RECTO_OIDC_REQUIRED_VALUE: recto
     volumes:
+      # The database (users, sessions): back this volume up.
+      - recto-data:/data
       - ./consume:/consume
       # Docker's bridge network carries no multicast, so sane-airscan cannot discover scanners:
       # list them in airscan.conf. The Debian dll.conf probes every backend, which is slow in a
@@ -96,5 +98,6 @@ networks:
         - subnet: 172.30.80.0/24
 
 volumes:
+  recto-data:
   cups-config:
   cups-spool:

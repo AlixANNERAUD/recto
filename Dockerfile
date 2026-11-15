@@ -76,6 +76,11 @@ COPY --from=builder /out/site /app/site
 ENV RECTO_LISTEN_ADDRESS=0.0.0.0:8080 \
     RECTO_SITE_ROOT=/app/site
 
+# The default database (sqlite:///data/recto.db) lives here. It must exist in the image, owned by
+# recto's user, since the root file system may be read-only; a new named volume mounted on it
+# takes this ownership.
+RUN mkdir /data && chown 65532:65532 /data
+
 USER 65532:65532
 EXPOSE 8080
 
