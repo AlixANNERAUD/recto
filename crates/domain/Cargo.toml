@@ -19,14 +19,14 @@ password-auth.workspace = true
 # Password hashing runs on the blocking thread pool.
 tokio.workspace = true
 tracing.workspace = true
+tempfile = { workspace = true, optional = true }
 
 [features]
 # Test helpers shared with the server crate's tests.
-testing = []
+testing = ["dep:tempfile"]
 
 [dev-dependencies]
 recto-domain = { path = ".", features = ["testing"] }
-tempfile.workspace = true
 
 [lints]
 workspace = true

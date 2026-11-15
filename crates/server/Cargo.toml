@@ -54,7 +54,6 @@ rpassword.workspace = true
 recto-domain = { workspace = true, features = ["testing"] }
 recto-printing = { workspace = true, features = ["testing"] }
 recto-scanning = { workspace = true, features = ["testing"] }
-tempfile.workspace = true
 wiremock.workspace = true
 
 [lints]

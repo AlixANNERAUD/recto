@@ -10,8 +10,10 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use recto_app::{i18n, messages, state::AppState};
-use recto_authentication::User;
+use recto_app::{
+    i18n, messages,
+    state::{AppState, User},
+};
 use recto_scanning::{ScanError, ScanResult, save_to_folder};
 use serde_json::json;
 use uuid::Uuid;

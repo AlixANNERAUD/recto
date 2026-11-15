@@ -28,9 +28,8 @@ use recto_app::{
         account::{PasswordChange, PasswordRefusal},
         sign_in::{SignInForm, SignInMethods, SignInRefusal},
     },
-    state::AppState,
+    state::{AppState, User},
 };
-use recto_authentication::User;
 use recto_domain::{
     Error, Problem,
     passwords::{self, PasswordPolicy},
@@ -268,7 +267,7 @@ async fn change_password(
     mut parts: Parts,
     Form(fields): Form<PasswordFields>,
 ) -> Response {
-    if !(state.methods.password && user.is_local) {
+    if !(state.methods.password && user.has_password) {
         return render(
             &state.app,
             state.methods,

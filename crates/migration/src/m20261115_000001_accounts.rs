@@ -1,6 +1,5 @@
 //! The initial schema: users, the identities they sign in with, groups and sessions.
-//! Enumerations are stored as text and timestamps with their time zone so the same schema works
-//! on SQLite and PostgreSQL.
+//! Timestamps are stored with their time zone so the same schema works on SQLite and PostgreSQL.
 //!
 //! Deleting a user or a group cascades to its identities and memberships.
 

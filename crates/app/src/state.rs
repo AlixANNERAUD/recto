@@ -8,7 +8,6 @@ use leptos::{
     config::LeptosOptions,
     prelude::{ServerFnError, use_context},
 };
-use recto_authentication::User;
 use recto_printing::PrintService;
 use recto_scanning::{ResultStore, ScannerService};
 use sea_orm::DatabaseConnection;
@@ -26,8 +25,22 @@ pub struct AppState {
     /// Largest accepted upload, in bytes.
     pub max_upload_size: usize,
     pub leptos_options: LeptosOptions,
-    /// The accounts database (see [`recto_domain`]).
+    /// The accounts database, which the server opens and migrates (crate `recto-domain`).
     pub database: DatabaseConnection,
+}
+
+/// The signed-in user of a request, read from the accounts database on every request, so that
+/// disabling an account or changing its administration applies at once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct User {
+    pub id: i64,
+    /// Never changes; the CUPS `requesting-user-name` of the user's jobs.
+    pub username: String,
+    /// The name shown in the interface; the username when the user has none.
+    pub name: String,
+    pub is_administrator: bool,
+    /// Whether the user has a password, so can sign in with a local account.
+    pub has_password: bool,
 }
 
 impl FromRef<AppState> for LeptosOptions {

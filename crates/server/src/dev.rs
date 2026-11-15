@@ -14,8 +14,7 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use recto_app::state::AppState;
-use recto_authentication::User;
+use recto_app::state::{AppState, User};
 use recto_domain::users::{self, Identity};
 use recto_printing::{
     Capabilities, ColorMode, Job, JobState, Printer, PrinterState, Sides, StateReason, Supply,
@@ -199,7 +198,7 @@ mod tests {
         assert_eq!(first.username, "dev");
         assert_eq!(first.name, "Development user");
         assert!(first.is_administrator);
-        assert!(!first.is_local);
+        assert!(!first.has_password);
     }
 
     #[test]

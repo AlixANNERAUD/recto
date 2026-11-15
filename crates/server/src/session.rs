@@ -17,8 +17,7 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 use chrono::{DateTime, FixedOffset, Utc};
-use recto_app::{i18n, messages};
-use recto_authentication::User;
+use recto_app::{i18n, messages, state::User};
 use recto_domain::users;
 use recto_entity::users as user_rows;
 use sea_orm::DatabaseConnection;
@@ -118,7 +117,7 @@ pub fn user(row: &user_rows::Model) -> User {
         username: row.username.clone(),
         name: row.display_name.clone(),
         is_administrator: row.is_administrator,
-        is_local: row.password_hash.is_some(),
+        has_password: row.password_hash.is_some(),
     }
 }
 

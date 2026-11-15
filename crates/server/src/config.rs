@@ -3,7 +3,11 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
+use recto_domain::passwords;
 use url::Url;
+
+/// Where the database is when `RECTO_DATABASE_URL` is not set: the container's data volume.
+pub const DEFAULT_DATABASE_URL: &str = "sqlite:///data/recto.db";
 
 /// The format of log lines on standard error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -22,7 +26,7 @@ pub struct Config {
     #[arg(
         long,
         env = "RECTO_DATABASE_URL",
-        default_value = "sqlite:///data/recto.db",
+        default_value = DEFAULT_DATABASE_URL,
         hide_env_values = true
     )]
     pub database_url: String,
@@ -62,7 +66,7 @@ pub struct Config {
     #[arg(long, env = "RECTO_LOCAL_ACCOUNTS", default_value_t = true, action = ArgAction::Set)]
     pub local_accounts: bool,
     /// Minimum length of local account passwords.
-    #[arg(long, env = "RECTO_PASSWORD_MINIMUM_LENGTH", default_value_t = 12)]
+    #[arg(long, env = "RECTO_PASSWORD_MINIMUM_LENGTH", default_value_t = passwords::DEFAULT_MINIMUM_LENGTH)]
     pub password_minimum_length: usize,
     /// Read the client address from `X-Forwarded-For`, `X-Real-IP` or `Forwarded`; only behind
     /// a proxy you control.
@@ -209,7 +213,7 @@ pub struct DatabaseOptions {
     #[arg(
         long,
         env = "RECTO_DATABASE_URL",
-        default_value = "sqlite:///data/recto.db",
+        default_value = DEFAULT_DATABASE_URL,
         hide_env_values = true
     )]
     pub database_url: String,
@@ -233,7 +237,7 @@ pub struct CreateAdministratorOptions {
     #[arg(long)]
     pub email: Option<String>,
     /// Minimum length of the password.
-    #[arg(long, env = "RECTO_PASSWORD_MINIMUM_LENGTH", default_value_t = 12)]
+    #[arg(long, env = "RECTO_PASSWORD_MINIMUM_LENGTH", default_value_t = passwords::DEFAULT_MINIMUM_LENGTH)]
     pub password_minimum_length: usize,
     #[command(flatten)]
     pub database: DatabaseOptions,

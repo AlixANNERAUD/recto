@@ -14,14 +14,16 @@ use recto::serve::{AuthState, router};
 use recto::session_store::DatabaseSessionStore;
 use recto_app::state::AppState;
 use recto_authentication::{OpenId, OpenIdSettings};
-use recto_domain::users::{self, Identity};
+use recto_domain::{
+    testing::{TempDir, temporary_directory},
+    users::{self, Identity},
+};
 use recto_printing::{
     Capabilities, ColorMode, Job, JobState, Printer, PrinterState, Sides, StateReason, Supply,
     testing::MockPrintService,
 };
 use recto_scanning::{MockScannerService, ResultStore, ScanError};
 use sea_orm::DatabaseConnection;
-use tempfile::TempDir;
 use tower::ServiceExt;
 use tower_sessions::Session;
 use url::Url;
@@ -67,12 +69,6 @@ fn garage() -> Printer {
     }
 }
 
-fn temp_dir() -> TempDir {
-    let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("page-tests");
-    std::fs::create_dir_all(&base).unwrap();
-    TempDir::new_in(base).unwrap()
-}
-
 struct Harness {
     router: Router,
     scan: Arc<MockScannerService>,
@@ -84,7 +80,7 @@ struct Harness {
 impl Harness {
     async fn new(printers: Vec<Printer>, jobs: Vec<Job>) -> Self {
         let database = recto_domain::testing::database().await;
-        let dir = temp_dir();
+        let dir = temporary_directory();
         let print = Arc::new(
             MockPrintService::new()
                 .with_printers(printers)

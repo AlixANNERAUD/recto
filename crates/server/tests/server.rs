@@ -3,12 +3,7 @@
 //! by writing their session straight into the router's session store; no route of the server can
 //! do that.
 
-use std::{
-    net::SocketAddr,
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use axum::{
     Router,
@@ -23,6 +18,7 @@ use recto_app::state::AppState;
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::{
     passwords::PasswordPolicy,
+    testing::{TempDir, temporary_directory},
     users::{self, Identity},
 };
 use recto_entity::sessions;
@@ -32,7 +28,6 @@ use recto_printing::{
 };
 use recto_scanning::{MockScannerService, OutputFormat, ResultStore};
 use sea_orm::{DatabaseConnection, EntityTrait, PaginatorTrait};
-use tempfile::TempDir;
 use tower::ServiceExt;
 use tower_sessions::{Session, SessionStore, cookie::time::OffsetDateTime, session::Id};
 use url::Url;
@@ -65,13 +60,6 @@ fn office() -> Printer {
             color_modes: vec![ColorMode::Color, ColorMode::Monochrome],
         },
     }
-}
-
-/// Under the target directory, never the system temporary directory.
-fn temp_dir() -> TempDir {
-    let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("server-tests");
-    std::fs::create_dir_all(&base).unwrap();
-    TempDir::new_in(base).unwrap()
 }
 
 struct Setup {
@@ -121,7 +109,7 @@ impl Harness {
             Some(database) => database,
             None => recto_domain::testing::database().await,
         };
-        let dir = temp_dir();
+        let dir = temporary_directory();
         let print = Arc::new(
             MockPrintService::new()
                 .with_printers(vec![office()])
@@ -776,7 +764,7 @@ async fn expired_scan_result_is_gone() {
 
 #[tokio::test]
 async fn save_writes_to_the_output_folder() {
-    let output = temp_dir();
+    let output = temporary_directory();
     let harness = Harness::with(Setup {
         output_dir: Some(output.path().to_owned()),
         ..Setup::default()
@@ -805,7 +793,7 @@ async fn save_writes_to_the_output_folder() {
 
 #[tokio::test]
 async fn save_reports_unwritable_folder() {
-    let base = temp_dir();
+    let base = temporary_directory();
     let missing = base.path().join("missing");
     let harness = Harness::with(Setup {
         output_dir: Some(missing.clone()),
@@ -1236,7 +1224,7 @@ async fn sign_in_routes_are_absent_without_openid_connect() {
 async fn unwritable_database_fails_at_startup() {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = temp_dir();
+    let dir = temporary_directory();
     let locked = dir.path().join("read-only");
     std::fs::create_dir(&locked).unwrap();
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();

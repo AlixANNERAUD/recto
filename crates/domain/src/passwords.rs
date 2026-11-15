@@ -11,6 +11,9 @@ use crate::error::{Error, Problem, Result};
 /// Upper bound on password length, so hashing cannot be used to exhaust the server.
 pub const MAXIMUM_LENGTH: usize = 1024;
 
+/// The minimum password length when the operator sets none.
+pub const DEFAULT_MINIMUM_LENGTH: usize = 12;
+
 /// The rules a new password must follow, set by the operator. There are no composition rules:
 /// length is what makes a password hard to guess.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

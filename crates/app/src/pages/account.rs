@@ -56,7 +56,7 @@ impl PasswordRefusal {
 fn account() -> Option<(String, String)> {
     let user = crate::state::current_user()?;
     let methods = SignInMethods::current()?;
-    (methods.password && user.is_local).then_some((user.name, user.username))
+    (methods.password && user.has_password).then_some((user.name, user.username))
 }
 
 /// Pages render on the server only.

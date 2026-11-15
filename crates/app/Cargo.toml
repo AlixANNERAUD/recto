@@ -43,8 +43,6 @@ wasm-bindgen-futures = { workspace = true, optional = true }
 # Without their `service` feature these are the models only, which also build for the browser.
 recto-printing.workspace = true
 recto-scanning.workspace = true
-recto-authentication = { workspace = true, optional = true }
-recto-domain = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }
 
 [features]
@@ -62,8 +60,6 @@ ssr = [
     "leptos_router/ssr",
     "dep:leptos_axum",
     "dep:axum",
-    "dep:recto-authentication",
-    "dep:recto-domain",
     "dep:sea-orm",
     "dep:tracing",
     "dep:tokio",

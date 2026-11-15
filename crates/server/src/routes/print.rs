@@ -9,8 +9,10 @@ use axum::{
     http::StatusCode,
     response::Redirect,
 };
-use recto_app::{refusal::Refusal, state::AppState};
-use recto_authentication::User;
+use recto_app::{
+    refusal::Refusal,
+    state::{AppState, User},
+};
 use recto_printing::{
     Capabilities, ColorMode, DocumentFormat, PageRanges, PrintError, PrintOptions, PrintRequest,
     Sides,

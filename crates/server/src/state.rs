@@ -5,7 +5,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use recto_app::{pages::sign_in::SignInMethods, state::AppState};
 use recto_authentication::{OpenId, OpenIdSettings};
-use recto_domain::passwords::PasswordPolicy;
+use recto_domain::passwords::{self, PasswordPolicy};
 use recto_printing::Cups;
 use recto_scanning::{
     ResultStore, SaneScanners, ScanError, ScanRequest, ScannedPage, ScannerCapabilities,
@@ -43,7 +43,7 @@ pub struct AuthState {
 
 impl AuthState {
     /// The sign-in state with the defaults of the configuration: local accounts on, passwords of
-    /// at least 12 characters, forwarded headers ignored.
+    /// at least [`passwords::DEFAULT_MINIMUM_LENGTH`] characters, forwarded headers ignored.
     pub fn new(openid: Option<Arc<OpenId>>, public_url: Url, database: DatabaseConnection) -> Self {
         let secure_cookies = public_url.scheme() == "https";
         Self {
@@ -53,7 +53,9 @@ impl AuthState {
             sessions: DatabaseSessionStore::new(database.clone()),
             database,
             local_accounts: true,
-            password_policy: PasswordPolicy { minimum_length: 12 },
+            password_policy: PasswordPolicy {
+                minimum_length: passwords::DEFAULT_MINIMUM_LENGTH,
+            },
             trust_forwarded_headers: false,
         }
     }

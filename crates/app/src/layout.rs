@@ -78,7 +78,7 @@ fn user_name() -> Option<(String, bool)> {
     let user = crate::state::current_user()?;
     let password =
         crate::pages::sign_in::SignInMethods::current().is_some_and(|methods| methods.password);
-    Some((user.name, password && user.is_local))
+    Some((user.name, password && user.has_password))
 }
 
 /// Pages render on the server only.

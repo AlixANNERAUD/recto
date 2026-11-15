@@ -99,9 +99,6 @@ RECTO_LOG_FORMAT = "text"
 RECTO_DEV_MOCKS = "1"
 # A database of its own under target/, so the development user and sessions survive restarts.
 RECTO_DATABASE_URL = "sqlite://target/dev.db"
-# Dummy values until sign-in exists; the identity provider is never contacted at startup.
-RECTO_OIDC_ISSUER = "http://127.0.0.1:9/"
-RECTO_OIDC_CLIENT_ID = "recto-dev"
 
 [tasks.build]
 description = "Build the release binary and the site"

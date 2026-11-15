@@ -1,6 +1,6 @@
 [package]
 name = "recto-authentication"
-description = "OpenID Connect sign-in and sessions."
+description = "OpenID Connect sign-in, claims and the cross-site request check."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -5,7 +5,11 @@ use recto::{
     commands,
     config::{AdministratorOptions, CreateAdministratorOptions, DatabaseOptions},
 };
-use recto_domain::{passwords, testing, users};
+use recto_domain::{
+    passwords,
+    testing::{self, temporary_directory},
+    users,
+};
 
 fn database_options() -> DatabaseOptions {
     DatabaseOptions {
@@ -115,13 +119,6 @@ fn backup_command_refuses_postgres_urls() {
         assert!(error.contains("pg_dump"), "{error}");
     }
     assert!(commands::check_backup_url("sqlite:///data/recto.db").is_ok());
-}
-
-/// Under the target directory, never the system temporary directory.
-fn temporary_directory() -> tempfile::TempDir {
-    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
-    std::fs::create_dir_all(&base).unwrap();
-    tempfile::TempDir::new_in(base).unwrap()
 }
 
 #[tokio::test]

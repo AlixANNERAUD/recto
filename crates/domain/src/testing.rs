@@ -1,4 +1,4 @@
-//! Helpers for tests: a fresh, migrated database per test.
+//! Helpers for tests: a fresh, migrated database per test, and temporary directories.
 //!
 //! Tests use a private in-memory SQLite database by default. Set `RECTO_TEST_DATABASE_URL` to
 //! run them against another database such as PostgreSQL; the schema is then dropped and recreated
@@ -8,10 +8,14 @@
 //! The module is compiled for this crate's tests and, through the `testing` feature, for the
 //! server's; it is not part of the production build.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    path::Path,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use recto_migration::{Migrator, MigratorTrait};
 use sea_orm::DatabaseConnection;
+pub use tempfile::TempDir;
 
 static NEXT_DATABASE: AtomicU64 = AtomicU64::new(0);
 
@@ -44,4 +48,12 @@ pub async fn database() -> DatabaseConnection {
             database
         }
     }
+}
+
+/// A new directory under `target/test-tmp` of the workspace, never the system temporary
+/// directory, removed when dropped.
+pub fn temporary_directory() -> TempDir {
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+    std::fs::create_dir_all(&base).expect("create target/test-tmp");
+    TempDir::new_in(base).expect("create a temporary directory")
 }

@@ -117,17 +117,11 @@ mod tests {
     use sea_orm::{ActiveModelTrait, EntityTrait, ModelTrait, PaginatorTrait, Set};
 
     use super::*;
-
-    /// Under the target directory, never the system temporary directory.
-    fn temporary_directory() -> tempfile::TempDir {
-        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
-        std::fs::create_dir_all(&base).expect("create target/test-tmp");
-        tempfile::TempDir::new_in(base).expect("create a temporary directory")
-    }
+    use crate::testing::{TempDir, temporary_directory};
 
     /// A migrated SQLite file. Backups need one: SQLite opens the `VACUUM INTO` destination with
     /// the flags of the source, so copying the in-memory test databases would write in memory.
-    async fn sqlite_file(directory: &tempfile::TempDir) -> DatabaseConnection {
+    async fn sqlite_file(directory: &TempDir) -> DatabaseConnection {
         let path = directory.path().join("source.db");
         let database = connect(&format!("sqlite://{}", path.display()))
             .await

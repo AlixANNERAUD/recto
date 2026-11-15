@@ -111,7 +111,6 @@ mod server {
 
     use embedded_i18n::Locale;
     use leptos::prelude::ServerFnError;
-    use recto_authentication::User;
     use recto_printing::PrintError;
     use recto_scanning::{
         OutputFormat, ScanError, ScanSettings, ScannedPage, ScannerCapabilities, Selection,
@@ -120,7 +119,7 @@ mod server {
     use super::ScanOutcome;
     use crate::{
         i18n, messages,
-        state::{AppState, require_user},
+        state::{AppState, User, require_user},
     };
 
     /// What every server function needs, read from the request before its first `await`.

@@ -24,9 +24,8 @@ use recto_app::{
         },
         sign_in::SignInMethods,
     },
-    state::AppState,
+    state::{AppState, User},
 };
-use recto_authentication::User;
 use recto_domain::{
     Error, Problem, groups,
     passwords::PasswordPolicy,

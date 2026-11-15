@@ -18,8 +18,12 @@ use axum::{
 use leptos::config::LeptosOptions;
 use leptos::prelude::provide_context;
 use leptos_axum::{LeptosRoutes, generate_route_list_with_exclusions};
-use recto_app::{App, pages::sign_in::SignInMethods, shell, state::AppState};
-use recto_authentication::User;
+use recto_app::{
+    App,
+    pages::sign_in::SignInMethods,
+    shell,
+    state::{AppState, User},
+};
 use recto_authentication::csrf::{self, AllowedOrigin};
 use recto_scanning::{ResultStore, ScannerService};
 use tower::ServiceExt;
