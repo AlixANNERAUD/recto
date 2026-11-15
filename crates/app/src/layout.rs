@@ -12,18 +12,63 @@ use crate::{
     t, tf,
 };
 
-/// The pages of the navigation, in order.
-fn destinations() -> [(&'static str, String, IconKind); 4] {
-    [
-        ("/", t!("nav.print").to_string(), IconKind::Print),
-        (
-            "/printers",
-            t!("nav.printers").to_string(),
-            IconKind::Printer,
-        ),
-        ("/jobs", t!("nav.jobs").to_string(), IconKind::Jobs),
-        ("/scan", t!("nav.scan").to_string(), IconKind::Scan),
-    ]
+/// Where the Administration item leads; the Users and Groups pages link to each other.
+const ADMINISTRATION: &str = "/administration/users";
+
+/// A page of the navigation: its address, its label, a shorter label for the phone row where
+/// five items share 390 pixels, and its icon.
+struct Destination {
+    href: &'static str,
+    label: &'static str,
+    short_label: &'static str,
+    icon: IconKind,
+}
+
+/// The pages of the navigation, in order. Administrators also get Administration, whose pages
+/// all count as that item.
+fn destinations(administrator: bool) -> Vec<Destination> {
+    let page = |href, label, icon| Destination {
+        href,
+        label,
+        short_label: label,
+        icon,
+    };
+    let mut destinations = vec![
+        page("/", t!("nav.print"), IconKind::Print),
+        page("/printers", t!("nav.printers"), IconKind::Printer),
+        page("/jobs", t!("nav.jobs"), IconKind::Jobs),
+        page("/scan", t!("nav.scan"), IconKind::Scan),
+    ];
+    if administrator {
+        destinations.push(Destination {
+            href: ADMINISTRATION,
+            label: t!("nav.administration"),
+            short_label: t!("nav.administration_short"),
+            icon: IconKind::Administration,
+        });
+    }
+    destinations
+}
+
+/// Whether `path` belongs to the navigation item of `href`.
+fn is_current(path: &str, href: &str) -> bool {
+    if href == ADMINISTRATION {
+        path.starts_with("/administration/")
+    } else {
+        path == href
+    }
+}
+
+/// Whether the signed-in user administers recto.
+#[cfg(feature = "ssr")]
+fn is_administrator() -> bool {
+    crate::state::current_user().is_some_and(|user| user.is_administrator)
+}
+
+/// Pages render on the server only.
+#[cfg(not(feature = "ssr"))]
+fn is_administrator() -> bool {
+    false
 }
 
 /// The name of the signed-in user, for the header, and whether they have an Account page: only
@@ -52,12 +97,14 @@ const NAV_INDICATOR: &str = "absolute bg-brand rounded-full bottom-0 left-1/4 ri
 #[component]
 pub fn Layout(#[prop(into)] title: String, children: Children) -> impl IntoView {
     let path = use_location().pathname.get_untracked();
+    let administrator = is_administrator();
     // Rendered twice, for the phone row and the side rail; CSS shows one of them.
-    let items = || {
-        destinations()
+    let items = |phone: bool| {
+        destinations(administrator)
         .into_iter()
-        .map(|(href, label, icon)| {
-            let current = path == href;
+        .map(|Destination { href, label, short_label, icon }| {
+            let current = is_current(&path, href);
+            let label = if phone { short_label } else { label };
             view! {
                 <li>
                     <a
@@ -139,7 +186,10 @@ pub fn Layout(#[prop(into)] title: String, children: Children) -> impl IntoView 
             </div>
             // On phones the navigation stays in the sticky header, one tap away on every page.
             <nav aria-label=t!("nav.label") class="border-t px-2 py-1 md:hidden">
-                <ul class="grid grid-cols-4 gap-1">{items()}</ul>
+                <ul class=format!(
+                    "grid gap-1 {}",
+                    if administrator { "grid-cols-5" } else { "grid-cols-4" },
+                )>{items(true)}</ul>
             </nav>
         </header>
         <div class="md:flex">
@@ -147,7 +197,7 @@ pub fn Layout(#[prop(into)] title: String, children: Children) -> impl IntoView 
                 aria-label=t!("nav.label")
                 class="bg-card hidden shrink-0 border-r p-2 md:sticky md:top-12 md:block md:h-[calc(100vh-3rem)] md:w-52"
             >
-                <ul class="grid gap-1">{items()}</ul>
+                <ul class="grid gap-1">{items(false)}</ul>
             </nav>
             <main id="main" class="mx-auto w-full max-w-5xl min-w-0 px-4 py-5 md:px-8 md:py-8">
                 <h1 class="mb-5 text-2xl font-semibold">{title}</h1>

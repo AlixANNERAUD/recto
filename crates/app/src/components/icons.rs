@@ -14,6 +14,8 @@ pub enum IconKind {
     Refresh,
     /// A person: the user's account.
     Account,
+    /// A shield with a check: administration.
+    Administration,
 }
 
 impl IconKind {
@@ -42,6 +44,10 @@ impl IconKind {
             IconKind::Account => &[
                 "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
                 "M4 20a8 8 0 0 1 16 0",
+            ],
+            IconKind::Administration => &[
+                "M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z",
+                "M9 12l2 2 4-4",
             ],
         }
     }

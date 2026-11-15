@@ -43,6 +43,7 @@ use leptos_router::{
 };
 use pages::{
     account::AccountPage,
+    administration::{groups::GroupsPage, users::UsersPage},
     auth::{SignInErrorPage, SignedOutPage},
     jobs::JobsPage,
     no_access::NoAccessPage,
@@ -123,6 +124,8 @@ pub fn App() -> impl IntoView {
                 <Route path=path!("/jobs") view=JobsPage ssr=SsrMode::Async />
                 <Route path=path!("/scan") view=ScanPage ssr=SsrMode::Async />
                 <Route path=path!("/account") view=AccountPage />
+                <Route path=path!("/administration/users") view=UsersPage />
+                <Route path=path!("/administration/groups") view=GroupsPage />
                 <Route path=path!("/sign-in") view=SignInPage />
                 <Route path=path!("/no-access") view=NoAccessPage />
                 <Route path=path!("/auth/error") view=SignInErrorPage />
@@ -133,7 +136,8 @@ pub fn App() -> impl IntoView {
 }
 
 /// The page of an address that leads nowhere, with status 404. Also what a page answers to a
-/// user it has nothing for, such as the Account page to a user without a password.
+/// user it has nothing for, such as the Account page to a user without a password or the
+/// administration pages to anyone who does not administer recto.
 #[component]
 pub(crate) fn NotFound() -> impl IntoView {
     #[cfg(feature = "ssr")]

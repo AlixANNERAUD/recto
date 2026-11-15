@@ -1,5 +1,6 @@
 //! The HTTP routes besides the pages, which the interface crate renders.
 
+pub mod administration;
 pub mod auth;
 pub mod password;
 pub mod print;

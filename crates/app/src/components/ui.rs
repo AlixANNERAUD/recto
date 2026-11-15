@@ -4,7 +4,7 @@
 
 use leptos::prelude::*;
 
-const BUTTON_BASE: &str = "inline-flex min-h-10 items-center justify-center gap-2 rounded-md px-4 text-sm font-semibold whitespace-nowrap transition-colors hover:cursor-pointer disabled:cursor-not-allowed disabled:opacity-50";
+const BUTTON_BASE: &str = "inline-flex items-center justify-center gap-2 rounded-md text-sm font-semibold whitespace-nowrap transition-colors hover:cursor-pointer disabled:cursor-not-allowed disabled:opacity-50";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ButtonVariant {
@@ -18,14 +18,22 @@ pub enum ButtonVariant {
 }
 
 pub fn button_class(variant: ButtonVariant) -> String {
-    let variant = match variant {
+    format!("{BUTTON_BASE} min-h-10 px-4 {}", button_colors(variant))
+}
+
+/// A smaller button, for actions repeated on every row of a table.
+pub fn small_button_class(variant: ButtonVariant) -> String {
+    format!("{BUTTON_BASE} min-h-8 px-3 {}", button_colors(variant))
+}
+
+fn button_colors(variant: ButtonVariant) -> &'static str {
+    match variant {
         ButtonVariant::Primary => {
             "bg-primary text-primary-foreground hover:bg-primary-hover disabled:hover:bg-primary"
         }
         ButtonVariant::Secondary => "border border-input bg-card text-foreground hover:bg-muted",
         ButtonVariant::Subtle => "text-foreground hover:bg-muted",
-    };
-    format!("{BUTTON_BASE} {variant}")
+    }
 }
 
 /// Text, number and select controls. `text-base` on phones keeps iOS from zooming in on focus.

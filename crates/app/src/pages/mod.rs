@@ -1,6 +1,7 @@
 //! The pages of the interface.
 
 pub mod account;
+pub mod administration;
 pub mod auth;
 pub mod jobs;
 pub mod no_access;

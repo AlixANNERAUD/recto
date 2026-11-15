@@ -10,6 +10,8 @@
     "printers": "Printers",
     "jobs": "Jobs",
     "scan": "Scan",
+    "administration": "Administration",
+    "administration_short": "Admin",
     "signed_in_as": "Signed in as {name}",
     "sign_out_as": "Sign out {name}",
     "account_of": "Account of {name}"
@@ -89,6 +91,89 @@
       "too_short": "The new password must be at least {minimum} characters long.",
       "too_long": "The new password must be at most {maximum} characters long.",
       "unavailable": "The password could not be changed. Try again in a moment."
+    }
+  },
+  "administration": {
+    "title": "Administration",
+    "sections": "Administration sections",
+    "users": {
+      "tab": "Users",
+      "list": "Users",
+      "load_failed": "The users could not be loaded. Try again in a moment.",
+      "columns": {
+        "user": "User",
+        "groups": "Groups",
+        "sign_in": "Sign-in",
+        "status": "Status",
+        "last_sign_in": "Last sign-in",
+        "actions": "Actions"
+      },
+      "no_groups": "None",
+      "single_sign_on": "Single sign-on",
+      "password": "Password",
+      "no_method": "None",
+      "administrator": "Administrator",
+      "from_claim": "From the identity provider",
+      "active": "Active",
+      "disabled": "Disabled",
+      "never": "Never",
+      "you": "You",
+      "grant": "Make administrator",
+      "grant_label": "Make {username} an administrator",
+      "remove": "Remove administration",
+      "remove_label": "Remove administration from {username}",
+      "disable": "Disable",
+      "disable_label": "Disable {username}",
+      "enable": "Enable",
+      "enable_label": "Enable {username}",
+      "set_password": "Set password",
+      "new_password_for": "New password for {username}",
+      "set_password_submit": "Set",
+      "set_password_note": "Signs {username} out everywhere."
+    },
+    "new_user": {
+      "title": "New local user",
+      "username": "Username",
+      "username_hint": "Lower-case letters, digits, dots, underscores and hyphens.",
+      "display_name": "Display name",
+      "display_name_hint": "Shown in the header. The username when left empty.",
+      "email": "Email address (optional)",
+      "password": "Password",
+      "password_hint": "At least {minimum} characters. Share it with them safely.",
+      "administrator": "Administrator",
+      "submit": "Create user"
+    },
+    "done": {
+      "created": "The account {username} was created.",
+      "granted": "{username} is now an administrator.",
+      "removed": "{username} is no longer an administrator.",
+      "disabled": "{username} is disabled and was signed out.",
+      "enabled": "{username} can sign in again.",
+      "password_set": "The password of {username} was set, and {username} was signed out everywhere."
+    },
+    "errors": {
+      "about": "{username}: {message}",
+      "username_invalid": "The username must be 1 to 64 characters among lower-case letters, digits, dots, underscores and hyphens, starting with a letter or a digit.",
+      "username_taken": "That username is taken.",
+      "email_taken": "That email address belongs to another user.",
+      "too_short": "The password must be at least {minimum} characters long.",
+      "too_long": "The password must be at most {maximum} characters long.",
+      "own_account": "You cannot change this on your own account.",
+      "not_found": "That user no longer exists.",
+      "unavailable": "The change could not be saved. Try again in a moment."
+    },
+    "groups": {
+      "tab": "Groups",
+      "intro": "Groups and their members come from the identity provider at each sign-in, so they are read-only here.",
+      "load_failed": "The groups could not be loaded. Try again in a moment.",
+      "empty": "No groups yet",
+      "empty_body": "Groups appear once people sign in with single sign-on and the provider sends a groups claim.",
+      "members": {
+        "one": "{count} member",
+        "other": "{count} members"
+      },
+      "no_members": "No members",
+      "disabled": "Disabled"
     }
   },
   "print": {

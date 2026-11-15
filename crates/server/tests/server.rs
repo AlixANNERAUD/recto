@@ -1692,3 +1692,532 @@ async fn password_form_refuses_cross_site_posts() {
     let response = harness.send(page("/", Some(&cookie))).await;
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+impl Harness {
+    /// Signs in a single sign-on user made administrator by hand and returns the session cookie.
+    async fn administrator(&self, subject: &str, username: &str) -> String {
+        let cookie = self.sign_in(subject, username).await;
+        let id = self.user_id(username).await;
+        users::set_administrator_from_command_line(&self.database, id, true)
+            .await
+            .unwrap();
+        cookie
+    }
+
+    async fn user(&self, username: &str) -> recto_entity::users::Model {
+        users::find_by_username(&self.database, username)
+            .await
+            .unwrap()
+            .expect("a user")
+    }
+}
+
+/// The administration forms of a user, as the Users page posts them.
+fn administration_forms(id: i64) -> [(String, Vec<(&'static str, &'static str)>); 4] {
+    [
+        ("/administration/users".to_owned(), new_user("dave")),
+        (
+            format!("/administration/users/{id}/administrator"),
+            vec![("value", "false")],
+        ),
+        (
+            format!("/administration/users/{id}/disabled"),
+            vec![("value", "true")],
+        ),
+        (
+            format!("/administration/users/{id}/password"),
+            vec![("password", "chosen by someone else")],
+        ),
+    ]
+}
+
+const DAVE_PASSWORD: &str = "dave's long password";
+
+fn new_user(username: &'static str) -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("username", username),
+        ("display_name", "Dave Example"),
+        ("email", "dave@example.test"),
+        ("password", DAVE_PASSWORD),
+    ]
+}
+
+#[tokio::test]
+async fn administration_is_hidden_from_non_admins() {
+    let harness = Harness::new().await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    let carol = harness.sign_in("carol-subject", "carol").await;
+    let admin_id = harness.user_id("admin").await;
+
+    // Administrators find it in the navigation; nobody else does.
+    let response = harness.send(page("/", Some(&admin))).await;
+    assert!(
+        text(response)
+            .await
+            .contains("href=\"/administration/users\"")
+    );
+    let response = harness.send(page("/", Some(&carol))).await;
+    assert!(!text(response).await.contains("/administration"));
+
+    for path in [
+        "/administration/users",
+        "/administration/groups",
+        "/administration/users/",
+        "/administration/groups/",
+    ] {
+        let response = harness.send(page(path, Some(&carol))).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        let html = text(response).await;
+        assert!(html.contains("Page not found"), "{path}: {html}");
+        assert!(
+            !html.contains("admin-subject") && !html.contains(">admin<"),
+            "{html}"
+        );
+    }
+    for (uri, fields) in administration_forms(admin_id) {
+        let response = harness.send(form(&uri, Some(&carol), &fields)).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+        assert!(text(response).await.contains("Page not found"), "{uri}");
+    }
+    // Not even a malformed form tells that the route exists.
+    let response = harness
+        .send(form(
+            &format!("/administration/users/{admin_id}/disabled"),
+            Some(&carol),
+            &[("value", "maybe")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let admin_row = harness.user("admin").await;
+    assert!(admin_row.is_administrator && !admin_row.is_disabled);
+    assert!(admin_row.password_hash.is_none());
+    assert!(
+        users::find_by_username(&harness.database, "dave")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Anonymous visitors are sent to sign in, as on every page.
+    let response = harness.send(page("/administration/users", None)).await;
+    assert_redirect(&response, "/sign-in?next=%2Fadministration%2Fusers");
+    for (uri, fields) in administration_forms(admin_id) {
+        let response = harness.send(form(&uri, None, &fields)).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn admin_creates_a_local_user_who_can_sign_in() {
+    let harness = Harness::new().await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+
+    let response = harness
+        .send(page("/administration/users", Some(&admin)))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    assert!(html.contains("New local user"), "{html}");
+    assert!(html.contains("action=\"/administration/users\""), "{html}");
+
+    let response = harness
+        .send(form(
+            "/administration/users",
+            Some(&admin),
+            &new_user("dave"),
+        ))
+        .await;
+    let dave = harness.user_id("dave").await;
+    assert_redirect(
+        &response,
+        &format!("/administration/users?done=created&user={dave}"),
+    );
+    let response = harness.send(page(&location(&response), Some(&admin))).await;
+    let html = text(response).await;
+    assert!(html.contains("The account dave was created."), "{html}");
+    assert!(html.contains("Dave Example"), "{html}");
+    assert!(html.contains("dave@example.test"), "{html}");
+    let row = harness.user("dave").await;
+    assert!(!row.is_administrator);
+
+    let session = harness.sign_in_with_password("dave", DAVE_PASSWORD).await;
+    assert_eq!(
+        harness.send(page("/", Some(&session))).await.status(),
+        StatusCode::OK
+    );
+
+    // A refused account keeps what was typed, except the password, and says why.
+    let mut taken = new_user("dave");
+    taken.push(("administrator", "on"));
+    for (fields, message) in [
+        (taken, "That username is taken."),
+        (
+            vec![
+                ("username", "Erin!"),
+                ("display_name", "Erin"),
+                ("password", DAVE_PASSWORD),
+            ],
+            "The username must be 1 to 64 characters",
+        ),
+        (
+            vec![
+                ("username", "erin"),
+                ("display_name", "Erin"),
+                ("email", "dave@example.test"),
+                ("password", DAVE_PASSWORD),
+            ],
+            "That email address belongs to another user.",
+        ),
+        (
+            vec![("username", "erin"), ("password", "too short")],
+            "The password must be at least 12 characters long.",
+        ),
+    ] {
+        let username = fields[0].1;
+        let response = harness
+            .send(form("/administration/users", Some(&admin), &fields))
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{message}");
+        let html = text(response).await;
+        assert!(html.contains(message), "{message}: {html}");
+        assert!(html.contains(&format!("value=\"{username}\"")), "{html}");
+        assert!(
+            !html.contains(DAVE_PASSWORD) && !html.contains("too short"),
+            "{html}"
+        );
+    }
+    assert!(
+        users::find_by_username(&harness.database, "erin")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // A new password ends the user's sessions; the new one signs in.
+    let response = harness
+        .send(form(
+            &format!("/administration/users/{dave}/password"),
+            Some(&admin),
+            &[("password", "a fresh long password")],
+        ))
+        .await;
+    assert_redirect(
+        &response,
+        &format!("/administration/users?done=password_set&user={dave}"),
+    );
+    let response = harness.send(page("/", Some(&session))).await;
+    assert_redirect(&response, "/sign-in?next=%2F");
+    harness
+        .sign_in_with_password("dave", "a fresh long password")
+        .await;
+    let response = harness
+        .send(form(
+            &format!("/administration/users/{dave}/password"),
+            Some(&admin),
+            &[("password", "short")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        text(response)
+            .await
+            .contains("dave: The password must be at least 12 characters long.")
+    );
+
+    // An administrator created as one.
+    let mut fields = new_user("erin");
+    fields[2] = ("email", "");
+    fields.push(("administrator", "on"));
+    let response = harness
+        .send(form("/administration/users", Some(&admin), &fields))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let erin = harness.user("erin").await;
+    assert!(erin.is_administrator && erin.email.is_none());
+
+    // Without local accounts there is no form, and posting one is refused.
+    let harness = Harness::with(Setup {
+        local_accounts: false,
+        ..Setup::default()
+    })
+    .await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    let response = harness
+        .send(page("/administration/users", Some(&admin)))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    assert!(!html.contains("New local user"), "{html}");
+    let response = harness
+        .send(form(
+            "/administration/users",
+            Some(&admin),
+            &new_user("dave"),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_disables_a_user_and_their_session_ends() {
+    let harness = Harness::new().await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    let alice = harness.sign_in("alice-subject", "alice").await;
+    let alice_id = harness.user_id("alice").await;
+
+    let response = harness
+        .send(form(
+            &format!("/administration/users/{alice_id}/disabled"),
+            Some(&admin),
+            &[("value", "true")],
+        ))
+        .await;
+    assert_redirect(
+        &response,
+        &format!("/administration/users?done=disabled&user={alice_id}"),
+    );
+    assert!(harness.user("alice").await.is_disabled);
+    let response = harness.send(page("/", Some(&alice))).await;
+    assert_redirect(&response, "/sign-in?next=%2F");
+    let response = harness
+        .send(page(
+            &format!("/administration/users?done=disabled&user={alice_id}"),
+            Some(&admin),
+        ))
+        .await;
+    let html = text(response).await;
+    assert!(
+        html.contains("alice is disabled and was signed out."),
+        "{html}"
+    );
+    assert!(html.contains("Disabled"), "{html}");
+
+    let response = harness
+        .send(form(
+            &format!("/administration/users/{alice_id}/disabled"),
+            Some(&admin),
+            &[("value", "false")],
+        ))
+        .await;
+    assert_redirect(
+        &response,
+        &format!("/administration/users?done=enabled&user={alice_id}"),
+    );
+    assert!(!harness.user("alice").await.is_disabled);
+
+    // Administration is granted and removed the same way.
+    for (value, done, expected) in [("true", "granted", true), ("false", "removed", false)] {
+        let response = harness
+            .send(form(
+                &format!("/administration/users/{alice_id}/administrator"),
+                Some(&admin),
+                &[("value", value)],
+            ))
+            .await;
+        assert_redirect(
+            &response,
+            &format!("/administration/users?done={done}&user={alice_id}"),
+        );
+        assert_eq!(harness.user("alice").await.is_administrator, expected);
+    }
+
+    // A user that does not exist.
+    let response = harness
+        .send(form(
+            "/administration/users/999999/disabled",
+            Some(&admin),
+            &[("value", "true")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(text(response).await.contains("That user no longer exists."));
+}
+
+#[tokio::test]
+async fn admin_cannot_disable_or_demote_themselves() {
+    let harness = Harness::new().await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    harness.sign_in("alice-subject", "alice").await;
+    let admin_id = harness.user_id("admin").await;
+    let alice_id = harness.user_id("alice").await;
+
+    let response = harness
+        .send(page("/administration/users", Some(&admin)))
+        .await;
+    let html = text(response).await;
+    for action in ["disabled", "administrator", "password"] {
+        assert!(
+            !html.contains(&format!("/administration/users/{admin_id}/{action}")),
+            "{action}: {html}"
+        );
+    }
+    for action in ["disabled", "administrator"] {
+        assert!(
+            html.contains(&format!("/administration/users/{alice_id}/{action}")),
+            "{action}: {html}"
+        );
+    }
+
+    for (action, value) in [("disabled", "true"), ("administrator", "false")] {
+        let response = harness
+            .send(form(
+                &format!("/administration/users/{admin_id}/{action}"),
+                Some(&admin),
+                &[("value", value)],
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{action}");
+        let html = text(response).await;
+        assert!(
+            html.contains("You cannot change this on your own account."),
+            "{html}"
+        );
+    }
+    let row = harness.user("admin").await;
+    assert!(row.is_administrator && !row.is_disabled);
+    let response = harness
+        .send(page("/administration/users", Some(&admin)))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn claim_granted_admin_has_no_manual_toggle() {
+    let harness = Harness::new().await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    let bob = users::sign_in_with_identity(
+        &harness.database,
+        &Identity {
+            issuer: "https://id.test/".into(),
+            subject: "bob-subject".into(),
+            preferred_username: Some("bob".into()),
+            administrator: Some(true),
+            ..Identity::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(bob.administrator_from_claim);
+
+    let response = harness
+        .send(page("/administration/users", Some(&admin)))
+        .await;
+    let html = text(response).await;
+    assert!(html.contains("From the identity provider"), "{html}");
+    assert!(
+        !html.contains(&format!("/administration/users/{}/administrator", bob.id)),
+        "{html}"
+    );
+    // Disabling stays possible.
+    assert!(
+        html.contains(&format!("/administration/users/{}/disabled", bob.id)),
+        "{html}"
+    );
+}
+
+#[tokio::test]
+async fn groups_page_lists_members() {
+    let harness = Harness::new().await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    for (subject, username, name, groups) in [
+        (
+            "alice-subject",
+            "alice",
+            "Alice Martin",
+            vec!["family", "office"],
+        ),
+        ("bob-subject", "bob", "Bob Martin", vec!["family"]),
+        ("carol-subject", "carol", "Carol Smith", vec!["office"]),
+    ] {
+        users::sign_in_with_identity(
+            &harness.database,
+            &Identity {
+                issuer: "https://id.test/".into(),
+                subject: subject.into(),
+                preferred_username: Some(username.into()),
+                name: Some(name.into()),
+                groups: Some(groups.into_iter().map(str::to_owned).collect()),
+                ..Identity::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+    // Carol leaves the office: the group stays, empty.
+    users::sign_in_with_identity(
+        &harness.database,
+        &Identity {
+            issuer: "https://id.test/".into(),
+            subject: "carol-subject".into(),
+            preferred_username: Some("carol".into()),
+            groups: Some(vec![]),
+            ..Identity::default()
+        },
+    )
+    .await
+    .unwrap();
+    users::sign_in_with_identity(
+        &harness.database,
+        &Identity {
+            issuer: "https://id.test/".into(),
+            subject: "alice-subject".into(),
+            preferred_username: Some("alice".into()),
+            name: Some("Alice Martin".into()),
+            groups: Some(vec!["family".into()]),
+            ..Identity::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let response = harness
+        .send(page("/administration/groups", Some(&admin)))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    assert!(html.contains("from the identity provider"), "{html}");
+    let family = html.find(">family<").expect("the family group");
+    let office = html.find(">office<").expect("the office group");
+    assert!(family < office, "{html}");
+    let family_section = &html[family..office];
+    assert!(family_section.contains("Alice Martin"), "{html}");
+    assert!(family_section.contains("Bob Martin"), "{html}");
+    assert!(!family_section.contains("Carol Smith"), "{html}");
+    assert!(html[office..].contains("No members"), "{html}");
+    // No form: groups are read-only.
+    assert!(!html.contains("action=\"/administration/groups"), "{html}");
+
+    // The Users page shows each user's groups too.
+    let response = harness
+        .send(page("/administration/users", Some(&admin)))
+        .await;
+    let html = text(response).await;
+    let bob = html.find("Bob Martin").expect("bob's row");
+    assert!(html[bob..].contains("family"), "{html}");
+}
+
+#[tokio::test]
+async fn administration_forms_refuse_cross_site_posts() {
+    let harness = Harness::new().await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    harness.local_user("alice", ALICE_PASSWORD).await;
+    let alice_id = harness.user_id("alice").await;
+
+    for (uri, fields) in administration_forms(alice_id) {
+        let mut request = form(&uri, Some(&admin), &fields);
+        let headers = request.headers_mut();
+        headers.insert(header::ORIGIN, "https://evil.example".parse().unwrap());
+        headers.insert("sec-fetch-site", "cross-site".parse().unwrap());
+        let response = harness.send(request).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{uri}");
+    }
+    let alice = harness.user("alice").await;
+    assert!(!alice.is_disabled && !alice.is_administrator);
+    harness.sign_in_with_password("alice", ALICE_PASSWORD).await;
+    assert!(
+        users::find_by_username(&harness.database, "dave")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}

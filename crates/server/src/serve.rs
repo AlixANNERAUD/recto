@@ -31,7 +31,7 @@ use crate::session_store::DatabaseSessionStore;
 pub use crate::state::AuthState;
 use crate::{
     config::Config,
-    routes::{auth, password, print, scan},
+    routes::{administration, auth, password, print, scan},
     session, state,
 };
 
@@ -55,19 +55,30 @@ pub fn leptos_options(config: &Config) -> LeptosOptions {
 /// Pages, forms, scan results and server functions need a signed-in user. Left open are
 /// `/health` (it touches neither CUPS nor the identity provider, so a container stays healthy
 /// while they are down), `/sign-in`, the `/auth/*` routes and pages, `/no-access`, and the
-/// assets the fallback serves (see `fallback`).
+/// assets the fallback serves (see `fallback`). The `/administration` pages and forms need an
+/// administrator.
 ///
 /// Must be called inside a Tokio runtime: the sign-in rate limit forgets old clients in the
 /// background.
 pub fn router(state: AppState, auth: AuthState) -> Router {
-    // The sign-in page is rendered by its own route, which first sends signed-in users on and,
-    // with only single sign-on, visitors to the provider.
-    let routes = generate_route_list_with_exclusions(App, Some(vec!["/sign-in".to_owned()]));
+    // Pages rendered by their own routes: the sign-in page first sends signed-in users on and,
+    // with only single sign-on, visitors to the provider; the administration pages load their
+    // data only for administrators.
+    let excluded = [
+        "/sign-in",
+        "/administration/users",
+        "/administration/groups",
+    ];
+    let routes = generate_route_list_with_exclusions(
+        App,
+        Some(excluded.into_iter().map(str::to_owned).collect()),
+    );
     let shell_options = state.leptos_options.clone();
     let body_limit = state.max_upload_size.saturating_add(print::FORM_SLACK);
     let methods = auth.sign_in_methods();
     let context = move || provide_context(methods);
     let password = password::router(state.clone(), &auth);
+    let administration = administration::router(state.clone(), &auth);
     let interface = Router::new()
         .route(
             "/print",
@@ -88,6 +99,7 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         .route("/health", get(|| async { "ok" }))
         .merge(auth::router().with_state(auth.clone()))
         .merge(password)
+        .merge(administration)
         .merge(interface)
         .layer(middleware::from_fn_with_state(
             auth.database.clone(),
