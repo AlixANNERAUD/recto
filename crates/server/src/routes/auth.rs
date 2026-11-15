@@ -13,8 +13,9 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
 };
-use recto_authentication::{OpenId, OpenIdError, PendingSignIn};
+use recto_authentication::{OpenId, OpenIdError, PendingSignIn, SignedIn};
 use recto_domain::users;
+use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use tower_sessions::Session;
 
@@ -113,7 +114,18 @@ async fn finish(
             return Redirect::to(&failure_location(&error, &next));
         }
     };
-    let user = match users::sign_in_with_identity(&auth.database, &signed_in.identity).await {
+    complete(&auth.database, session, &signed_in, &next).await
+}
+
+/// Signs in the user of an identity the provider vouched for: finds or creates the user, then
+/// starts the session. A disabled user gets the No access page and no session.
+async fn complete(
+    database: &DatabaseConnection,
+    session: &Session,
+    signed_in: &SignedIn,
+    next: &str,
+) -> Redirect {
+    let user = match users::sign_in_with_identity(database, &signed_in.identity).await {
         Ok(user) => user,
         Err(recto_domain::Error::Disabled) => {
             tracing::warn!(
@@ -124,15 +136,15 @@ async fn finish(
         }
         Err(error) => {
             tracing::error!(%error, "finding or creating the user failed");
-            return Redirect::to(&error_location("unavailable", &next));
+            return Redirect::to(&error_location("unavailable", next));
         }
     };
     if let Err(error) = session::sign_in(session, user.id, &signed_in.id_token).await {
         tracing::error!(%error, "starting the session failed");
-        return Redirect::to(&error_location("unavailable", &next));
+        return Redirect::to(&error_location("unavailable", next));
     }
     tracing::info!(user = user.username, "signed in");
-    Redirect::to(&next)
+    Redirect::to(next)
 }
 
 /// Ends the session, then the provider's session when it supports that; either way the
@@ -192,6 +204,104 @@ mod tests {
         ];
         for (error, location) in cases {
             assert_eq!(failure_location(&error, "/jobs"), location);
+        }
+    }
+
+    mod completion {
+        use std::sync::Arc;
+
+        use axum::http::header;
+        use recto_authentication::SignedIn;
+        use recto_domain::users::Identity;
+        use sea_orm::DatabaseConnection;
+
+        use super::super::*;
+        use crate::session_store::DatabaseSessionStore;
+
+        fn signed_in(subject: &str) -> SignedIn {
+            SignedIn {
+                identity: Identity {
+                    issuer: "https://id.test/".into(),
+                    subject: subject.into(),
+                    preferred_username: Some(subject.into()),
+                    ..Identity::default()
+                },
+                id_token: "token".into(),
+            }
+        }
+
+        fn location(redirect: Redirect) -> String {
+            let response = redirect.into_response();
+            response.headers()[header::LOCATION]
+                .to_str()
+                .unwrap()
+                .to_owned()
+        }
+
+        /// A session holding a sign-in in progress, as the callback finds it.
+        async fn pending(store: &DatabaseSessionStore) -> Session {
+            let session = Session::new(None, Arc::new(store.clone()), None);
+            session.insert(NEXT, "/jobs").await.unwrap();
+            session.save().await.unwrap();
+            Session::new(session.id(), Arc::new(store.clone()), None)
+        }
+
+        async fn sessions() -> (DatabaseConnection, DatabaseSessionStore) {
+            let database = recto_domain::testing::database().await;
+            let store = DatabaseSessionStore::new(database.clone());
+            (database, store)
+        }
+
+        #[tokio::test]
+        async fn a_signed_in_identity_starts_a_new_session() {
+            let (database, store) = sessions().await;
+            let session = pending(&store).await;
+            let before = session.id().unwrap();
+
+            let redirect = complete(&database, &session, &signed_in("alice"), "/jobs").await;
+
+            assert_eq!(location(redirect), "/jobs");
+            let user = users::find_by_username(&database, "alice")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(session.get::<i64>("user_id").await.unwrap(), Some(user.id));
+            assert_ne!(session.id(), Some(before));
+        }
+
+        #[tokio::test]
+        async fn a_disabled_user_has_no_access() {
+            let (database, store) = sessions().await;
+            let alice = users::sign_in_with_identity(&database, &signed_in("alice").identity)
+                .await
+                .unwrap();
+            users::set_disabled(&database, alice.id + 1, alice.id, true)
+                .await
+                .unwrap();
+            let session = pending(&store).await;
+
+            let redirect = complete(&database, &session, &signed_in("alice"), "/jobs").await;
+
+            assert_eq!(location(redirect), "/no-access");
+            assert_eq!(session.get::<i64>("user_id").await.unwrap(), None);
+        }
+
+        #[tokio::test]
+        async fn a_database_failure_offers_a_retry() {
+            let (_database, store) = sessions().await;
+            // Never migrated: finding the user fails for want of the tables.
+            let broken = recto_domain::database::connect("sqlite::memory:")
+                .await
+                .unwrap();
+            let session = pending(&store).await;
+
+            let redirect = complete(&broken, &session, &signed_in("alice"), "/jobs").await;
+
+            assert_eq!(
+                location(redirect),
+                "/auth/error?reason=unavailable&next=%2Fjobs"
+            );
+            assert_eq!(session.get::<i64>("user_id").await.unwrap(), None);
         }
     }
 }
