@@ -21,6 +21,7 @@ testing = []
 
 [dev-dependencies]
 recto-domain = { path = ".", features = ["testing"] }
+chrono.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 

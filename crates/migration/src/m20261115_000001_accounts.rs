@@ -132,6 +132,15 @@ impl MigrationTrait for Migration {
                 .to_owned(),
             )
             .await?;
+        // The unique index above leads with the issuer; finding a user's identities, and the
+        // cascade when a user is deleted, need their own.
+        manager
+            .create_index(index(
+                "index_user_identities_user",
+                UserIdentities::Table,
+                &["user_id"],
+            ))
+            .await?;
 
         manager
             .create_table(

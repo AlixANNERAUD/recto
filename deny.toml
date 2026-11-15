@@ -10,10 +10,10 @@ ignore = [
   # Timing attack on private-key RSA operations; openidconnect only verifies ID token signatures
   # with the provider's public key.
   { id = "RUSTSEC-2023-0071", reason = "rsa is only used for public-key signature verification" },
-  # SQLite bundled by libsqlite3-sys up to 0.38.2; sqlx-sqlite 0.9.0 (through SeaORM) requires
-  # <0.38, so the fixed 0.39 cannot be used yet. Exploiting it needs a database file and its -wal
-  # written by a less trusted party: recto only opens its own database, or a backup the operator
-  # restores.
+  # SQLite bundled by libsqlite3-sys 0.6.0 to 0.38.2 (SQLite before 3.54.0); Cargo.lock has 0.37.0.
+  # sqlx-sqlite 0.9.0 (through SeaORM) requires libsqlite3-sys >=0.30.1, <0.38.0, so the fixed
+  # 0.39 cannot be used yet. Exploiting it needs a database file and its -wal written by a less
+  # trusted party: recto only opens its own database, or a backup the operator restores.
   { id = "RUSTSEC-2026-0459", reason = "recto only opens its own database; upgrade once sqlx-sqlite allows libsqlite3-sys 0.39" },
 ]
 

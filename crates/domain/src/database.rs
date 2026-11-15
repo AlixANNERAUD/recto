@@ -114,7 +114,7 @@ pub async fn backup(database: &DatabaseConnection, destination: &Path) -> Result
 #[cfg(test)]
 mod tests {
     use recto_entity::entities::{group_memberships, groups, sessions, user_identities, users};
-    use sea_orm::EntityTrait;
+    use sea_orm::{ActiveModelTrait, EntityTrait, ModelTrait, PaginatorTrait, Set};
 
     use super::*;
 
@@ -175,6 +175,97 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    async fn insert_user(database: &DatabaseConnection, username: &str) -> users::Model {
+        users::ActiveModel {
+            username: Set(username.to_owned()),
+            display_name: Set(username.to_owned()),
+            created_at: Set(chrono::Utc::now().fixed_offset()),
+            ..Default::default()
+        }
+        .insert(database)
+        .await
+        .expect("insert a user")
+    }
+
+    async fn insert_group(database: &DatabaseConnection, name: &str) -> groups::Model {
+        groups::ActiveModel {
+            name: Set(name.to_owned()),
+            created_at: Set(chrono::Utc::now().fixed_offset()),
+            ..Default::default()
+        }
+        .insert(database)
+        .await
+        .expect("insert a group")
+    }
+
+    async fn insert_membership(database: &DatabaseConnection, group_id: i64, user_id: i64) {
+        group_memberships::ActiveModel {
+            group_id: Set(group_id),
+            user_id: Set(user_id),
+            ..Default::default()
+        }
+        .insert(database)
+        .await
+        .expect("insert a membership");
+    }
+
+    // Removing users and groups relies on these cascades; on SQLite they also prove that
+    // `connect` turned foreign keys on.
+    #[tokio::test]
+    async fn deleting_a_user_or_a_group_removes_what_hangs_off_it() {
+        let database = crate::testing::database().await;
+        let alice = insert_user(&database, "alice").await;
+        let bob = insert_user(&database, "bob").await;
+        user_identities::ActiveModel {
+            user_id: Set(alice.id),
+            issuer: Set("https://id.example".to_owned()),
+            subject: Set("alice".to_owned()),
+            created_at: Set(chrono::Utc::now().fixed_offset()),
+            ..Default::default()
+        }
+        .insert(&database)
+        .await
+        .expect("insert an identity");
+        let family = insert_group(&database, "family").await;
+        let friends = insert_group(&database, "friends").await;
+        insert_membership(&database, family.id, alice.id).await;
+        insert_membership(&database, family.id, bob.id).await;
+        insert_membership(&database, friends.id, bob.id).await;
+
+        alice.delete(&database).await.expect("delete alice");
+
+        assert_eq!(
+            user_identities::Entity::find()
+                .count(&database)
+                .await
+                .unwrap(),
+            0
+        );
+        let memberships = group_memberships::Entity::find()
+            .all(&database)
+            .await
+            .unwrap();
+        assert_eq!(memberships.len(), 2);
+        assert!(
+            memberships
+                .iter()
+                .all(|membership| membership.user_id == bob.id)
+        );
+
+        family
+            .delete(&database)
+            .await
+            .expect("delete the family group");
+
+        let memberships = group_memberships::Entity::find()
+            .all(&database)
+            .await
+            .unwrap();
+        assert_eq!(memberships.len(), 1);
+        assert_eq!(memberships[0].group_id, friends.id);
+        assert_eq!(users::Entity::find().count(&database).await.unwrap(), 1);
     }
 
     #[tokio::test]
