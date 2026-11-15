@@ -34,7 +34,9 @@ pub struct Identity {
     pub email: Option<String>,
     pub name: Option<String>,
     /// Whether the administrator claim grants administration; `None` when no such claim is
-    /// configured, which leaves administration as it is.
+    /// configured, which leaves administration as it is. The claim grants administration to a
+    /// user who does not have it and takes back only what it granted: an administrator appointed
+    /// by hand stays one whatever the claim says.
     pub administrator: Option<bool>,
     /// The groups claim; `None` when no such claim is configured or its value is unknown, which
     /// leaves memberships as they are.
@@ -70,7 +72,8 @@ pub struct UserSummary {
 /// A new user's username is the first non-empty of `preferred_username`, `email` and `subject`,
 /// with `-2`, `-3`… on a clash, and never changes afterwards. Each sign-in refreshes the display
 /// name (`name`, else the username), the email address (unless another user has it) and the
-/// last sign-in time, then applies the administrator and groups claims when they are known.
+/// last sign-in time, then applies the administrator and groups claims when they are known
+/// (see [`Identity::administrator`] for how the claim and manual grants combine).
 ///
 /// Two first sign-ins of the same person can race; the loser hits a unique index and the whole
 /// sign-in is retried once, which then finds the winner's user.
@@ -109,7 +112,9 @@ async fn sign_in_with_identity_once(
         changes.email = Set(Some(email));
     }
     match identity.administrator {
-        Some(true) => {
+        // A manual grant stays manual even when the claim agrees, so that a later `false` from
+        // the claim does not take it back.
+        Some(true) if !user.is_administrator => {
             changes.is_administrator = Set(true);
             changes.administrator_from_claim = Set(true);
         }
@@ -118,7 +123,7 @@ async fn sign_in_with_identity_once(
             changes.is_administrator = Set(false);
             changes.administrator_from_claim = Set(false);
         }
-        Some(false) | None => {}
+        Some(_) | None => {}
     }
     changes.last_sign_in_at = Set(Some(Utc::now().fixed_offset()));
     let user = changes.update(&transaction).await?;
@@ -728,6 +733,16 @@ mod tests {
         let kept = sign_in_with_identity(&database, &bob).await.unwrap();
         assert!(kept.is_administrator);
         assert!(!kept.administrator_from_claim);
+
+        // A claim that agrees with a manual grant does not take it over.
+        bob.administrator = Some(true);
+        let confirmed = sign_in_with_identity(&database, &bob).await.unwrap();
+        assert!(confirmed.is_administrator);
+        assert!(!confirmed.administrator_from_claim);
+        bob.administrator = Some(false);
+        let still = sign_in_with_identity(&database, &bob).await.unwrap();
+        assert!(still.is_administrator);
+        assert!(!still.administrator_from_claim);
     }
 
     #[tokio::test]
