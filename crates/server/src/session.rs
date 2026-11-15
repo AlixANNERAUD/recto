@@ -21,6 +21,7 @@ use recto_app::{i18n, messages, state::User};
 use recto_domain::users;
 use recto_entity::users as user_rows;
 use sea_orm::DatabaseConnection;
+use serde::{Deserialize, Serialize};
 use tower_sessions::{
     Expiry, Session, SessionManagerLayer,
     cookie::{SameSite, time::Duration},
@@ -34,8 +35,19 @@ const USER_ID: &str = "user_id";
 /// session is valid only when it was signed in at or after the user's `sessions_valid_after`,
 /// which ends sessions to the microsecond (see [`recto_domain::users::set_password`]).
 const SIGNED_IN_AT: &str = "signed_in_at";
-/// The ID token of the sign-in, a hint for the provider at sign-out; empty without one.
-const ID_TOKEN: &str = "id_token";
+/// How the session signed in ([`SignInMethod`]), which decides where signing out leads.
+const METHOD: &str = "sign_in_method";
+
+/// How a session signed in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignInMethod {
+    Password,
+    /// Through the provider, which gave this ID token: a hint for its end-session endpoint.
+    SingleSignOn {
+        id_token: String,
+    },
+}
 
 /// How long a signed-in session survives without a request.
 const SIGNED_IN: Duration = Duration::hours(12);
@@ -68,46 +80,52 @@ pub fn signing_in(session: &Session) {
 pub async fn sign_in(
     session: &Session,
     user_id: i64,
-    id_token: &str,
+    method: SignInMethod,
 ) -> Result<(), tower_sessions::session::Error> {
-    start(session, user_id, id_token, Utc::now().timestamp_micros()).await
+    start(session, user_id, method, Utc::now().timestamp_micros()).await
 }
 
 /// Signs the session in again after the user's sessions were ended at `cutoff` (their
 /// `sessions_valid_after`), as a password change does: the other sessions stay ended, this one
 /// carries on with a new id. Its sign-in time is never before the cutoff, so it survives even on
-/// a clock that has not moved since. The ID token is kept for the provider's sign-out.
+/// a clock that has not moved since. How it signed in is kept, for the sign-out.
 pub async fn sign_in_again(
     session: &Session,
     user_id: i64,
     cutoff: Option<DateTime<FixedOffset>>,
 ) -> Result<(), tower_sessions::session::Error> {
-    let id_token = session.get::<String>(ID_TOKEN).await?.unwrap_or_default();
+    // Only a password change signs a session in again, so a session that lost its method signed
+    // in with a password.
+    let method = session
+        .get::<SignInMethod>(METHOD)
+        .await?
+        .unwrap_or(SignInMethod::Password);
     let now = Utc::now().timestamp_micros();
     let signed_in_at = cutoff.map_or(now, |cutoff| now.max(cutoff.timestamp_micros()));
-    start(session, user_id, &id_token, signed_in_at).await
+    start(session, user_id, method, signed_in_at).await
 }
 
 async fn start(
     session: &Session,
     user_id: i64,
-    id_token: &str,
+    method: SignInMethod,
     signed_in_at: i64,
 ) -> Result<(), tower_sessions::session::Error> {
     session.cycle_id().await?;
     session.set_expiry(Some(Expiry::OnInactivity(SIGNED_IN)));
     session.insert(USER_ID, user_id).await?;
     session.insert(SIGNED_IN_AT, signed_in_at).await?;
-    session.insert(ID_TOKEN, id_token).await
+    session.insert(METHOD, method).await
 }
 
-/// Ends the session and returns its ID token, if any.
-pub async fn sign_out(session: &Session) -> Option<String> {
-    let id_token = session.get::<String>(ID_TOKEN).await.ok().flatten();
+/// Ends the session and returns how it signed in; `None` when it was not signed in, as on
+/// `/no-access`, where the provider signed the person in but recto did not.
+pub async fn sign_out(session: &Session) -> Option<SignInMethod> {
+    let method = session.get::<SignInMethod>(METHOD).await.ok().flatten();
     if let Err(error) = session.flush().await {
         tracing::warn!(%error, "ending the session failed");
     }
-    id_token
+    method
 }
 
 /// The [`User`] of a users row.
@@ -289,7 +307,10 @@ mod tests {
     async fn signing_in_again_is_never_before_the_cutoff() {
         let store = DatabaseSessionStore::new(recto_domain::testing::database().await);
         let session = Session::new(None, std::sync::Arc::new(store), None);
-        sign_in(&session, 1, "token").await.unwrap();
+        let method = SignInMethod::SingleSignOn {
+            id_token: "token".into(),
+        };
+        sign_in(&session, 1, method.clone()).await.unwrap();
         // A cutoff ahead of the clock, as a clock too coarse to have moved since would give.
         let cutoff = Utc::now() + chrono::TimeDelta::seconds(1);
 
@@ -300,10 +321,10 @@ mod tests {
         let signed_in_at = session.get::<i64>(SIGNED_IN_AT).await.unwrap().unwrap();
         assert_eq!(signed_in_at, cutoff.timestamp_micros());
         assert!(still_valid(&row(Some(cutoff)), signed_in_at));
-        // The ID token stays, for the provider's sign-out.
+        // How it signed in stays, for the sign-out.
         assert_eq!(
-            session.get::<String>(ID_TOKEN).await.unwrap().as_deref(),
-            Some("token")
+            session.get::<SignInMethod>(METHOD).await.unwrap(),
+            Some(method)
         );
     }
 }

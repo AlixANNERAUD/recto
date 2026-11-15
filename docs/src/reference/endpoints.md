@@ -52,7 +52,7 @@ are internal to the interface and may change between versions.
 | `POST /sign-in` | Signs in with a username or email address and a password, then redirects to the `next` path. Answers `401` with the form for a wrong password, and `429` after too many attempts (see [Password sign-in limit](accounts.md#password-sign-in-limit)). `404` with local accounts off. |
 | `GET /auth/login` | Starts a sign-in at the provider. |
 | `GET /auth/callback` | Where the provider sends people back; the redirect URI. |
-| `POST /auth/logout` | Ends the session. With a provider that has an end-session endpoint, it then sends the browser there, so the provider's session ends too. |
+| `POST /auth/logout` | Ends the session. A session signed in with a password then lands on `/sign-in`. One signed in through single sign-on goes on to the provider's end-session endpoint, when it has one, so the provider's session ends too, then to `/auth/signed-out`. |
 
 ## Health
 

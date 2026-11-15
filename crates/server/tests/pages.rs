@@ -11,6 +11,7 @@ use axum::{
 };
 use leptos::config::LeptosOptions;
 use recto::serve::{AuthState, router};
+use recto::session::SignInMethod;
 use recto::session_store::DatabaseSessionStore;
 use recto_app::state::AppState;
 use recto_authentication::{OpenId, OpenIdSettings};
@@ -143,7 +144,10 @@ impl Harness {
             .await
             .unwrap();
         let session = Session::new(None, Arc::new(self.sessions.clone()), None);
-        recto::session::sign_in(&session, user.id, "")
+        let method = SignInMethod::SingleSignOn {
+            id_token: "token".into(),
+        };
+        recto::session::sign_in(&session, user.id, method)
             .await
             .unwrap();
         session.save().await.unwrap();

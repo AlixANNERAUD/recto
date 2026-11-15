@@ -20,7 +20,7 @@ use serde::Deserialize;
 use tower_sessions::Session;
 
 use crate::{
-    session::{self, local_path},
+    session::{self, SignInMethod, local_path},
     state::AuthState,
 };
 
@@ -139,7 +139,10 @@ async fn complete(
             return Redirect::to(&error_location("unavailable", next));
         }
     };
-    if let Err(error) = session::sign_in(session, user.id, &signed_in.id_token).await {
+    let method = SignInMethod::SingleSignOn {
+        id_token: signed_in.id_token.clone(),
+    };
+    if let Err(error) = session::sign_in(session, user.id, method).await {
         tracing::error!(%error, "starting the session failed");
         return Redirect::to(&error_location("unavailable", next));
     }
@@ -147,13 +150,18 @@ async fn complete(
     Redirect::to(next)
 }
 
-/// Ends the session, then the provider's session when it supports that; either way the
-/// browser lands on `/auth/signed-out`. The provider's session is ended even without an ID
-/// token (on `/no-access` recto kept none): otherwise the next sign-in silently brings back the
-/// same refused account.
+/// Ends the session, then goes on according to how it signed in. A password session lands on
+/// `/sign-in`: the provider has no session of it to end. A single sign-on session goes on to the
+/// provider's end-session endpoint, when it has one, then to `/auth/signed-out`. So does a
+/// session that never signed in, without an ID token: on `/no-access` the provider signed the
+/// person in but recto kept nothing, and the next sign-in would silently bring back the same
+/// refused account.
 async fn logout(State(auth): State<AuthState>, session: Session) -> Redirect {
-    let id_token = session::sign_out(&session).await;
-    let id_token = id_token.filter(|token| !token.is_empty());
+    let id_token = match session::sign_out(&session).await {
+        Some(SignInMethod::Password) => return Redirect::to("/sign-in"),
+        Some(SignInMethod::SingleSignOn { id_token }) => Some(id_token),
+        None => None,
+    };
     let signed_out = auth.public("auth/signed-out");
     let provider = auth
         .openid

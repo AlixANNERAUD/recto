@@ -13,6 +13,7 @@ use axum::{
 };
 use leptos::config::LeptosOptions;
 use recto::serve::{AuthState, router};
+use recto::session::SignInMethod;
 use recto::session_store::DatabaseSessionStore;
 use recto_app::state::AppState;
 use recto_authentication::{OpenId, OpenIdSettings};
@@ -226,7 +227,10 @@ impl Harness {
             .await
             .unwrap();
         let session = Session::new(None, Arc::new(self.sessions.clone()), None);
-        recto::session::sign_in(&session, user.id, "")
+        let method = SignInMethod::SingleSignOn {
+            id_token: "token".into(),
+        };
+        recto::session::sign_in(&session, user.id, method)
             .await
             .unwrap();
         session.save().await.unwrap();
@@ -1005,6 +1009,59 @@ async fn sign_out_without_an_id_token_still_ends_the_provider_session() {
 }
 
 #[tokio::test]
+async fn sign_out_follows_how_the_session_signed_in() {
+    let provider = provider().await;
+    let harness = Harness::with(Setup {
+        issuer: Some(provider.uri()),
+        ..Setup::default()
+    })
+    .await;
+    // A first sign-in discovers the provider and its end-session endpoint.
+    let response = harness.send(page("/auth/login?next=/", None)).await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+    // Single sign-on: the provider's session ends too, with the ID token as a hint.
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let response = harness
+        .send(post("/auth/logout", &cookie, None, vec![]))
+        .await;
+    let logout = Url::parse(&location(&response)).unwrap();
+    assert_eq!(logout.path(), "/logout");
+    assert!(
+        logout
+            .query_pairs()
+            .any(|(name, value)| name == "id_token_hint" && value == "token"),
+        "{logout}"
+    );
+    let response = harness.send(page("/", Some(&cookie))).await;
+    assert_redirect(&response, "/sign-in?next=%2F");
+
+    // A password, even for a user who also signs in through the provider: back to the sign-in
+    // page, since the provider has no session of it.
+    harness.local_user("bob", ALICE_PASSWORD).await;
+    let cookie = harness.sign_in_with_password("bob", ALICE_PASSWORD).await;
+    let response = harness
+        .send(post("/auth/logout", &cookie, None, vec![]))
+        .await;
+    assert_redirect(&response, "/sign-in");
+    let response = harness.send(page("/", Some(&cookie))).await;
+    assert_redirect(&response, "/sign-in?next=%2F");
+    users::set_password(
+        &harness.database,
+        harness.user_id("alice").await,
+        ALICE_PASSWORD.to_owned(),
+        &PasswordPolicy { minimum_length: 12 },
+    )
+    .await
+    .unwrap();
+    let cookie = harness.sign_in_with_password("alice", ALICE_PASSWORD).await;
+    let response = harness
+        .send(post("/auth/logout", &cookie, None, vec![]))
+        .await;
+    assert_redirect(&response, "/sign-in");
+}
+
+#[tokio::test]
 async fn responses_carry_security_headers() {
     let harness = Harness::new().await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
@@ -1501,7 +1558,9 @@ async fn sign_in_routes_absent_without_local_accounts() {
     // A password is of no use without local accounts, so there is no Account page either.
     let alice = harness.user_id("alice").await;
     let session = Session::new(None, Arc::new(harness.sessions.clone()), None);
-    recto::session::sign_in(&session, alice, "").await.unwrap();
+    recto::session::sign_in(&session, alice, SignInMethod::Password)
+        .await
+        .unwrap();
     session.save().await.unwrap();
     let cookie = format!("recto_session={}", session.id().unwrap());
     let response = harness.send(page("/account", Some(&cookie))).await;

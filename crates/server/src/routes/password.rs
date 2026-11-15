@@ -44,7 +44,7 @@ use tower_sessions::Session;
 
 use super::render;
 use crate::{
-    session::{self, local_path},
+    session::{self, SignInMethod, local_path},
     state::AuthState,
 };
 
@@ -260,7 +260,7 @@ async fn signed_in(
             return Err(SignInRefusal::Unavailable);
         }
     };
-    if let Err(error) = session::sign_in(session, user.id, "").await {
+    if let Err(error) = session::sign_in(session, user.id, SignInMethod::Password).await {
         tracing::error!(%error, "starting the session failed");
         return Err(SignInRefusal::Unavailable);
     }

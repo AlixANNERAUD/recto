@@ -111,5 +111,10 @@ longer sign everyone out. And recto reads the user behind the session at every r
 disabling someone, or setting their password, ends their sessions at their next click rather
 than up to 12 hours later.
 
-Signing out ends the session in recto, then sends the browser to the provider's end-session
-endpoint, when there is one, so the provider's session ends too.
+Signing out ends the session in recto. What happens next depends on how the session signed in,
+not on the user, since a single sign-on user may also have a password. After a password sign-in,
+the browser lands on the sign-in page: the provider has no session to end. After single sign-on,
+recto sends the browser to the provider's end-session endpoint, when there is one, so the
+provider's session ends too; otherwise the next sign-in would silently reuse it. Someone the
+provider signed in but recto refused, on the **No access** page, goes to the provider too, so
+they can sign in with another account.

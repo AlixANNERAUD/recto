@@ -138,7 +138,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::session::{sign_in, sign_out};
+    use crate::session::{SignInMethod, sign_in, sign_out};
 
     async fn store() -> (DatabaseSessionStore, DatabaseConnection) {
         let database = recto_domain::testing::database().await;
@@ -201,7 +201,9 @@ mod tests {
     async fn a_stale_request_cannot_undo_a_sign_out() {
         let (store, database) = store().await;
         let signed_in = session(&store, None);
-        sign_in(&signed_in, 1, "token").await.unwrap();
+        sign_in(&signed_in, 1, SignInMethod::Password)
+            .await
+            .unwrap();
         signed_in.save().await.unwrap();
         let id = signed_in.id().unwrap();
 
@@ -209,8 +211,8 @@ mod tests {
         let slow = session(&store, Some(id));
         assert_eq!(slow.get::<i64>("user_id").await.unwrap(), Some(1));
         assert_eq!(
-            sign_out(&session(&store, Some(id))).await.as_deref(),
-            Some("token")
+            sign_out(&session(&store, Some(id))).await,
+            Some(SignInMethod::Password)
         );
         slow.save().await.unwrap();
 
@@ -229,7 +231,7 @@ mod tests {
         let slow = session(&store, Some(old));
         assert!(slow.get::<String>("openid.next").await.unwrap().is_some());
         let callback = session(&store, Some(old));
-        sign_in(&callback, 1, "token").await.unwrap();
+        sign_in(&callback, 1, SignInMethod::Password).await.unwrap();
         callback.save().await.unwrap();
         let new = callback.id().unwrap();
         assert_ne!(new, old);
