@@ -14,6 +14,11 @@ recto-entity.workspace = true
 recto-migration.workspace = true
 sea-orm.workspace = true
 thiserror.workspace = true
+chrono.workspace = true
+password-auth.workspace = true
+# Password hashing runs on the blocking thread pool.
+tokio.workspace = true
+tracing.workspace = true
 
 [features]
 # Test helpers shared with the server crate's tests.
@@ -21,9 +26,7 @@ testing = []
 
 [dev-dependencies]
 recto-domain = { path = ".", features = ["testing"] }
-chrono.workspace = true
 tempfile.workspace = true
-tokio.workspace = true
 
 [lints]
 workspace = true
