@@ -54,7 +54,10 @@ changelog_path = "CHANGELOG.md"
 changelog_include = [
   "recto-app",
   "recto-authentication",
+  "recto-domain",
+  "recto-entity",
   "recto-frontend",
+  "recto-migration",
   "recto-printing",
   "recto-scanning",
 ]
@@ -71,7 +74,19 @@ name = "recto-authentication"
 version_group = "recto"
 
 [[package]]
+name = "recto-domain"
+version_group = "recto"
+
+[[package]]
+name = "recto-entity"
+version_group = "recto"
+
+[[package]]
 name = "recto-frontend"
+version_group = "recto"
+
+[[package]]
+name = "recto-migration"
 version_group = "recto"
 
 [[package]]
