@@ -1,0 +1,83 @@
+# Releases with release-plz: merging to main opens or updates a release PR (version and
+# changelog); merging that PR tags vX.Y.Z and drafts the GitHub release, then release.yml
+# publishes the images and the release. See RELEASING.md.
+
+[workspace]
+release_always = false
+# An application, not a library: no public API to check, nothing on crates.io. Versions come
+# from the vX.Y.Z git tags.
+semver_check = false
+git_only = true
+dependencies_update = false
+# Every crate inherits the workspace version and reads it from the same tags; only `recto`
+# creates them and has a changelog.
+git_tag_name = "v{{ version }}"
+changelog_update = false
+git_tag_enable = false
+git_release_enable = false
+pr_name = "{% if version %}chore: release v{{ version }}{% else %}chore: release{% endif %}"
+git_release_body = "{{ changelog }}"
+# Published by release.yml once the image is published.
+git_release_draft = true
+
+[changelog]
+header = """
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+"""
+protect_breaking_commits = true
+sort_commits = "oldest"
+commit_parsers = [
+  { message = "^Merge pull request", skip = true },
+  { message = "^chore: release", skip = true },
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^docs?", group = "Documentation" },
+  { message = "^deprecated", group = "Deprecated" },
+  { message = "^security", group = "Security" },
+  { message = "^revert", group = "Reverted" },
+  { message = "^(chore|ci|build|test|style)", group = "Miscellaneous" },
+  { message = "^.*", group = "Other" },
+]
+
+[[package]]
+name = "recto"
+version_group = "recto"
+changelog_update = true
+changelog_path = "CHANGELOG.md"
+changelog_include = [
+  "recto-app",
+  "recto-authentication",
+  "recto-frontend",
+  "recto-printing",
+  "recto-scanning",
+]
+git_tag_enable = true
+git_release_enable = true
+git_release_name = "recto v{{ version }}"
+
+[[package]]
+name = "recto-app"
+version_group = "recto"
+
+[[package]]
+name = "recto-authentication"
+version_group = "recto"
+
+[[package]]
+name = "recto-frontend"
+version_group = "recto"
+
+[[package]]
+name = "recto-printing"
+version_group = "recto"
+
+[[package]]
+name = "recto-scanning"
+version_group = "recto"

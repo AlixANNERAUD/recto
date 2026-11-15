@@ -63,5 +63,9 @@ Open a pull request against `main`. Commit messages follow
 
 ## Release
 
-Pushing a tag `vX.Y.Z` builds the image for amd64 and arm64 and publishes it to
-`ghcr.io/alixanneraud/recto`.
+Releases use [release-plz](https://release-plz.dev). Pushes to `main` keep a release pull request
+open with the next version and its changelog; it is the only pull request recto uses. Merging it
+tags `vX.Y.Z`, builds the image for amd64 and arm64, publishes it to
+`ghcr.io/alixanneraud/recto` (and copies it to Docker Hub when configured) and publishes the
+GitHub release. Pushing a tag by hand does the same without a changelog. See `RELEASING.md` in
+the repository for the setup.

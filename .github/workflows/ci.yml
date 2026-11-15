@@ -44,6 +44,40 @@ jobs:
       - run: mise run test-sane
       - run: mise run deny
 
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-24.04
+    env:
+      HAS_CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      # Linked like the check job: the server links libsane.
+      - name: Install libsane
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libsane-dev libsane1 libclang-dev pkg-config
+      - uses: jdx/mise-action@v5.2.7
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          key: coverage
+      - run: mise run coverage
+      - name: Summarize
+        run: |
+          {
+            echo '## Coverage'
+            echo '```'
+            mise exec -- cargo llvm-cov report --summary-only $RECTO_SERVER_PACKAGES | tail -1
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      # Pull requests from forks and Dependabot get no secrets, and the owner may not have added
+      # CODECOV_TOKEN yet: the upload only fails the job when a token was there to use.
+      - uses: codecov/codecov-action@v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          disable_search: true
+          fail_ci_if_error: ${{ env.HAS_CODECOV_TOKEN == 'true' }}
+
   image:
     name: Container image (${{ matrix.architecture }})
     runs-on: ${{ matrix.runner }}
@@ -93,7 +127,7 @@ jobs:
   passed:
     name: CI passed
     if: always()
-    needs: [check, image]
+    needs: [check, coverage, image]
     runs-on: ubuntu-24.04
     steps:
       - name: Check that every job succeeded

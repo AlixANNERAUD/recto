@@ -1,8 +1,22 @@
 name: Release
 
-# Publishes the multi-architecture container image to the GitHub Container Registry when a
-# version tag is pushed. Both architectures build natively on their own runners.
+# Publishes the multi-architecture container image to the GitHub Container Registry, copies it to
+# Docker Hub and publishes the GitHub release. Both architectures build natively on their own
+# runners.
+#
+# release-plz.yml calls it after tagging a merged release PR. A version tag pushed by hand also
+# starts it, and it can be run again for an existing tag from the Actions tab.
 on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Version tag to release, such as v1.2.3
+        type: string
+        required: true
+    secrets:
+      DOCKERHUB_TOKEN:
+        description: Docker Hub access token (read, write, delete) of the DOCKERHUB_USERNAME variable's account
+        required: false
   workflow_dispatch:
     inputs:
       tag:
@@ -112,3 +126,81 @@ jobs:
           METADATA: ${{ steps.metadata.outputs.json }}
       - name: Inspect the image
         run: docker buildx imagetools inspect "$IMAGE:${{ steps.metadata.outputs.version }}"
+
+  # A copy of the image on Docker Hub, where most people look for images first. The tags are
+  # copied from the GitHub Container Registry, so both registries serve the same digests, and the
+  # repository's description follows the README. Skipped without the DOCKERHUB_USERNAME variable
+  # (forks); a failure here does not hold the GitHub release back.
+  docker-hub:
+    name: Copy the image to Docker Hub
+    needs: image
+    if: vars.DOCKERHUB_USERNAME != ''
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    permissions:
+      contents: read
+      packages: read
+    env:
+      HUB_IMAGE: docker.io/${{ vars.DOCKERHUB_USERNAME }}/recto
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: docker/setup-buildx-action@v4.4.1
+      - uses: docker/login-action@v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/login-action@v4.8.0
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - id: metadata
+        uses: docker/metadata-action@v6.2.0
+        with:
+          images: ${{ env.HUB_IMAGE }}
+          # The same tags as on the GitHub Container Registry.
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.TAG }}
+            type=semver,pattern={{major}},value=${{ env.TAG }}
+      - name: Copy the image
+        run: |
+          docker buildx imagetools create \
+            $(jq --raw-output '.tags | map("--tag " + .) | join(" ")' <<< "$METADATA") \
+            "ghcr.io/${GITHUB_REPOSITORY,,}:${{ steps.metadata.outputs.version }}"
+        env:
+          METADATA: ${{ steps.metadata.outputs.json }}
+      - name: Inspect the image
+        run: docker buildx imagetools inspect "$HUB_IMAGE:${{ steps.metadata.outputs.version }}"
+      - name: Update the description
+        uses: peter-evans/dockerhub-description@v5.0.0
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ vars.DOCKERHUB_USERNAME }}/recto
+          short-description: Print and scan from any browser, through your home server (CUPS, SANE, OpenID Connect)
+          readme-filepath: README.md
+          # The README links to the guide and to files of the repository by relative paths.
+          enable-url-completion: true
+
+  release:
+    name: GitHub release
+    needs: image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      # release-plz drafts the release with the changelog; a hand-pushed tag has none yet.
+      - name: Publish the release
+        run: |
+          prerelease=false
+          if [[ "$TAG" == *-* ]]; then prerelease=true; fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --draft=false --prerelease="$prerelease"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "recto $TAG" --generate-notes --verify-tag --prerelease="$prerelease"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -41,6 +41,7 @@ Builds are heavy: run one cargo command at a time.
 - The user guide in `docs/src` follows Diátaxis (tutorials, how-to guides, reference, explanation).
   A change to settings, pages or behaviour updates the matching pages.
 - Comments explain why, never restate the code. Docs are plain, concise English with no em dashes.
-- Work and push directly on `main`; there are no pull requests. Commits follow Conventional
-  Commits (`feat:`, `fix:`, `test:`, `build:`, `ci:`, `docs:`), imperative, with a body. Do not
-  mention AI tools and add no `Co-Authored-By` or "Generated with" lines.
+- Work and push directly on `main`; there are no pull requests, except the release PR that
+  release-plz opens and the owner merges to release (see `RELEASING.md`). Commits follow
+  Conventional Commits (`feat:`, `fix:`, `test:`, `build:`, `ci:`, `docs:`), imperative, with a
+  body. Do not mention AI tools and add no `Co-Authored-By` or "Generated with" lines.

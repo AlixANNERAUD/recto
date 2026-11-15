@@ -7,6 +7,7 @@
 
 <p align="center">
   <a href="https://github.com/AlixANNERAUD/recto/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/AlixANNERAUD/recto/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://codecov.io/github/AlixANNERAUD/recto"><img alt="Coverage" src="https://codecov.io/github/AlixANNERAUD/recto/graph/badge.svg"></a>
   <a href="https://alixanneraud.github.io/recto/"><img alt="Documentation" src="https://img.shields.io/badge/docs-guide-blue"></a>
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
 </p>
