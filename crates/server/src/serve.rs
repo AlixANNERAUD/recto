@@ -16,8 +16,9 @@ use axum::{
     routing::{get, post},
 };
 use leptos::config::LeptosOptions;
-use leptos_axum::{LeptosRoutes, generate_route_list};
-use recto_app::{App, shell, state::AppState};
+use leptos::prelude::provide_context;
+use leptos_axum::{LeptosRoutes, generate_route_list_with_exclusions};
+use recto_app::{App, pages::sign_in::SignInMethods, shell, state::AppState};
 use recto_authentication::User;
 use recto_authentication::csrf::{self, AllowedOrigin};
 use recto_scanning::{ResultStore, ScannerService};
@@ -30,7 +31,7 @@ use crate::session_store::DatabaseSessionStore;
 pub use crate::state::AuthState;
 use crate::{
     config::Config,
-    routes::{auth, print, scan},
+    routes::{auth, password, print, scan},
     session, state,
 };
 
@@ -53,12 +54,20 @@ pub fn leptos_options(config: &Config) -> LeptosOptions {
 ///
 /// Pages, forms, scan results and server functions need a signed-in user. Left open are
 /// `/health` (it touches neither CUPS nor the identity provider, so a container stays healthy
-/// while they are down), the `/auth/*` routes and pages, `/no-access`, and the assets the
-/// fallback serves (see `fallback`).
+/// while they are down), `/sign-in`, the `/auth/*` routes and pages, `/no-access`, and the
+/// assets the fallback serves (see `fallback`).
+///
+/// Must be called inside a Tokio runtime: the sign-in rate limit forgets old clients in the
+/// background.
 pub fn router(state: AppState, auth: AuthState) -> Router {
-    let routes = generate_route_list(App);
+    // The sign-in page is rendered by its own route, which first sends signed-in users on and,
+    // with only single sign-on, visitors to the provider.
+    let routes = generate_route_list_with_exclusions(App, Some(vec!["/sign-in".to_owned()]));
     let shell_options = state.leptos_options.clone();
     let body_limit = state.max_upload_size.saturating_add(print::FORM_SLACK);
+    let methods = auth.sign_in_methods();
+    let context = move || provide_context(methods);
+    let password = password::router(state.clone(), &auth);
     let interface = Router::new()
         .route(
             "/print",
@@ -68,14 +77,17 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         .route("/scan/results/{id}", get(scan::show))
         .route("/scan/results/{id}/download", get(scan::download))
         .route("/scan/results/{id}/save", post(scan::save))
-        .leptos_routes(&state, routes, move || shell(shell_options.clone()))
+        .leptos_routes_with_context(&state, routes, context, move || {
+            shell(shell_options.clone())
+        })
         // Only the routes above: the fallback checks the user itself, after serving assets.
         .route_layer(middleware::from_fn(session::require_user))
-        .fallback(fallback)
+        .fallback(move |state, request| fallback(state, methods, request))
         .with_state(state);
     Router::new()
         .route("/health", get(|| async { "ok" }))
         .merge(auth::router().with_state(auth.clone()))
+        .merge(password)
         .merge(interface)
         .layer(middleware::from_fn_with_state(
             auth.database.clone(),
@@ -166,9 +178,13 @@ pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     }
     let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!(%address, "listening");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    // The peer address is what the sign-in rate limit counts attempts by.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 
@@ -176,7 +192,11 @@ pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
 /// the not-found page for a signed-in user. The interface's router is lenient (`/jobs/` renders
 /// `/jobs`), so rendering it here for an anonymous visitor would bypass the routes' user check:
 /// anonymous visitors get the sign-in redirect or 401 instead.
-async fn fallback(State(state): State<AppState>, request: Request) -> Response {
+async fn fallback(
+    State(state): State<AppState>,
+    methods: SignInMethods,
+    request: Request,
+) -> Response {
     if matches!(*request.method(), Method::GET | Method::HEAD) {
         let mut probe = Request::new(Body::empty());
         *probe.method_mut() = request.method().clone();
@@ -193,7 +213,10 @@ async fn fallback(State(state): State<AppState>, request: Request) -> Response {
     if request.extensions().get::<User>().is_none() {
         return session::unauthenticated(&request);
     }
-    let not_found = leptos_axum::file_and_error_handler::<AppState, _>(shell);
+    let not_found = leptos_axum::file_and_error_handler_with_context::<AppState, _>(
+        move || provide_context(methods),
+        shell,
+    );
     not_found(request.uri().clone(), State(state), request).await
 }
 

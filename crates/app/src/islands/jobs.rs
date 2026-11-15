@@ -138,7 +138,7 @@ pub fn JobList(jobs: Vec<Job>, now: i64) -> impl IntoView {
                 <Alert tone=Tone::Warning>
                     {t!("auth.session_ended")}
                     " "
-                    <a class="underline underline-offset-4" href="/auth/login?next=%2Fjobs">
+                    <a class="underline underline-offset-4" href="/sign-in?next=%2Fjobs">
                         {t!("auth.sign_in_again")}
                     </a>
                 </Alert>

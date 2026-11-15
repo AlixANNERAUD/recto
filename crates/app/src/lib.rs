@@ -42,12 +42,14 @@ use leptos_router::{
     path,
 };
 use pages::{
+    account::AccountPage,
     auth::{SignInErrorPage, SignedOutPage},
     jobs::JobsPage,
     no_access::NoAccessPage,
     print::PrintPage,
     printers::PrintersPage,
     scan::ScanPage,
+    sign_in::SignInPage,
 };
 
 /// The page's Content Security Policy, for the request's nonce (Leptos makes one per request
@@ -120,6 +122,8 @@ pub fn App() -> impl IntoView {
                 <Route path=path!("/printers") view=PrintersPage ssr=SsrMode::Async />
                 <Route path=path!("/jobs") view=JobsPage ssr=SsrMode::Async />
                 <Route path=path!("/scan") view=ScanPage ssr=SsrMode::Async />
+                <Route path=path!("/account") view=AccountPage />
+                <Route path=path!("/sign-in") view=SignInPage />
                 <Route path=path!("/no-access") view=NoAccessPage />
                 <Route path=path!("/auth/error") view=SignInErrorPage />
                 <Route path=path!("/auth/signed-out") view=SignedOutPage />
@@ -128,8 +132,10 @@ pub fn App() -> impl IntoView {
     }
 }
 
+/// The page of an address that leads nowhere, with status 404. Also what a page answers to a
+/// user it has nothing for, such as the Account page to a user without a password.
 #[component]
-fn NotFound() -> impl IntoView {
+pub(crate) fn NotFound() -> impl IntoView {
     #[cfg(feature = "ssr")]
     if let Some(response) = use_context::<leptos_axum::ResponseOptions>() {
         response.set_status(axum::http::StatusCode::NOT_FOUND);

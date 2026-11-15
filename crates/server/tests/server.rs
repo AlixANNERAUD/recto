@@ -4,6 +4,7 @@
 //! do that.
 
 use std::{
+    net::SocketAddr,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -12,6 +13,7 @@ use std::{
 use axum::{
     Router,
     body::Body,
+    extract::ConnectInfo,
     http::{HeaderMap, Request, Response, StatusCode, header},
 };
 use leptos::config::LeptosOptions;
@@ -81,6 +83,8 @@ struct Setup {
     public_url: &'static str,
     /// The database of another harness, to restart on; a fresh one by default.
     database: Option<DatabaseConnection>,
+    local_accounts: bool,
+    trust_forwarded_headers: bool,
 }
 
 impl Default for Setup {
@@ -92,6 +96,8 @@ impl Default for Setup {
             issuer: Some(UNREACHABLE_ISSUER.into()),
             public_url: PUBLIC_URL,
             database: None,
+            local_accounts: true,
+            trust_forwarded_headers: false,
         }
     }
 }
@@ -164,7 +170,11 @@ impl Harness {
             .retry_after(Duration::ZERO);
             Arc::new(openid)
         });
-        let auth = AuthState::new(openid, public_url, database.clone());
+        let auth = AuthState {
+            local_accounts: setup.local_accounts,
+            trust_forwarded_headers: setup.trust_forwarded_headers,
+            ..AuthState::new(openid, public_url, database.clone())
+        };
         let sessions = auth.sessions.clone();
         Self {
             router: router(state, auth),
@@ -177,7 +187,42 @@ impl Harness {
     }
 
     async fn send(&self, request: Request<Body>) -> Response<Body> {
-        self.router.clone().oneshot(request).await.unwrap()
+        self.router
+            .clone()
+            .oneshot(from_peer(request))
+            .await
+            .unwrap()
+    }
+
+    /// Creates a local user with a password.
+    async fn local_user(&self, username: &str, password: &str) -> i64 {
+        let user = users::create_local(
+            &self.database,
+            users::NewLocalUser {
+                username: username.into(),
+                display_name: String::new(),
+                email: None,
+                password: password.into(),
+                is_administrator: false,
+            },
+            &PasswordPolicy { minimum_length: 12 },
+        )
+        .await
+        .unwrap();
+        user.id
+    }
+
+    /// Signs in through the password form and returns the session cookie it sets.
+    async fn sign_in_with_password(&self, login: &str, password: &str) -> String {
+        let response = self
+            .send(form(
+                "/sign-in",
+                None,
+                &[("login", login), ("password", password)],
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        session_cookie(response.headers()).expect("a session cookie")
     }
 
     /// Signs a user in, creating it at its first sign-in as the provider's callback does, and
@@ -216,6 +261,38 @@ impl Harness {
             .await
             .unwrap()
     }
+}
+
+/// Where test requests come from, as the server's connection info would say; set unless the
+/// request already names its peer.
+const PEER: [u8; 4] = [192, 0, 2, 1];
+
+fn from_peer(mut request: Request<Body>) -> Request<Body> {
+    if request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .is_none()
+    {
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from((PEER, 50_000))));
+    }
+    request
+}
+
+/// A URL-encoded form post from recto's own pages, with or without a session cookie.
+fn form(uri: &str, cookie: Option<&str>, fields: &[(&str, &str)]) -> Request<Body> {
+    let body: String = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(fields)
+        .finish();
+    let mut request = Request::post(uri)
+        .header(header::ORIGIN, ORIGIN)
+        .header("sec-fetch-site", "same-origin")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+    if let Some(cookie) = cookie {
+        request = request.header(header::COOKIE, cookie);
+    }
+    request.body(Body::from(body)).unwrap()
 }
 
 fn get(uri: &str) -> Request<Body> {
@@ -332,10 +409,10 @@ async fn health_is_public() {
 }
 
 #[tokio::test]
-async fn pages_redirect_to_login() {
+async fn pages_redirect_to_sign_in() {
     let harness = Harness::new().await;
     let response = harness.send(page("/", None)).await;
-    assert_redirect(&response, "/auth/login?next=%2F");
+    assert_redirect(&response, "/sign-in?next=%2F");
 
     // Anything that is not a page answers 401 rather than a redirect a script cannot follow.
     let (content_type, body) = multipart(&[("printer", "office")], Some(("a.pdf", PDF)));
@@ -799,7 +876,7 @@ async fn sign_in_with_unavailable_provider_offers_a_retry() {
     assert_eq!(response.status(), StatusCode::OK);
     let html = text(response).await;
     assert!(html.contains("Sign-in provider unavailable"), "{html}");
-    assert!(html.contains("href=\"/auth/login?next=%2Fjobs\""), "{html}");
+    assert!(html.contains("href=\"/sign-in?next=%2Fjobs\""), "{html}");
 
     // A path to another site is never kept as the place to come back to.
     let response = harness
@@ -897,7 +974,7 @@ async fn sign_out_ends_the_session() {
     // The provider was never discovered, so it has no end-session address to go to.
     assert_redirect(&response, "/auth/signed-out");
     let response = harness.send(page("/", Some(&cookie))).await;
-    assert_redirect(&response, "/auth/login?next=%2F");
+    assert_redirect(&response, "/sign-in?next=%2F");
     let response = harness.send(page("/auth/signed-out", None)).await;
     assert_eq!(response.status(), StatusCode::OK);
 }
@@ -1032,7 +1109,7 @@ async fn fallback_never_renders_the_interface_for_anonymous_visitors() {
     for path in ["/no-access/", "/jobs/", "/anything/", "/auth/error/x"] {
         let response = harness.send(page(path, None)).await;
         let next: String = url::form_urlencoded::byte_serialize(path.as_bytes()).collect();
-        assert_redirect(&response, &format!("/auth/login?next={next}"));
+        assert_redirect(&response, &format!("/sign-in?next={next}"));
         let body = text(response).await;
         assert!(!body.contains("<html"), "{path}: {body}");
     }
@@ -1081,7 +1158,7 @@ async fn disabled_user_is_signed_out_on_next_request() {
         .unwrap();
 
     let response = harness.send(page("/", Some(&browser))).await;
-    assert_redirect(&response, "/auth/login?next=%2F");
+    assert_redirect(&response, "/sign-in?next=%2F");
     let response = harness.send(api("list_jobs", &island)).await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     // Both sessions of the disabled user are gone; the administrator's stays.
@@ -1109,7 +1186,7 @@ async fn password_change_ends_existing_sessions() {
     .unwrap();
 
     let response = harness.send(page("/", Some(&cookie))).await;
-    assert_redirect(&response, "/auth/login?next=%2F");
+    assert_redirect(&response, "/sign-in?next=%2F");
     // Signing in again after the change works.
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let response = harness.send(page("/", Some(&cookie))).await;
@@ -1152,7 +1229,7 @@ async fn sign_in_routes_are_absent_without_openid_connect() {
         .await;
     assert_redirect(&response, "/auth/signed-out");
     let response = harness.send(page("/", Some(&cookie))).await;
-    assert_redirect(&response, "/auth/login?next=%2F");
+    assert_redirect(&response, "/sign-in?next=%2F");
 }
 
 #[tokio::test]
@@ -1171,4 +1248,447 @@ async fn unwritable_database_fails_at_startup() {
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(error.starts_with("cannot open the database "), "{error}");
     assert!(error.contains(&locked.display().to_string()), "{error}");
+}
+
+const ALICE_PASSWORD: &str = "correct horse battery";
+
+#[tokio::test]
+async fn password_sign_in_succeeds_and_redirects_to_next() {
+    let harness = Harness::new().await;
+    harness.local_user("alice", ALICE_PASSWORD).await;
+
+    // Both ways to sign in are offered, and both bring the visitor back to `next`.
+    let response = harness.send(page("/sign-in?next=/jobs", None)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    assert!(html.contains("action=\"/sign-in\""), "{html}");
+    assert!(html.contains("name=\"next\" value=\"/jobs\""), "{html}");
+    assert!(html.contains("href=\"/auth/login?next=%2Fjobs\""), "{html}");
+    assert!(html.contains("Sign in with single sign-on"), "{html}");
+
+    // A session planted before sign-in is replaced, not promoted (session fixation).
+    let planted = Session::new(None, Arc::new(harness.sessions.clone()), None);
+    planted.insert("planted", true).await.unwrap();
+    planted.save().await.unwrap();
+    let planted = format!("recto_session={}", planted.id().unwrap());
+    let response = harness
+        .send(form(
+            "/sign-in",
+            Some(&planted),
+            &[
+                ("login", "alice"),
+                ("password", ALICE_PASSWORD),
+                ("next", "/jobs"),
+            ],
+        ))
+        .await;
+    assert_redirect(&response, "/jobs");
+    let cookie = session_cookie(response.headers()).expect("a session cookie");
+    assert_ne!(cookie, planted);
+    let response = harness.send(page("/jobs", Some(&cookie))).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = harness.send(page("/jobs", Some(&planted))).await;
+    assert_redirect(&response, "/sign-in?next=%2Fjobs");
+
+    // Signed in, the sign-in page sends the user on.
+    let response = harness
+        .send(page("/sign-in?next=/scan", Some(&cookie)))
+        .await;
+    assert_redirect(&response, "/scan");
+
+    // Only paths on this site are followed after sign-in.
+    let response = harness
+        .send(form(
+            "/sign-in",
+            None,
+            &[
+                ("login", "alice"),
+                ("password", ALICE_PASSWORD),
+                ("next", "//evil.example/x"),
+            ],
+        ))
+        .await;
+    assert_redirect(&response, "/");
+}
+
+/// The page without what differs from one rendering to the next: the nonce (wherever Leptos
+/// puts it), and the login typed.
+fn without_nonce_and_login(html: &str, login: &str) -> String {
+    let nonce = html
+        .split("nonce=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("a nonce");
+    html.replace(nonce, "")
+        .replace(&format!("value=\"{login}\""), "value=\"\"")
+}
+
+#[tokio::test]
+async fn password_sign_in_failures_share_one_message() {
+    let harness = Harness::new().await;
+    harness.local_user("alice", ALICE_PASSWORD).await;
+    let disabled = harness.local_user("dave", ALICE_PASSWORD).await;
+    let administrator = harness.local_user("admin", ALICE_PASSWORD).await;
+    users::set_disabled(&harness.database, administrator, disabled, true)
+        .await
+        .unwrap();
+    // A single sign-on user, without a password.
+    harness.sign_in("carol-subject", "carol").await;
+    let sessions = harness.session_count().await;
+
+    let mut pages = Vec::new();
+    for (login, password) in [
+        ("alice", "wrong password, long enough"),
+        ("mallory", ALICE_PASSWORD),
+        ("carol", ALICE_PASSWORD),
+        ("dave", ALICE_PASSWORD),
+    ] {
+        let response = harness
+            .send(form(
+                "/sign-in",
+                None,
+                &[("login", login), ("password", password), ("next", "/jobs")],
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{login}");
+        assert!(session_cookie(response.headers()).is_none(), "{login}");
+        let html = text(response).await;
+        assert!(
+            html.contains("The username or password is wrong."),
+            "{login}: {html}"
+        );
+        // The login stays typed in; the password never comes back.
+        assert!(
+            html.contains(&format!("value=\"{login}\"")),
+            "{login}: {html}"
+        );
+        assert!(!html.contains(password), "{login}: {html}");
+        assert!(
+            html.contains("name=\"next\" value=\"/jobs\""),
+            "{login}: {html}"
+        );
+        pages.push(without_nonce_and_login(&html, login));
+    }
+    for page in &pages[1..] {
+        let differs = pages[0]
+            .bytes()
+            .zip(page.bytes())
+            .position(|(a, b)| a != b)
+            .unwrap_or(pages[0].len().min(page.len()));
+        assert!(
+            page == &pages[0],
+            "the failures must not be told apart, yet they differ from: {:?}",
+            &page[differs.saturating_sub(80)..(differs + 80).min(page.len())]
+        );
+    }
+    assert_eq!(harness.session_count().await, sessions);
+}
+
+/// Six sign-in attempts sent at once, each from the forwarded address of `forwarded`; the
+/// statuses that came back.
+async fn six_attempts(harness: &Harness, forwarded: impl Fn(usize) -> String) -> Vec<StatusCode> {
+    let mut attempts = tokio::task::JoinSet::new();
+    for attempt in 0..6 {
+        let mut request = form(
+            "/sign-in",
+            None,
+            &[
+                ("login", "alice"),
+                ("password", "wrong password, long enough"),
+            ],
+        );
+        request
+            .headers_mut()
+            .insert("x-forwarded-for", forwarded(attempt).parse().unwrap());
+        let router = harness.router.clone();
+        attempts.spawn(async move { router.oneshot(from_peer(request)).await.unwrap() });
+    }
+    let mut statuses = Vec::new();
+    while let Some(response) = attempts.join_next().await {
+        let response = response.unwrap();
+        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+            let html = text(response).await;
+            assert!(html.contains("Too many attempts"), "{html}");
+            assert!(html.contains("value=\"alice\""), "{html}");
+            statuses.push(StatusCode::TOO_MANY_REQUESTS);
+        } else {
+            statuses.push(response.status());
+        }
+    }
+    statuses
+}
+
+fn limited(statuses: &[StatusCode]) -> usize {
+    statuses
+        .iter()
+        .filter(|status| **status == StatusCode::TOO_MANY_REQUESTS)
+        .count()
+}
+
+#[tokio::test]
+async fn password_sign_in_is_rate_limited() {
+    // By default the forwarded headers are ignored: every attempt comes from the one peer, so a
+    // client cannot escape the limit by naming another address.
+    let harness = Harness::new().await;
+    harness.local_user("alice", ALICE_PASSWORD).await;
+    let statuses = six_attempts(&harness, |attempt| format!("10.0.0.{attempt}")).await;
+    assert_eq!(limited(&statuses), 1, "{statuses:?}");
+
+    // Behind a trusted proxy, each forwarded address has its own budget.
+    let harness = Harness::with(Setup {
+        trust_forwarded_headers: true,
+        ..Setup::default()
+    })
+    .await;
+    harness.local_user("alice", ALICE_PASSWORD).await;
+    let statuses = six_attempts(&harness, |attempt| format!("10.0.0.{attempt}")).await;
+    assert_eq!(limited(&statuses), 0, "{statuses:?}");
+    let statuses = six_attempts(&harness, |_| "10.0.1.1".to_owned()).await;
+    assert_eq!(limited(&statuses), 1, "{statuses:?}");
+}
+
+#[tokio::test]
+async fn sign_in_page_redirects_with_only_sso() {
+    let harness = Harness::with(Setup {
+        local_accounts: false,
+        ..Setup::default()
+    })
+    .await;
+    let response = harness.send(page("/", None)).await;
+    assert_redirect(&response, "/sign-in?next=%2F");
+    let response = harness.send(page("/sign-in?next=/jobs", None)).await;
+    assert_redirect(&response, "/auth/login?next=%2Fjobs");
+
+    // With only local accounts, the page has no single sign-on link.
+    let harness = Harness::with(Setup {
+        issuer: None,
+        ..Setup::default()
+    })
+    .await;
+    let response = harness.send(page("/sign-in", None)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    assert!(html.contains("action=\"/sign-in\""), "{html}");
+    assert!(!html.contains("/auth/login"), "{html}");
+    // Signed out, the way back is the sign-in page, which works without a provider.
+    let response = harness.send(page("/auth/signed-out", None)).await;
+    assert!(text(response).await.contains("href=\"/sign-in\""));
+}
+
+#[tokio::test]
+async fn sign_in_routes_absent_without_local_accounts() {
+    let harness = Harness::with(Setup {
+        local_accounts: false,
+        ..Setup::default()
+    })
+    .await;
+    harness.local_user("alice", ALICE_PASSWORD).await;
+    let response = harness
+        .send(form(
+            "/sign-in",
+            None,
+            &[("login", "alice"), ("password", ALICE_PASSWORD)],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(session_cookie(response.headers()).is_none());
+
+    // A password is of no use without local accounts, so there is no Account page either.
+    let alice = harness.user_id("alice").await;
+    let session = Session::new(None, Arc::new(harness.sessions.clone()), None);
+    recto::session::sign_in(&session, alice, "").await.unwrap();
+    session.save().await.unwrap();
+    let cookie = format!("recto_session={}", session.id().unwrap());
+    let response = harness.send(page("/account", Some(&cookie))).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = harness
+        .send(form(
+            "/account/password",
+            Some(&cookie),
+            &[
+                ("current", ALICE_PASSWORD),
+                ("new", "another long password"),
+                ("confirm", "another long password"),
+            ],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn changing_password_keeps_this_session_only() {
+    let harness = Harness::new().await;
+    harness.local_user("alice", ALICE_PASSWORD).await;
+    let this = harness.sign_in_with_password("alice", ALICE_PASSWORD).await;
+    let other = harness.sign_in_with_password("alice", ALICE_PASSWORD).await;
+
+    // Users with a password find the Account page in the header.
+    let response = harness.send(page("/", Some(&this))).await;
+    assert!(text(response).await.contains("href=\"/account\""));
+    let response = harness.send(page("/account", Some(&this))).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    assert!(html.contains("action=\"/account/password\""), "{html}");
+    assert!(html.contains("At least 12 characters."), "{html}");
+
+    let change = |current: &str, new: &str, confirm: &str| {
+        form(
+            "/account/password",
+            Some(&this),
+            &[("current", current), ("new", new), ("confirm", confirm)],
+        )
+    };
+    for (request, message) in [
+        (
+            change(
+                "not my password",
+                "another long password",
+                "another long password",
+            ),
+            "The current password is wrong.",
+        ),
+        (
+            change(
+                ALICE_PASSWORD,
+                "another long password",
+                "another long passwork",
+            ),
+            "The new passwords do not match.",
+        ),
+        (
+            change(ALICE_PASSWORD, "too short", "too short"),
+            "The new password must be at least 12 characters long.",
+        ),
+    ] {
+        let response = harness.send(request).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{message}");
+        let html = text(response).await;
+        assert!(html.contains(message), "{message}: {html}");
+        assert!(!html.contains(ALICE_PASSWORD), "{html}");
+    }
+    // Refused changes leave both sessions signed in.
+    for cookie in [&this, &other] {
+        let response = harness.send(page("/", Some(cookie))).await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let response = harness
+        .send(change(
+            ALICE_PASSWORD,
+            "another long password",
+            "another long password",
+        ))
+        .await;
+    assert_redirect(&response, "/account?changed=1");
+    // This session carries on under a new id.
+    let renewed = session_cookie(response.headers()).expect("a new session id");
+    assert_ne!(renewed, this);
+    let response = harness
+        .send(page("/account?changed=1", Some(&renewed)))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(text(response).await.contains("Your password was changed."));
+
+    // The other session ended; the new password signs in, the old one no longer does.
+    for ended in [&other, &this] {
+        let response = harness.send(page("/", Some(ended))).await;
+        assert_redirect(&response, "/sign-in?next=%2F");
+    }
+    harness
+        .sign_in_with_password("alice", "another long password")
+        .await;
+    let response = harness
+        .send(form(
+            "/sign-in",
+            None,
+            &[("login", "alice"), ("password", ALICE_PASSWORD)],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn account_page_is_only_for_users_with_a_password() {
+    let harness = Harness::new().await;
+    let cookie = harness.sign_in("carol-subject", "carol").await;
+    let response = harness.send(page("/", Some(&cookie))).await;
+    assert!(!text(response).await.contains("href=\"/account\""));
+    let response = harness.send(page("/account", Some(&cookie))).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(text(response).await.contains("Page not found"));
+    let response = harness
+        .send(form(
+            "/account/password",
+            Some(&cookie),
+            &[
+                ("current", ""),
+                ("new", "a long new password"),
+                ("confirm", "a long new password"),
+            ],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(
+        users::find_by_username(&harness.database, "carol")
+            .await
+            .unwrap()
+            .unwrap()
+            .password_hash
+            .is_none()
+    );
+
+    // Anonymous visitors are sent to sign in first.
+    let response = harness.send(page("/account", None)).await;
+    assert_redirect(&response, "/sign-in?next=%2Faccount");
+    let response = harness
+        .send(form(
+            "/account/password",
+            None,
+            &[("current", ""), ("new", ""), ("confirm", "")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn password_form_refuses_cross_site_posts() {
+    let harness = Harness::new().await;
+    harness.local_user("alice", ALICE_PASSWORD).await;
+    let cookie = harness.sign_in_with_password("alice", ALICE_PASSWORD).await;
+    let sessions = harness.session_count().await;
+
+    let forged = |uri: &str, cookie: Option<&str>, fields: &[(&str, &str)]| {
+        let mut request = form(uri, cookie, fields);
+        let headers = request.headers_mut();
+        headers.insert(header::ORIGIN, "https://evil.example".parse().unwrap());
+        headers.insert("sec-fetch-site", "cross-site".parse().unwrap());
+        request
+    };
+    let response = harness
+        .send(forged(
+            "/sign-in",
+            None,
+            &[("login", "alice"), ("password", ALICE_PASSWORD)],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(session_cookie(response.headers()).is_none());
+    assert_eq!(harness.session_count().await, sessions);
+
+    let response = harness
+        .send(forged(
+            "/account/password",
+            Some(&cookie),
+            &[
+                ("current", ALICE_PASSWORD),
+                ("new", "chosen by the attacker"),
+                ("confirm", "chosen by the attacker"),
+            ],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    // The password is unchanged, and the session still signed in.
+    harness.sign_in_with_password("alice", ALICE_PASSWORD).await;
+    let response = harness.send(page("/", Some(&cookie))).await;
+    assert_eq!(response.status(), StatusCode::OK);
 }

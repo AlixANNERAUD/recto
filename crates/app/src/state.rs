@@ -65,7 +65,7 @@ pub fn require_user() -> Result<User, ServerFnError> {
         })
         .unwrap_or_else(|| "/".to_owned());
     leptos_axum::redirect(&format!(
-        "/auth/login?next={}",
+        "/sign-in?next={}",
         crate::pages::auth::encode_component(&next)
     ));
     Err(ServerFnError::new(crate::messages::sign_in_required(

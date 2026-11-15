@@ -10,8 +10,8 @@ use crate::{
     t,
 };
 
-/// `/auth/error?reason=<unavailable|state|rejected>&next=<path>`: why the sign-in failed, with
-/// a link starting it again and coming back to `next`.
+/// `/auth/error?reason=<unavailable|state|rejected>&next=<path>`: why the single sign-on failed,
+/// with a link back to the sign-in page, which comes back to `next`.
 #[component]
 pub fn SignInErrorPage() -> impl IntoView {
     let query = use_query_map();
@@ -22,7 +22,7 @@ pub fn SignInErrorPage() -> impl IntoView {
     };
     let retry = move || {
         let next = query.read().get("next").unwrap_or_else(|| "/".to_owned());
-        format!("/auth/login?next={}", encode_component(&next))
+        format!("/sign-in?next={}", encode_component(&next))
     };
     view! {
         <Bare title=t!("auth.errors.heading")>
@@ -42,7 +42,7 @@ pub fn SignedOutPage() -> impl IntoView {
     view! {
         <Bare title=t!("auth.signed_out.heading")>
             <p>
-                <a href="/auth/login" class=button_class(ButtonVariant::Primary)>
+                <a href="/sign-in" class=button_class(ButtonVariant::Primary)>
                     {t!("auth.signed_out.sign_in")}
                 </a>
             </p>

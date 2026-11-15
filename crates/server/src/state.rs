@@ -3,8 +3,9 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use recto_app::state::AppState;
+use recto_app::{pages::sign_in::SignInMethods, state::AppState};
 use recto_authentication::{OpenId, OpenIdSettings};
+use recto_domain::passwords::PasswordPolicy;
 use recto_printing::Cups;
 use recto_scanning::{
     ResultStore, SaneScanners, ScanError, ScanRequest, ScannedPage, ScannerCapabilities,
@@ -31,9 +32,18 @@ pub struct AuthState {
     pub database: DatabaseConnection,
     /// The sessions, in the same database; the server deletes expired ones in the background.
     pub sessions: DatabaseSessionStore,
+    /// Whether local accounts sign in with a password (`/sign-in`).
+    pub local_accounts: bool,
+    /// The rules of new passwords.
+    pub password_policy: PasswordPolicy,
+    /// Whether the client address of a password sign-in, which its rate limit counts attempts
+    /// by, comes from the forwarded headers rather than from the connection.
+    pub trust_forwarded_headers: bool,
 }
 
 impl AuthState {
+    /// The sign-in state with the defaults of the configuration: local accounts on, passwords of
+    /// at least 12 characters, forwarded headers ignored.
     pub fn new(openid: Option<Arc<OpenId>>, public_url: Url, database: DatabaseConnection) -> Self {
         let secure_cookies = public_url.scheme() == "https";
         Self {
@@ -42,6 +52,18 @@ impl AuthState {
             secure_cookies,
             sessions: DatabaseSessionStore::new(database.clone()),
             database,
+            local_accounts: true,
+            password_policy: PasswordPolicy { minimum_length: 12 },
+            trust_forwarded_headers: false,
+        }
+    }
+
+    /// How people sign in, for the pages.
+    pub fn sign_in_methods(&self) -> SignInMethods {
+        SignInMethods {
+            password: self.local_accounts,
+            single_sign_on: self.openid.is_some(),
+            password_minimum_length: self.password_policy.minimum_length,
         }
     }
 
@@ -148,7 +170,14 @@ pub async fn build(
                 groups_claim: config.oidc_groups_claim.clone(),
             }))
         });
-    let auth = AuthState::new(openid, config.public_url.clone(), database);
+    let auth = AuthState {
+        local_accounts: config.local_accounts,
+        password_policy: PasswordPolicy {
+            minimum_length: config.password_minimum_length,
+        },
+        trust_forwarded_headers: config.trust_forwarded_headers,
+        ..AuthState::new(openid, config.public_url.clone(), database)
+    };
     (state, auth)
 }
 

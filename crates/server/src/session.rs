@@ -16,7 +16,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
 };
-use chrono::Utc;
+use chrono::{DateTime, FixedOffset, Utc};
 use recto_app::{i18n, messages};
 use recto_authentication::User;
 use recto_domain::users;
@@ -71,12 +71,34 @@ pub async fn sign_in(
     user_id: i64,
     id_token: &str,
 ) -> Result<(), tower_sessions::session::Error> {
+    start(session, user_id, id_token, Utc::now().timestamp_micros()).await
+}
+
+/// Signs the session in again after the user's sessions were ended at `cutoff` (their
+/// `sessions_valid_after`), as a password change does: the other sessions stay ended, this one
+/// carries on with a new id. Its sign-in time is never before the cutoff, so it survives even on
+/// a clock that has not moved since. The ID token is kept for the provider's sign-out.
+pub async fn sign_in_again(
+    session: &Session,
+    user_id: i64,
+    cutoff: Option<DateTime<FixedOffset>>,
+) -> Result<(), tower_sessions::session::Error> {
+    let id_token = session.get::<String>(ID_TOKEN).await?.unwrap_or_default();
+    let now = Utc::now().timestamp_micros();
+    let signed_in_at = cutoff.map_or(now, |cutoff| now.max(cutoff.timestamp_micros()));
+    start(session, user_id, &id_token, signed_in_at).await
+}
+
+async fn start(
+    session: &Session,
+    user_id: i64,
+    id_token: &str,
+    signed_in_at: i64,
+) -> Result<(), tower_sessions::session::Error> {
     session.cycle_id().await?;
     session.set_expiry(Some(Expiry::OnInactivity(SIGNED_IN)));
     session.insert(USER_ID, user_id).await?;
-    session
-        .insert(SIGNED_IN_AT, Utc::now().timestamp_micros())
-        .await?;
+    session.insert(SIGNED_IN_AT, signed_in_at).await?;
     session.insert(ID_TOKEN, id_token).await
 }
 
@@ -151,9 +173,10 @@ pub async fn load_user(
     next.run(request).await
 }
 
-/// Paths that render for anyone: the pages explaining a failed or ended sign-in.
+/// Paths that render for anyone: the sign-in page and form, and the pages explaining a failed
+/// or ended sign-in.
 fn is_public(path: &str) -> bool {
-    path == "/no-access" || path.starts_with("/auth/")
+    path == "/sign-in" || path == "/no-access" || path.starts_with("/auth/")
 }
 
 /// Middleware letting only signed-in users through, except to the public paths.
@@ -165,7 +188,7 @@ pub async fn require_user(request: Request, next: Next) -> Response {
 }
 
 /// The answer to an anonymous request for something that needs a user. A browser navigating
-/// to a page is sent to sign in and brought back; anything else (forms, downloads, server
+/// to a page is sent to the sign-in page and brought back; anything else (forms, downloads, server
 /// functions, images) gets 401, which a script can handle and an `<img>` simply fails on.
 /// Server functions get it as a server function error carrying [`messages::SIGNED_OUT`], since
 /// the islands only see the decoded error, not the status.
@@ -181,7 +204,7 @@ pub fn unauthenticated(request: &Request) -> Response {
             .path_and_query()
             .map_or("/", |path| path.as_str());
         let next: String = url::form_urlencoded::byte_serialize(target.as_bytes()).collect();
-        Redirect::to(&format!("/auth/login?next={next}")).into_response()
+        Redirect::to(&format!("/sign-in?next={next}")).into_response()
     } else {
         let locale = i18n::from_headers(request.headers());
         (StatusCode::UNAUTHORIZED, messages::sign_in_required(locale)).into_response()
@@ -261,5 +284,27 @@ mod tests {
             ..row(None)
         };
         assert!(!still_valid(&disabled, micros));
+    }
+
+    #[tokio::test]
+    async fn signing_in_again_is_never_before_the_cutoff() {
+        let store = DatabaseSessionStore::new(recto_domain::testing::database().await);
+        let session = Session::new(None, std::sync::Arc::new(store), None);
+        sign_in(&session, 1, "token").await.unwrap();
+        // A cutoff ahead of the clock, as a clock too coarse to have moved since would give.
+        let cutoff = Utc::now() + chrono::TimeDelta::seconds(1);
+
+        sign_in_again(&session, 1, Some(cutoff.fixed_offset()))
+            .await
+            .unwrap();
+
+        let signed_in_at = session.get::<i64>(SIGNED_IN_AT).await.unwrap().unwrap();
+        assert_eq!(signed_in_at, cutoff.timestamp_micros());
+        assert!(still_valid(&row(Some(cutoff)), signed_in_at));
+        // The ID token stays, for the provider's sign-out.
+        assert_eq!(
+            session.get::<String>(ID_TOKEN).await.unwrap().as_deref(),
+            Some("token")
+        );
     }
 }

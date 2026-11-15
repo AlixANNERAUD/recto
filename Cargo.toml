@@ -61,6 +61,8 @@ sea-orm = { version = "2.0.4", default-features = false, features = ["sqlx-sqlit
 sea-orm-migration = { version = "2.0.4", default-features = false, features = ["sqlx-sqlite", "sqlx-postgres", "runtime-tokio-rustls"] }
 # Argon2id hashing of local account passwords.
 password-auth = "2.0.0"
+# Rate limit of password sign-in per client address.
+tower_governor = { version = "0.8.0", default-features = false, features = ["axum"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

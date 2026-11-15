@@ -12,6 +12,8 @@ pub enum IconKind {
     Scan,
     SignOut,
     Refresh,
+    /// A person: the user's account.
+    Account,
 }
 
 impl IconKind {
@@ -37,6 +39,10 @@ impl IconKind {
                 "M20 12H10",
             ],
             IconKind::Refresh => &["M20 12a8 8 0 1 1-2.34-5.66", "M20 4v4h-4"],
+            IconKind::Account => &[
+                "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+                "M4 20a8 8 0 0 1 16 0",
+            ],
         }
     }
 }

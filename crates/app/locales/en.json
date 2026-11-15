@@ -11,7 +11,8 @@
     "jobs": "Jobs",
     "scan": "Scan",
     "signed_in_as": "Signed in as {name}",
-    "sign_out_as": "Sign out {name}"
+    "sign_out_as": "Sign out {name}",
+    "account_of": "Account of {name}"
   },
   "common": {
     "network_error": "Could not reach recto. Check your connection and try again."
@@ -58,6 +59,36 @@
     "signed_out": {
       "heading": "You are signed out",
       "sign_in": "Sign in again"
+    },
+    "single_sign_on": "Sign in with single sign-on",
+    "or": "or",
+    "password": {
+      "login": "Username or email address",
+      "password": "Password",
+      "invalid": "The username or password is wrong.",
+      "too_many": "Too many attempts. Wait a few seconds, then try again.",
+      "unavailable": "Signing in failed. Try again in a moment."
+    }
+  },
+  "account": {
+    "title": "Account",
+    "signed_in_as": "Signed in as {name} ({username}).",
+    "changed": "Your password was changed. Your other sessions were signed out.",
+    "password": {
+      "title": "Change password",
+      "current": "Current password",
+      "new": "New password",
+      "hint": "At least {minimum} characters.",
+      "confirm": "Repeat the new password",
+      "others_signed_out": "Changing it signs you out everywhere else.",
+      "submit": "Change password"
+    },
+    "errors": {
+      "wrong_current": "The current password is wrong.",
+      "mismatch": "The new passwords do not match.",
+      "too_short": "The new password must be at least {minimum} characters long.",
+      "too_long": "The new password must be at most {maximum} characters long.",
+      "unavailable": "The password could not be changed. Try again in a moment."
     }
   },
   "print": {

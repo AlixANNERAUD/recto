@@ -1,6 +1,7 @@
-//! The frame around every signed-in page: a header with the app name, the user and Sign out,
-//! and the navigation. On phones the navigation is a row of icons under the header; from the
-//! `md` breakpoint it becomes a rail on the side, as in Fluent's navigation drawer.
+//! The frame around every signed-in page: a header with the app name, the user (a link to the
+//! Account page for users with a password) and Sign out, and the navigation. On phones the
+//! navigation is a row of icons under the header; from the `md` breakpoint it becomes a rail on
+//! the side, as in Fluent's navigation drawer.
 
 use leptos::prelude::*;
 use leptos_meta::Title;
@@ -25,15 +26,19 @@ fn destinations() -> [(&'static str, String, IconKind); 4] {
     ]
 }
 
-/// The name of the signed-in user, for the header.
+/// The name of the signed-in user, for the header, and whether they have an Account page: only
+/// a password can be changed there, so only users with one while local accounts are on.
 #[cfg(feature = "ssr")]
-fn user_name() -> Option<String> {
-    crate::state::current_user().map(|user| user.name)
+fn user_name() -> Option<(String, bool)> {
+    let user = crate::state::current_user()?;
+    let password =
+        crate::pages::sign_in::SignInMethods::current().is_some_and(|methods| methods.password);
+    Some((user.name, password && user.is_local))
 }
 
 /// Pages render on the server only.
 #[cfg(not(feature = "ssr"))]
-fn user_name() -> Option<String> {
+fn user_name() -> Option<(String, bool)> {
     None
 }
 
@@ -72,11 +77,35 @@ pub fn Layout(#[prop(into)] title: String, children: Children) -> impl IntoView 
         })
         .collect_view()
     };
-    let user = user_name().map(|name| {
+    let user = user_name().map(|(name, has_account)| {
+        let label = if has_account {
+            // On phones the name is hidden and the icon alone leads to the account.
+            let current = path == "/account";
+            view! {
+                <a
+                    href="/account"
+                    class=format!(
+                        "hover:bg-muted inline-flex min-h-10 max-w-56 items-center gap-2 rounded-md px-2.5 text-sm font-medium {}",
+                        if current { "text-brand" } else { "text-muted-foreground hover:text-foreground" },
+                    )
+                    aria-label=tf!("nav.account_of", name = name.clone())
+                    aria-current=current.then_some("page")
+                >
+                    <Icon kind=IconKind::Account />
+                    <span class="hidden truncate sm:inline">{name.clone()}</span>
+                </a>
+            }
+            .into_any()
+        } else {
+            view! {
+                <span class="text-muted-foreground hidden max-w-48 truncate text-sm sm:inline" title=tf!("nav.signed_in_as", name = name.clone())>
+                    {name.clone()}
+                </span>
+            }
+            .into_any()
+        };
         view! {
-            <span class="text-muted-foreground hidden max-w-48 truncate text-sm sm:inline" title=tf!("nav.signed_in_as", name = name.clone())>
-                {name.clone()}
-            </span>
+            {label}
             <form method="post" action="/auth/logout">
                 <button
                     type="submit"

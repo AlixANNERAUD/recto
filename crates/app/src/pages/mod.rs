@@ -1,11 +1,13 @@
 //! The pages of the interface.
 
+pub mod account;
 pub mod auth;
 pub mod jobs;
 pub mod no_access;
 pub mod print;
 pub mod printers;
 pub mod scan;
+pub mod sign_in;
 
 use leptos::prelude::*;
 
