@@ -111,7 +111,7 @@
   "printers": {
     "title": "Printers",
     "empty": "No printers yet",
-    "empty_body": "Add a printer in the CUPS web interface, then reload this page.",
+    "empty_body": "Add a printer to CUPS, then reload this page.",
     "default": "Default",
     "offline": "Offline",
     "not_accepting": "Not accepting jobs",
