@@ -1,0 +1,38 @@
+# Summary
+
+[Introduction](introduction.md)
+
+# Tutorials
+
+- [Your first print and scan](tutorials/first-print-and-scan.md)
+
+# How-to guides
+
+- [Install recto](how-to/install.md)
+- [Set up sign-in](how-to/sign-in.md)
+- [Let only some people in](how-to/restrict-access.md)
+- [Add a printer](how-to/add-printer.md)
+- [Use an existing CUPS server](how-to/existing-cups.md)
+- [Add a scanner](how-to/add-scanner.md)
+- [Save scans into Paperless-ngx](how-to/paperless.md)
+- [Run behind a reverse proxy](how-to/reverse-proxy.md)
+- [Upgrade](how-to/upgrade.md)
+- [Troubleshoot](how-to/troubleshoot.md)
+- [Develop and contribute](how-to/develop.md)
+
+# Reference
+
+- [Configuration](reference/configuration.md)
+- [Command line](reference/command-line.md)
+- [Container image](reference/container-image.md)
+- [Printing](reference/printing.md)
+- [Scanning](reference/scanning.md)
+- [Pages and endpoints](reference/endpoints.md)
+- [Logs and health](reference/logs.md)
+
+# Explanation
+
+- [How recto works](explanation/architecture.md)
+- [Sign-in and sessions](explanation/sign-in.md)
+- [How scans are kept and saved](explanation/scans.md)
+- [Security model](explanation/security.md)

@@ -11,7 +11,8 @@
 # checkout.
 #
 # The identity provider needs a public client (authorization code with PKCE) whose redirect URI is
-# $RECTO_PUBLIC_URL/auth/callback. Every RECTO_* variable of the README works under `environment`.
+# $RECTO_PUBLIC_URL/auth/callback. Every RECTO_* variable of docs/src/reference/configuration.md
+# works under `environment`.
 #
 # recto runs as uid 65532, so the folder behind "Save" must be writable by it (the chown above).
 # To save into an existing folder owned by someone else, such as Paperless's consume folder, set

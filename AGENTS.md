@@ -28,6 +28,7 @@ Everything goes through [mise](https://mise.jdx.dev), which pins the toolchain.
 | `mise run check` | What CI runs: lint, rustdoc, tests, cargo-deny |
 | `mise run dev` | Development server on http://127.0.0.1:3000 with mocked printers and scanners and a signed-in dev user (debug builds only) |
 | `mise run build` | Release binary and site |
+| `mise run docs` | The user guide (mdBook, `docs/`) into `docs/book` |
 
 Builds are heavy: run one cargo command at a time.
 
@@ -37,6 +38,8 @@ Builds are heavy: run one cargo command at a time.
 - Print and cancel work without JavaScript (plain forms). Only the scan page and live refresh are
   islands.
 - Tests never touch a real printer, scanner or identity provider: use mocks and `wiremock`.
+- The user guide in `docs/src` follows Diátaxis (tutorials, how-to guides, reference, explanation).
+  A change to settings, pages or behaviour updates the matching pages.
 - Comments explain why, never restate the code. Docs are plain, concise English with no em dashes.
 - Work and push directly on `main`; there are no pull requests. Commits follow Conventional
   Commits (`feat:`, `fix:`, `test:`, `build:`, `ci:`, `docs:`), imperative, with a body. Do not

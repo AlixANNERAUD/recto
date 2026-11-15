@@ -1,0 +1,17 @@
+[book]
+title = "recto"
+description = "Guide to recto, the self-hosted web app to print and scan from any browser through your home server: CUPS printing over IPP, SANE scanning with preview, scans saved to Paperless-ngx, single sign-on with OpenID Connect."
+authors = ["Alix ANNERAUD"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+# A page listed in SUMMARY.md but missing is an error, not a new empty page.
+create-missing = false
+
+[output.html]
+# Published at https://alixanneraud.github.io/recto/ by .github/workflows/docs.yml.
+site-url = "/recto/"
+git-repository-url = "https://github.com/AlixANNERAUD/recto"
+edit-url-template = "https://github.com/AlixANNERAUD/recto/edit/main/docs/{path}"
