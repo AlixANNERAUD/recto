@@ -3,15 +3,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use image::{DynamicImage, GrayImage, Luma};
+use image::{DynamicImage, Rgb, RgbImage};
 
 use crate::{
     Area, ScanError, ScanMode, ScanRequest, ScannedPage, ScannerCapabilities, ScannerInfo,
     ScannerService, Source,
 };
 
-/// A scanner stack for tests of the server and the interface: fixed scanners, generated gray
-/// pages, optional failure and delay, and a record of what was asked.
+/// A scanner stack for tests of the server and the interface: fixed scanners, a generated sample
+/// document, optional failure and delay, and a record of what was asked.
 pub struct MockScannerService {
     scanners: Vec<ScannerInfo>,
     capabilities: ScannerCapabilities,
@@ -139,20 +139,95 @@ impl ScannerService for MockScannerService {
                 right: 210.0,
                 bottom: 297.0,
             });
-            let pixels =
-                |mm: f64| ((mm * f64::from(settings.resolution) / 25.4).round() as u32).max(1);
-            let image =
-                GrayImage::from_pixel(pixels(area.width()), pixels(area.height()), Luma([128]));
-            let page = ScannedPage::encode(
-                &DynamicImage::ImageLuma8(image),
-                settings.resolution,
-                request.format,
-            )?;
+            let image = sample_document(area, settings.resolution, settings.mode);
+            let page = ScannedPage::encode(&image, settings.resolution, request.format)?;
             Ok(vec![page])
         });
         self.active.fetch_sub(1, Ordering::SeqCst);
         result
     }
+}
+
+/// What the mock scanner sees through `area`: a letter on the glass, so previews, selections and
+/// screenshots of the development server look like a real scan.
+fn sample_document(area: Area, resolution: u32, mode: ScanMode) -> DynamicImage {
+    let mm_per_pixel = 25.4 / f64::from(resolution);
+    let pixels = |mm: f64| ((mm / mm_per_pixel).round() as u32).max(1);
+    let image = RgbImage::from_fn(pixels(area.width()), pixels(area.height()), |x, y| {
+        let x = area.left + (f64::from(x) + 0.5) * mm_per_pixel;
+        let y = area.top + (f64::from(y) + 0.5) * mm_per_pixel;
+        Rgb(sample_document_pixel(x, y))
+    });
+    let image = DynamicImage::ImageRgb8(image);
+    match mode {
+        ScanMode::Color => image,
+        ScanMode::Gray => DynamicImage::ImageLuma8(image.to_luma8()),
+        ScanMode::Lineart => {
+            let mut gray = image.to_luma8();
+            for pixel in gray.pixels_mut() {
+                pixel.0[0] = if pixel.0[0] < 160 { 0 } else { 255 };
+            }
+            DynamicImage::ImageLuma8(gray)
+        }
+    }
+}
+
+/// The colour at (`x`, `y`) millimetres from the corner of the glass.
+fn sample_document_pixel(x: f64, y: f64) -> [u8; 3] {
+    const GLASS: [u8; 3] = [214, 216, 220];
+    const PAPER: [u8; 3] = [253, 253, 250];
+    const ACCENT: [u8; 3] = [21, 101, 192];
+    const HEADING: [u8; 3] = [40, 44, 52];
+    const TEXT: [u8; 3] = [120, 124, 132];
+    // An A4 sheet, slightly off the corner as a hand would lay it.
+    let (left, top, right, bottom) = (4.0, 4.0, 214.0, 301.0);
+    if !(left..right).contains(&x) || !(top..bottom).contains(&y) {
+        return GLASS;
+    }
+    let (x, y) = (x - left, y - top);
+    let inside =
+        |x0: f64, y0: f64, x1: f64, y1: f64| (x0..x1).contains(&x) && (y0..y1).contains(&y);
+    // Letterhead: a round logo, the sender and a rule under them.
+    if (x - 30.0).powi(2) + (y - 30.0).powi(2) < 64.0 {
+        return ACCENT;
+    }
+    if inside(44.0, 25.0, 104.0, 30.0) {
+        return HEADING;
+    }
+    if inside(44.0, 33.0, 84.0, 36.0) || inside(130.0, 25.0, 188.0, 28.0) {
+        return TEXT;
+    }
+    if inside(130.0, 31.0, 172.0, 34.0) || inside(130.0, 37.0, 180.0, 40.0) {
+        return TEXT;
+    }
+    if inside(22.0, 48.0, 188.0, 48.6) {
+        return ACCENT;
+    }
+    if inside(22.0, 62.0, 110.0, 68.0) {
+        return HEADING;
+    }
+    // Paragraphs of grey lines whose ends vary, with a gap every five lines.
+    let line_height = 7.0;
+    let first = 80.0;
+    if (first..250.0).contains(&y) && (22.0..188.0).contains(&x) {
+        let row = ((y - first) / line_height) as u32;
+        let within = (y - first) - f64::from(row) * line_height;
+        let paragraph_end = row % 6 == 5;
+        let last_of_paragraph = row % 6 == 4;
+        let end = if last_of_paragraph {
+            70.0 + f64::from((row * 29) % 60)
+        } else {
+            188.0 - f64::from((row * 37) % 9)
+        };
+        if !paragraph_end && within < 2.6 && x < end {
+            return TEXT;
+        }
+    }
+    // A signature line.
+    if inside(130.0, 268.0, 182.0, 269.0) {
+        return HEADING;
+    }
+    PAPER
 }
 
 #[cfg(test)]
@@ -187,6 +262,22 @@ mod tests {
         assert_eq!((pages[0].width, pages[0].height), (197, 100));
         assert!(pages[0].data.starts_with(b"\x89PNG"));
         assert_eq!(pages[0].dpi, 100);
+    }
+
+    #[tokio::test]
+    async fn follows_the_requested_color_mode() {
+        let mock = MockScannerService::default();
+        for (mode, gray) in [
+            (ScanMode::Color, false),
+            (ScanMode::Gray, true),
+            (ScanMode::Lineart, true),
+        ] {
+            let mut request = settings();
+            request.settings.mode = mode;
+            request.settings.area = None;
+            let pages = mock.scan("mock:0", request).await.unwrap();
+            assert_eq!(pages[0].gray, gray, "{mode:?}");
+        }
     }
 
     #[tokio::test]
