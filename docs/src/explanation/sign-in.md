@@ -55,8 +55,9 @@ sequenceDiagram
     recto-->>Person: a new session, and the page first asked for
 ```
 
-1. Someone opens recto without a session and chooses single sign-on; with local accounts off,
-   recto skips its own page. recto creates a random `state`, a `nonce` and a PKCE verifier,
+1. Someone opens recto without a session and chooses single sign-on. recto skips its own page
+   when nobody could use its password form: local accounts are off, or no account has a
+   password yet. recto creates a random `state`, a `nonce` and a PKCE verifier,
    keeps them in a short-lived pending session (10 minutes), and redirects to the provider.
 2. The person signs in at the provider, which redirects back to `/auth/callback` with a code.
 3. recto checks the `state`, exchanges the code with the verifier, and checks the ID token's

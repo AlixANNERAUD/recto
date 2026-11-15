@@ -1447,7 +1447,8 @@ async fn sign_in_page_redirects_with_only_sso() {
     let response = harness.send(page("/sign-in?next=/jobs", None)).await;
     assert_redirect(&response, "/auth/login?next=%2Fjobs");
 
-    // With only local accounts, the page has no single sign-on link.
+    // With only local accounts, the page has the form even before any account has a password,
+    // and no single sign-on link.
     let harness = Harness::with(Setup {
         issuer: None,
         ..Setup::default()
@@ -1461,6 +1462,22 @@ async fn sign_in_page_redirects_with_only_sso() {
     // Signed out, the way back is the sign-in page, which works without a provider.
     let response = harness.send(page("/auth/signed-out", None)).await;
     assert!(text(response).await.contains("href=\"/sign-in\""));
+}
+
+#[tokio::test]
+async fn sign_in_page_goes_to_the_provider_until_an_account_has_a_password() {
+    let harness = Harness::new().await;
+    // A single sign-on user has no password: the form could sign nobody in.
+    harness.sign_in("carol-subject", "carol").await;
+    let response = harness.send(page("/sign-in?next=/jobs", None)).await;
+    assert_redirect(&response, "/auth/login?next=%2Fjobs");
+
+    harness.local_user("alice", ALICE_PASSWORD).await;
+    let response = harness.send(page("/sign-in?next=/jobs", None)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    assert!(html.contains("action=\"/sign-in\""), "{html}");
+    assert!(html.contains("name=\"next\" value=\"/jobs\""), "{html}");
 }
 
 #[tokio::test]

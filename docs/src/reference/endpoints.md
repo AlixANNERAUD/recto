@@ -16,7 +16,7 @@ instead. A single sign-on user without the required claim, or disabled, is sent 
 | `/account` | Account: change your password. Only for users with a password, and with local accounts on. |
 | `/administration/users` | Users: create local accounts, set passwords, disable users, grant administration. Administrators only. |
 | `/administration/groups` | Groups: the groups from the identity provider and their members. Administrators only. |
-| `/sign-in` | The password form, and the single sign-on button when a provider is set. With local accounts off, it redirects to `/auth/login`. |
+| `/sign-in` | The password form, and the single sign-on button when a provider is set. It redirects to `/auth/login` instead when a provider is set and local accounts are off, or no account has a password. |
 | `/no-access` | Shown to single sign-on users without the required claim, or disabled. |
 | `/auth/error` | Shown when sign-in fails. |
 | `/auth/signed-out` | Shown after signing out; the post-logout redirect URI. |

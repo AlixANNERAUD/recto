@@ -130,9 +130,10 @@ RECTO_OIDC_GROUPS_CLAIM: groups
 
 ## Use single sign-on only
 
-Local accounts stay on next to single sign-on: the sign-in page shows the password form and a
-**Sign in with single sign-on** button. To send everyone straight to the provider instead, as
-recto did before it had local accounts, set:
+Local accounts stay on next to single sign-on. While no account has a password, recto sends
+everyone straight to the provider, as it did before it had local accounts. Once an account has a
+password, the sign-in page shows the password form and a **Sign in with single sign-on** button.
+To always send everyone straight to the provider, set:
 
 ```yaml
 RECTO_LOCAL_ACCOUNTS: "false"
@@ -142,7 +143,7 @@ Local accounts already created are kept, and work again if you turn the setting 
 
 ## Check
 
-Open recto and press **Sign in with single sign-on** (or nothing, with local accounts off): recto
-sends you to your provider, and back to the Print page with your name at the top. If you land on
+Open recto and press **Sign in with single sign-on** (or nothing, when recto shows no sign-in
+page): recto sends you to your provider, and back to the Print page with your name at the top. If you land on
 **Sign-in failed** instead, or your provider shows an error about the redirect URI, see
 [Troubleshoot](troubleshoot.md#sign-in).

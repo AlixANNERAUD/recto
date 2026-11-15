@@ -466,6 +466,16 @@ fn sessions_cutoff() -> DateTimeWithTimeZone {
     (truncated + microsecond).fixed_offset()
 }
 
+/// Whether any user, disabled or not, has a password. Until one does, nobody can sign in with
+/// a password, so the sign-in page may send everyone to single sign-on.
+pub async fn any_with_password(database: &impl ConnectionTrait) -> Result<bool> {
+    Ok(users::Entity::find()
+        .filter(users::Column::PasswordHash.is_not_null())
+        .one(database)
+        .await?
+        .is_some())
+}
+
 /// Finds a user by identifier, disabled users included.
 pub async fn find_by_id(database: &impl ConnectionTrait, id: i64) -> Result<Option<users::Model>> {
     Ok(users::Entity::find_by_id(id).one(database).await?)
@@ -1067,6 +1077,22 @@ mod tests {
         let removed = reload(&database, alice.id).await;
         assert!(!removed.is_administrator);
         assert!(!removed.administrator_from_claim);
+    }
+
+    #[tokio::test]
+    async fn any_with_password_needs_a_password() {
+        let database = crate::testing::database().await;
+        assert!(!any_with_password(&database).await.unwrap());
+
+        let alice = sign_in_with_identity(&database, &identity("s", "alice"))
+            .await
+            .unwrap();
+        assert!(!any_with_password(&database).await.unwrap());
+
+        set_password(&database, alice.id, PASSWORD.to_owned(), &POLICY)
+            .await
+            .unwrap();
+        assert!(any_with_password(&database).await.unwrap());
     }
 
     #[tokio::test]

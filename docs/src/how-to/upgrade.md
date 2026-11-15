@@ -42,9 +42,11 @@ a database, which its first start after the upgrade creates. Three things change
 - **Everyone is signed out once.** The old sessions were in memory and do not survive the
   upgrade. Single sign-on users sign in again, and get their user then, with the same username as
   before, so their print jobs keep their owner. From then on, restarts and upgrades keep sessions.
-- **The sign-in page has a password form.** Local accounts are on by default, so recto shows its
-  sign-in page, with a **Sign in with single sign-on** button, instead of going straight to your
-  provider. Set `RECTO_LOCAL_ACCOUNTS: "false"` to keep the old behaviour (see
+- **The sign-in page can get a password form.** Local accounts are on by default, but as long as
+  no account has a password, recto still sends everyone straight to your provider. Once an
+  account has one (a local administrator, or a password set on the Users page), recto shows its
+  sign-in page instead, with a **Sign in with single sign-on** button. Set
+  `RECTO_LOCAL_ACCOUNTS: "false"` to keep going straight to the provider whatever happens (see
   [Set up single sign-on](sign-in.md#use-single-sign-on-only)).
 
 Nobody is an administrator after the upgrade. Appoint one with `recto administrator <USERNAME>`

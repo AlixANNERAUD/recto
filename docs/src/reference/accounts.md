@@ -19,9 +19,11 @@ and no password reset by email: an administrator creates the account and sets it
 - **Passwords** have at least `RECTO_PASSWORD_MINIMUM_LENGTH` characters (12 by default) and at
   most 1,024. There are no composition rules. They are stored as Argon2id hashes.
 
-With `RECTO_LOCAL_ACCOUNTS=false`, the password form is gone and `/sign-in` sends people
-straight to single sign-on. Local accounts stay in the database and work again once the setting
-is turned back on.
+With a provider configured, `/sign-in` sends people straight to single sign-on as long as no
+account has a password, since the form could sign nobody in; the form appears once an account
+has one. With `RECTO_LOCAL_ACCOUNTS=false`, the password form is gone for good and `/sign-in`
+always sends people to single sign-on. Local accounts stay in the database and work again once
+the setting is turned back on.
 
 ### Password sign-in limit
 

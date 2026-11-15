@@ -140,8 +140,9 @@ struct NextQuery {
     next: Option<String>,
 }
 
-/// `GET /sign-in?next=<path>`: the sign-in page. A signed-in user goes on to `next`; with only
-/// single sign-on, the visitor goes straight to the provider, as before local accounts existed.
+/// `GET /sign-in?next=<path>`: the sign-in page. A signed-in user goes on to `next`. The
+/// visitor goes straight to the provider, as before local accounts existed, when single sign-on
+/// is the only way in: local accounts are off, or no account has a password yet.
 async fn page(
     State(state): State<PasswordState>,
     Query(query): Query<NextQuery>,
@@ -151,7 +152,7 @@ async fn page(
     if parts.extensions.get::<User>().is_some() {
         return Redirect::to(&next).into_response();
     }
-    if !state.methods.password {
+    if !state.methods.password || only_single_sign_on(&state).await {
         let next: String = url::form_urlencoded::byte_serialize(next.as_bytes()).collect();
         return Redirect::to(&format!("/auth/login?next={next}")).into_response();
     }
@@ -169,6 +170,23 @@ async fn page(
         },
     )
     .await
+}
+
+/// Whether a provider is configured and no account has a password, so the form could sign
+/// nobody in. Decided here rather than in [`SignInMethods::password`], which also offers the New
+/// local user form that creates the first such account. When the database cannot tell, the form
+/// is shown, and reports the outage if used.
+async fn only_single_sign_on(state: &PasswordState) -> bool {
+    if !state.methods.single_sign_on {
+        return false;
+    }
+    match users::any_with_password(&state.app.database).await {
+        Ok(any) => !any,
+        Err(error) => {
+            tracing::error!(%error, "checking for accounts with a password failed");
+            false
+        }
+    }
 }
 
 #[derive(Deserialize, Default)]
