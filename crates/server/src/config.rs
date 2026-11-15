@@ -26,8 +26,10 @@ pub struct Config {
         hide_env_values = true
     )]
     pub database_url: String,
-    /// Read as text, so that a blank variable means no provider; [`Config::normalized`] parses
-    /// it into `oidc_issuer`.
+    /// The issuer URL of the OpenID Connect provider; set together with the client id, or
+    /// neither for local accounts only.
+    // Read as text, so that a blank variable means no provider; `Config::normalized` parses it
+    // into `oidc_issuer`.
     #[arg(
         long = "oidc-issuer",
         env = "RECTO_OIDC_ISSUER",

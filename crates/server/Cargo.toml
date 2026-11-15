@@ -1,6 +1,6 @@
 [package]
 name = "recto"
-description = "Self-hosted web app to print and scan behind OpenID Connect."
+description = "Self-hosted web app to print and scan, with local accounts or OpenID Connect sign-in."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
