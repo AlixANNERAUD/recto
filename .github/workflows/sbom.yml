@@ -21,6 +21,8 @@ jobs:
   sbom:
     name: Upload the SBOM
     runs-on: ubuntu-24.04
+    env:
+      HAS_NANOBOM_TOKEN: ${{ secrets.NANOBOM_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: jdx/mise-action@v5.2.7
@@ -29,7 +31,9 @@ jobs:
       # listed, for the runner's target (x86_64 Linux), like the released binary.
       - name: Generate the SBOM
         run: mise run sbom
-      - uses: AlixANNERAUD/nanobom-action@v1
+      # Forks and a repository without NANOBOM_TOKEN yet have nothing to upload with.
+      - if: env.HAS_NANOBOM_TOKEN == 'true'
+        uses: AlixANNERAUD/nanobom-action@v1
         with:
           url: https://vulnerabilites.anneraud.fr
           token: ${{ secrets.NANOBOM_TOKEN }}

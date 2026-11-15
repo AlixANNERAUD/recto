@@ -55,3 +55,5 @@ v1.2.4`): `release.yml` runs for it and creates the release with generated notes
 - Repository secret `CODECOV_TOKEN` to upload coverage to Codecov; without it the upload is
   skipped without failing CI.
 - Repository variable `DOCKERHUB_USERNAME` and secret `DOCKERHUB_TOKEN` for the Docker Hub copy.
+- Repository secret `NANOBOM_TOKEN` to upload the SBOM to nanobom on each push to `main`
+  (`.github/workflows/sbom.yml`); without it the upload is skipped.
