@@ -1,6 +1,6 @@
 //! The pages of the interface and the server functions behind them, rendered through the router
-//! with mock printing and scanning services. Users are signed in by writing their session into
-//! the router's session store, as in `tests/server.rs`.
+//! with mock printing and scanning services and a fresh test database. Users are signed in by
+//! writing their session into the router's session store, as in `tests/server.rs`.
 
 use std::{path::Path, sync::Arc, time::Duration};
 
@@ -11,14 +11,16 @@ use axum::{
 };
 use leptos::config::LeptosOptions;
 use recto::serve::{AuthState, router};
-use recto::session::Store;
+use recto::session_store::DatabaseSessionStore;
 use recto_app::state::AppState;
-use recto_authentication::{OpenId, OpenIdSettings, User};
+use recto_authentication::{OpenId, OpenIdSettings};
+use recto_domain::users::{self, Identity};
 use recto_printing::{
     Capabilities, ColorMode, Job, JobState, Printer, PrinterState, Sides, StateReason, Supply,
     testing::MockPrintService,
 };
 use recto_scanning::{MockScannerService, ResultStore, ScanError};
+use sea_orm::DatabaseConnection;
 use tempfile::TempDir;
 use tower::ServiceExt;
 use tower_sessions::Session;
@@ -74,12 +76,14 @@ fn temp_dir() -> TempDir {
 struct Harness {
     router: Router,
     scan: Arc<MockScannerService>,
-    sessions: Store,
+    sessions: DatabaseSessionStore,
+    database: DatabaseConnection,
     _dir: TempDir,
 }
 
 impl Harness {
-    fn new(printers: Vec<Printer>, jobs: Vec<Job>) -> Self {
+    async fn new(printers: Vec<Printer>, jobs: Vec<Job>) -> Self {
+        let database = recto_domain::testing::database().await;
         let dir = temp_dir();
         let print = Arc::new(
             MockPrintService::new()
@@ -102,6 +106,7 @@ impl Harness {
                 .output_name("recto")
                 .site_root(site.to_string_lossy().into_owned())
                 .build(),
+            database: database.clone(),
         };
         let public_url = Url::parse(PUBLIC_URL).unwrap();
         let openid = OpenId::new(OpenIdSettings {
@@ -115,12 +120,13 @@ impl Harness {
             administrator_value: None,
             groups_claim: None,
         });
-        let auth = AuthState::new(Arc::new(openid), public_url);
+        let auth = AuthState::new(Some(Arc::new(openid)), public_url, database.clone());
         let sessions = auth.sessions.clone();
         Self {
             router: router(state, auth),
             scan,
             sessions,
+            database,
             _dir: dir,
         }
     }
@@ -131,13 +137,19 @@ impl Harness {
 
     /// Signs a user in and returns the session cookie to send back.
     async fn sign_in(&self, subject: &str, username: &str) -> String {
-        let session = Session::new(None, Arc::new(self.sessions.clone()), None);
-        let user = User {
+        let identity = Identity {
+            issuer: "https://id.test/".into(),
             subject: subject.into(),
-            username: username.into(),
-            name: None,
+            preferred_username: Some(username.into()),
+            ..Identity::default()
         };
-        recto::session::sign_in(&session, &user, "").await.unwrap();
+        let user = users::sign_in_with_identity(&self.database, &identity)
+            .await
+            .unwrap();
+        let session = Session::new(None, Arc::new(self.sessions.clone()), None);
+        recto::session::sign_in(&session, user.id, "")
+            .await
+            .unwrap();
         session.save().await.unwrap();
         format!("recto_session={}", session.id().unwrap())
     }
@@ -194,7 +206,7 @@ fn job(id: i32, owner: Option<&str>, state: JobState) -> Job {
 
 #[tokio::test]
 async fn print_page_lists_printers_and_supported_options() {
-    let harness = Harness::new(vec![garage(), kitchen()], vec![]);
+    let harness = Harness::new(vec![garage(), kitchen()], vec![]).await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let html = harness.page("/", &cookie).await;
 
@@ -226,7 +238,8 @@ async fn print_page_lists_printers_and_supported_options() {
             printer("kitchen", false),
         ],
         vec![],
-    );
+    )
+    .await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let html = harness.page("/", &cookie).await;
     assert!(html.contains(r#"name="sides""#), "{html}");
@@ -245,7 +258,8 @@ async fn jobs_page_shows_another_user_for_hidden_owner() {
             job(7, None, JobState::Processing),
             job(8, Some("bob"), JobState::Completed),
         ],
-    );
+    )
+    .await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let html = harness.page("/jobs?submitted=7", &cookie).await;
 
@@ -284,7 +298,7 @@ async fn printers_page_shows_supply_levels() {
             .collect(),
         ..kitchen()
     };
-    let harness = Harness::new(vec![office, garage()], vec![]);
+    let harness = Harness::new(vec![office, garage()], vec![]).await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let html = harness.page("/printers", &cookie).await;
 
@@ -303,7 +317,7 @@ async fn printers_page_shows_supply_levels() {
 
 #[tokio::test]
 async fn scan_page_renders_noscript_notice() {
-    let harness = Harness::new(vec![kitchen()], vec![]);
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let html = harness.page("/scan", &cookie).await;
 
@@ -343,7 +357,8 @@ async fn pages_have_no_missing_translations() {
     let harness = Harness::new(
         vec![kitchen(), garage()],
         vec![job(7, None, JobState::Processing)],
-    );
+    )
+    .await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let keys = locale_keys();
     assert!(keys.iter().any(|key| key == "print.errors.too_large"));
@@ -369,7 +384,7 @@ async fn pages_have_no_missing_translations() {
 
 #[tokio::test]
 async fn layout_names_the_user_and_marks_the_current_page() {
-    let harness = Harness::new(vec![kitchen()], vec![]);
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let html = harness.page("/printers", &cookie).await;
 
@@ -383,7 +398,7 @@ async fn layout_names_the_user_and_marks_the_current_page() {
 
 #[tokio::test]
 async fn preview_and_scan_store_results_for_the_user() {
-    let harness = Harness::new(vec![kitchen()], vec![]);
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
     let alice = harness.sign_in("alice-subject", "alice").await;
     let bob = harness.sign_in("bob-subject", "bob").await;
 
@@ -440,7 +455,7 @@ async fn preview_and_scan_store_results_for_the_user() {
 
 #[tokio::test]
 async fn scan_errors_are_readable() {
-    let harness = Harness::new(vec![kitchen()], vec![]);
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let form = "application/x-www-form-urlencoded";
 
@@ -481,7 +496,7 @@ async fn scan_errors_are_readable() {
 
 #[tokio::test]
 async fn unlisted_scanner_ids_are_never_opened() {
-    let harness = Harness::new(vec![kitchen()], vec![]);
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let form = "application/x-www-form-urlencoded";
     // SANE's `net` backend would connect to any host named in an id it does not know.
@@ -522,7 +537,7 @@ async fn unlisted_scanner_ids_are_never_opened() {
 
 #[tokio::test]
 async fn preview_reads_one_page_from_the_chosen_source() {
-    let harness = Harness::new(vec![kitchen()], vec![]);
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let form = "application/x-www-form-urlencoded";
     let response = harness

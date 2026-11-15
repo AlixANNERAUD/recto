@@ -185,7 +185,7 @@ mod server {
             format: OutputFormat,
         ) -> Result<ScanOutcome, ScanError> {
             let results = Arc::clone(&self.state.results);
-            let owner = self.user.subject.clone();
+            let owner = self.user.id.to_string();
             let stored = tokio::task::spawn_blocking(move || {
                 let count = pages.len();
                 let bytes = recto_scanning::assemble(pages, format)?;

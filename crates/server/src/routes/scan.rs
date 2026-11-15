@@ -1,5 +1,5 @@
 //! Finished scans: shown inline (previews), downloaded, or saved to the output folder. A result
-//! belongs to the subject of the user who scanned it; anyone else's, an expired one and an
+//! belongs to the id of the user who scanned it; anyone else's, an expired one and an
 //! unknown one all answer 404 alike.
 
 use std::{sync::Arc, time::SystemTime};
@@ -97,7 +97,7 @@ async fn read(state: &AppState, result: &ScanResult) -> Option<Vec<u8>> {
 /// The user's result `id`, unless it has expired.
 fn find(state: &AppState, user: &User, id: &str) -> Option<ScanResult> {
     let id = Uuid::parse_str(id).ok()?;
-    let result = state.results.get(&user.subject, id)?;
+    let result = state.results.get(&user.id.to_string(), id)?;
     (!state.results.is_expired(&result, SystemTime::now())).then_some(result)
 }
 

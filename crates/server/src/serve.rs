@@ -25,6 +25,8 @@ use tower::ServiceExt;
 use tower_http::services::ServeDir;
 use tower_sessions::session_store::ExpiredDeletion;
 
+use crate::session_store::DatabaseSessionStore;
+
 pub use crate::state::AuthState;
 use crate::{
     config::Config,
@@ -75,7 +77,10 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         .route("/health", get(|| async { "ok" }))
         .merge(auth::router().with_state(auth.clone()))
         .merge(interface)
-        .layer(middleware::from_fn(session::load_user))
+        .layer(middleware::from_fn_with_state(
+            auth.database.clone(),
+            session::load_user,
+        ))
         .layer(session::layer(auth.sessions.clone(), auth.secure_cookies))
         .layer(middleware::from_fn_with_state(
             AllowedOrigin::new(&auth.public_url),
@@ -126,24 +131,27 @@ async fn refuse_cross_site(
     (StatusCode::FORBIDDEN, message).into_response()
 }
 
-/// Serves until ctrl-c or SIGTERM; requests in flight finish.
+/// Opens and migrates the database, then serves until ctrl-c or SIGTERM; requests in flight
+/// finish. A database that cannot be opened stops recto before anything else starts.
 pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let address = config.listen_address;
+    let database = state::open_database(&config.database_url).await?;
     #[cfg_attr(
         not(all(feature = "dev-mocks", debug_assertions)),
         expect(unused_mut, reason = "only the development mocks change the state")
     )]
-    let (mut state, auth) = state::build(&config, leptos_options(&config)).await;
+    let (mut state, auth) = state::build(&config, leptos_options(&config), database).await;
     #[cfg(all(feature = "dev-mocks", debug_assertions))]
-    let dev_mocks = crate::dev::requested(std::env::var("RECTO_DEV_MOCKS").ok().as_deref());
-    #[cfg(all(feature = "dev-mocks", debug_assertions))]
-    if dev_mocks {
-        crate::dev::apply(&mut state);
+    let dev_user = if crate::dev::requested(std::env::var("RECTO_DEV_MOCKS").ok().as_deref()) {
+        let user = crate::dev::apply(&mut state).await?;
         tracing::warn!(
             "RECTO_DEV_MOCKS=1: printers and scanners are MOCKS and EVERY REQUEST IS SIGNED IN \
              as the development user. Never expose this server."
         );
-    }
+        Some(user)
+    } else {
+        None
+    };
     purge_expired_results(Arc::clone(&state.results));
     delete_expired_sessions(auth.sessions.clone());
     find_scanners(Arc::clone(&state.scan));
@@ -153,8 +161,8 @@ pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     )]
     let mut app = router(state, auth);
     #[cfg(all(feature = "dev-mocks", debug_assertions))]
-    if dev_mocks {
-        app = app.layer(middleware::from_fn(crate::dev::sign_in));
+    if let Some(user) = dev_user {
+        app = app.layer(middleware::from_fn_with_state(user, crate::dev::sign_in));
     }
     let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!(%address, "listening");
@@ -202,7 +210,7 @@ fn find_scanners(scan: Arc<dyn ScannerService>) {
 }
 
 /// Deletes expired sessions in the background, every [`SESSION_PURGE_INTERVAL`].
-fn delete_expired_sessions(sessions: session::Store) {
+fn delete_expired_sessions(sessions: DatabaseSessionStore) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(SESSION_PURGE_INTERVAL);
         loop {

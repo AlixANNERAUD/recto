@@ -53,7 +53,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 tempfile = "3"
 serde_json = "1"
 openidconnect = { version = "4.1.0", default-features = false, features = ["reqwest", "rustls-tls"] }
-# Sessions live in memory: a restart signs everyone out, which a home server can afford.
+# Sessions live in the accounts database (crates/server/src/session_store.rs).
 tower-sessions = { version = "0.14.0", default-features = false, features = ["axum-core"] }
 tower = { version = "0.5.3", features = ["util"] }
 # rustls lets PostgreSQL connections use TLS (`sslmode` in the URL), as managed databases require.

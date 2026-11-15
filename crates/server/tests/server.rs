@@ -1,6 +1,7 @@
-//! The routes of the server, driven through the router with mock printing and scanning services.
-//! Users are signed in by writing their session straight into the router's session store, with
-//! the same code as the provider's callback; no route of the server can do that.
+//! The routes of the server, driven through the router with mock printing and scanning services
+//! and a fresh test database. Users are created with the provider callback's code and signed in
+//! by writing their session straight into the router's session store; no route of the server can
+//! do that.
 
 use std::{
     path::{Path, PathBuf},
@@ -15,14 +16,20 @@ use axum::{
 };
 use leptos::config::LeptosOptions;
 use recto::serve::{AuthState, router};
-use recto::session::Store;
+use recto::session_store::DatabaseSessionStore;
 use recto_app::state::AppState;
-use recto_authentication::{OpenId, OpenIdSettings, User};
+use recto_authentication::{OpenId, OpenIdSettings};
+use recto_domain::{
+    passwords::PasswordPolicy,
+    users::{self, Identity},
+};
+use recto_entity::sessions;
 use recto_printing::{
     Capabilities, ColorMode, DocumentFormat, Job, JobState, PageRanges, PrintOptions, Printer,
     PrinterState, Sides, testing::MockPrintService,
 };
 use recto_scanning::{MockScannerService, OutputFormat, ResultStore};
+use sea_orm::{DatabaseConnection, EntityTrait, PaginatorTrait};
 use tempfile::TempDir;
 use tower::ServiceExt;
 use tower_sessions::{Session, SessionStore, cookie::time::OffsetDateTime, session::Id};
@@ -69,8 +76,11 @@ struct Setup {
     max_upload_size: usize,
     output_dir: Option<PathBuf>,
     result_ttl: Duration,
-    issuer: String,
+    /// `None` for no OpenID Connect provider.
+    issuer: Option<String>,
     public_url: &'static str,
+    /// The database of another harness, to restart on; a fresh one by default.
+    database: Option<DatabaseConnection>,
 }
 
 impl Default for Setup {
@@ -79,8 +89,9 @@ impl Default for Setup {
             max_upload_size: 1024 * 1024,
             output_dir: None,
             result_ttl: Duration::from_secs(3600),
-            issuer: UNREACHABLE_ISSUER.into(),
+            issuer: Some(UNREACHABLE_ISSUER.into()),
             public_url: PUBLIC_URL,
+            database: None,
         }
     }
 }
@@ -89,16 +100,21 @@ struct Harness {
     router: Router,
     print: Arc<MockPrintService>,
     results: Arc<ResultStore>,
-    sessions: Store,
+    sessions: DatabaseSessionStore,
+    database: DatabaseConnection,
     _dir: TempDir,
 }
 
 impl Harness {
-    fn new() -> Self {
-        Self::with(Setup::default())
+    async fn new() -> Self {
+        Self::with(Setup::default()).await
     }
 
-    fn with(setup: Setup) -> Self {
+    async fn with(setup: Setup) -> Self {
+        let database = match setup.database {
+            Some(database) => database,
+            None => recto_domain::testing::database().await,
+        };
         let dir = temp_dir();
         let print = Arc::new(
             MockPrintService::new()
@@ -130,27 +146,32 @@ impl Harness {
                 .output_name("recto")
                 .site_root(site.to_string_lossy().into_owned())
                 .build(),
+            database: database.clone(),
         };
         let public_url = Url::parse(setup.public_url).unwrap();
-        let openid = OpenId::new(OpenIdSettings {
-            issuer: Url::parse(&setup.issuer).unwrap(),
-            client_id: "recto".into(),
-            redirect_url: public_url.join("auth/callback").unwrap(),
-            extra_scopes: vec![],
-            required_claim: None,
-            required_value: None,
-            administrator_claim: None,
-            administrator_value: None,
-            groups_claim: None,
-        })
-        .retry_after(Duration::ZERO);
-        let auth = AuthState::new(Arc::new(openid), public_url);
+        let openid = setup.issuer.map(|issuer| {
+            let openid = OpenId::new(OpenIdSettings {
+                issuer: Url::parse(&issuer).unwrap(),
+                client_id: "recto".into(),
+                redirect_url: public_url.join("auth/callback").unwrap(),
+                extra_scopes: vec![],
+                required_claim: None,
+                required_value: None,
+                administrator_claim: None,
+                administrator_value: None,
+                groups_claim: None,
+            })
+            .retry_after(Duration::ZERO);
+            Arc::new(openid)
+        });
+        let auth = AuthState::new(openid, public_url, database.clone());
         let sessions = auth.sessions.clone();
         Self {
             router: router(state, auth),
             print,
             results,
             sessions,
+            database,
             _dir: dir,
         }
     }
@@ -159,17 +180,41 @@ impl Harness {
         self.router.clone().oneshot(request).await.unwrap()
     }
 
-    /// Signs a user in and returns the session cookie to send back.
+    /// Signs a user in, creating it at its first sign-in as the provider's callback does, and
+    /// returns the session cookie to send back.
     async fn sign_in(&self, subject: &str, username: &str) -> String {
-        let session = Session::new(None, Arc::new(self.sessions.clone()), None);
-        let user = User {
+        let identity = Identity {
+            issuer: "https://id.test/".into(),
             subject: subject.into(),
-            username: username.into(),
-            name: None,
+            preferred_username: Some(username.into()),
+            ..Identity::default()
         };
-        recto::session::sign_in(&session, &user, "").await.unwrap();
+        let user = users::sign_in_with_identity(&self.database, &identity)
+            .await
+            .unwrap();
+        let session = Session::new(None, Arc::new(self.sessions.clone()), None);
+        recto::session::sign_in(&session, user.id, "")
+            .await
+            .unwrap();
         session.save().await.unwrap();
         format!("recto_session={}", session.id().unwrap())
+    }
+
+    /// The id of a user, which owns the user's scan results.
+    async fn user_id(&self, username: &str) -> i64 {
+        users::find_by_username(&self.database, username)
+            .await
+            .unwrap()
+            .expect("a signed-in user")
+            .id
+    }
+
+    /// How many sessions the database keeps.
+    async fn session_count(&self) -> u64 {
+        sessions::Entity::find()
+            .count(&self.database)
+            .await
+            .unwrap()
     }
 }
 
@@ -281,14 +326,14 @@ fn assert_redirect(response: &Response<Body>, expected: &str) {
 
 #[tokio::test]
 async fn health_is_public() {
-    let response = Harness::new().send(get("/health")).await;
+    let response = Harness::new().await.send(get("/health")).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(text(response).await, "ok");
 }
 
 #[tokio::test]
 async fn pages_redirect_to_login() {
-    let harness = Harness::new();
+    let harness = Harness::new().await;
     let response = harness.send(page("/", None)).await;
     assert_redirect(&response, "/auth/login?next=%2F");
 
@@ -323,7 +368,7 @@ async fn pages_redirect_to_login() {
 async fn anonymous_server_function_calls_get_401() {
     // Server functions sit behind the sign-in gate because `leptos_routes` registers them
     // inside it; this keeps that true through Leptos upgrades.
-    let harness = Harness::new();
+    let harness = Harness::new().await;
     for endpoint in ["list_jobs", "list_printers", "scan"] {
         let request = Request::post(format!("/api/{endpoint}"))
             .header(header::ORIGIN, ORIGIN)
@@ -349,7 +394,7 @@ async fn anonymous_server_function_calls_get_401() {
 
 #[tokio::test]
 async fn print_submits_with_user_and_options() {
-    let harness = Harness::new();
+    let harness = Harness::new().await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let response = print(
         &harness,
@@ -387,7 +432,7 @@ async fn print_submits_with_user_and_options() {
 
 #[tokio::test]
 async fn print_enforces_printer_capabilities() {
-    let harness = Harness::new();
+    let harness = Harness::new().await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     for (fields, error) in [
         (vec![("copies", "11")], "invalid_copies"),
@@ -430,7 +475,7 @@ async fn print_enforces_printer_capabilities() {
 
 #[tokio::test]
 async fn print_refuses_renamed_docx() {
-    let harness = Harness::new();
+    let harness = Harness::new().await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let docx = b"PK\x03\x04\x14\x00\x06\x00word/document.xml";
     let response = print(
@@ -467,7 +512,8 @@ async fn print_refuses_oversized_upload() {
     let harness = Harness::with(Setup {
         max_upload_size: 4096,
         ..Setup::default()
-    });
+    })
+    .await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let mut large = PDF.to_vec();
     large.resize(64 * 1024, b' ');
@@ -498,7 +544,7 @@ async fn print_refuses_oversized_upload() {
 
 #[tokio::test]
 async fn print_shows_unavailable_cups() {
-    let harness = Harness::new();
+    let harness = Harness::new().await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     harness.print.set_unavailable("connection refused");
 
@@ -522,7 +568,7 @@ async fn print_shows_unavailable_cups() {
 
 #[tokio::test]
 async fn cancel_uses_signed_in_user() {
-    let harness = Harness::new();
+    let harness = Harness::new().await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let response = harness
         .send(post("/jobs/7/cancel", &cookie, None, vec![]))
@@ -538,7 +584,7 @@ async fn cancel_uses_signed_in_user() {
 
 #[tokio::test]
 async fn cross_site_post_refused() {
-    let harness = Harness::new();
+    let harness = Harness::new().await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let forged = Request::post("/jobs/7/cancel")
         .header(header::COOKIE, &cookie)
@@ -569,12 +615,13 @@ async fn cross_site_post_refused() {
 
 #[tokio::test]
 async fn scan_result_download_and_owner_isolation() {
-    let harness = Harness::new();
+    let harness = Harness::new().await;
     let alice = harness.sign_in("alice-subject", "alice").await;
+    let alice_id = harness.user_id("alice").await.to_string();
     let bob = harness.sign_in("bob-subject", "bob").await;
     let result = harness
         .results
-        .put("alice-subject", OutputFormat::Pdf, 1, PDF)
+        .put(&alice_id, OutputFormat::Pdf, 1, PDF)
         .unwrap();
     let preview = format!("/scan/results/{}", result.id);
     let download = format!("{preview}/download");
@@ -631,11 +678,13 @@ async fn expired_scan_result_is_gone() {
     let harness = Harness::with(Setup {
         result_ttl: Duration::ZERO,
         ..Setup::default()
-    });
+    })
+    .await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
+    let alice_id = harness.user_id("alice").await.to_string();
     let result = harness
         .results
-        .put("alice-subject", OutputFormat::Png, 1, PNG)
+        .put(&alice_id, OutputFormat::Png, 1, PNG)
         .unwrap();
     let response = harness
         .send(
@@ -654,11 +703,13 @@ async fn save_writes_to_the_output_folder() {
     let harness = Harness::with(Setup {
         output_dir: Some(output.path().to_owned()),
         ..Setup::default()
-    });
+    })
+    .await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
+    let alice_id = harness.user_id("alice").await.to_string();
     let result = harness
         .results
-        .put("alice-subject", OutputFormat::Pdf, 1, PDF)
+        .put(&alice_id, OutputFormat::Pdf, 1, PDF)
         .unwrap();
     let response = harness
         .send(post(
@@ -682,11 +733,13 @@ async fn save_reports_unwritable_folder() {
     let harness = Harness::with(Setup {
         output_dir: Some(missing.clone()),
         ..Setup::default()
-    });
+    })
+    .await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
+    let alice_id = harness.user_id("alice").await.to_string();
     let result = harness
         .results
-        .put("alice-subject", OutputFormat::Pdf, 1, PDF)
+        .put(&alice_id, OutputFormat::Pdf, 1, PDF)
         .unwrap();
     let response = harness
         .send(post(
@@ -716,11 +769,12 @@ async fn save_reports_unwritable_folder() {
     assert_eq!(response.status(), StatusCode::OK);
 
     // Without a configured folder, there is nothing to save to.
-    let harness = Harness::new();
+    let harness = Harness::new().await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
+    let alice_id = harness.user_id("alice").await.to_string();
     let result = harness
         .results
-        .put("alice-subject", OutputFormat::Pdf, 1, PDF)
+        .put(&alice_id, OutputFormat::Pdf, 1, PDF)
         .unwrap();
     let response = harness
         .send(post(
@@ -735,7 +789,7 @@ async fn save_reports_unwritable_folder() {
 
 #[tokio::test]
 async fn sign_in_with_unavailable_provider_offers_a_retry() {
-    let harness = Harness::new();
+    let harness = Harness::new().await;
     let response = harness.send(page("/auth/login?next=/jobs", None)).await;
     assert_redirect(&response, "/auth/error?reason=unavailable&next=%2Fjobs");
 
@@ -785,9 +839,10 @@ async fn provider() -> MockServer {
 async fn sign_in_state_is_single_use() {
     let provider = provider().await;
     let harness = Harness::with(Setup {
-        issuer: provider.uri(),
+        issuer: Some(provider.uri()),
         ..Setup::default()
-    });
+    })
+    .await;
     let response = harness.send(page("/auth/login?next=/jobs", None)).await;
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     let authorize = Url::parse(&location(&response)).unwrap();
@@ -834,7 +889,7 @@ async fn sign_in_state_is_single_use() {
 
 #[tokio::test]
 async fn sign_out_ends_the_session() {
-    let harness = Harness::new();
+    let harness = Harness::new().await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let response = harness
         .send(post("/auth/logout", &cookie, None, vec![]))
@@ -854,9 +909,10 @@ async fn sign_out_without_an_id_token_still_ends_the_provider_session() {
     // refused account again.
     let provider = provider().await;
     let harness = Harness::with(Setup {
-        issuer: provider.uri(),
+        issuer: Some(provider.uri()),
         ..Setup::default()
-    });
+    })
+    .await;
     let response = harness.send(page("/auth/login?next=/", None)).await;
     let cookie = session_cookie(response.headers()).expect("a session cookie");
     let response = harness
@@ -885,7 +941,7 @@ async fn sign_out_without_an_id_token_still_ends_the_provider_session() {
 
 #[tokio::test]
 async fn responses_carry_security_headers() {
-    let harness = Harness::new();
+    let harness = Harness::new().await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let response = harness.send(page("/", Some(&cookie))).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -938,7 +994,7 @@ async fn responses_carry_security_headers() {
 
 #[tokio::test]
 async fn session_cookie_is_renewed_with_its_attributes() {
-    let harness = Harness::new();
+    let harness = Harness::new().await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     // Every signed-in request pushes the inactivity expiry back and says so in the cookie.
     for _ in 0..2 {
@@ -958,7 +1014,8 @@ async fn session_cookie_is_renewed_with_its_attributes() {
     let harness = Harness::with(Setup {
         public_url: "https://recto.test/",
         ..Setup::default()
-    });
+    })
+    .await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let response = harness.send(page("/", Some(&cookie))).await;
     assert!(set_cookie(response.headers()).contains("Secure"));
@@ -966,12 +1023,12 @@ async fn session_cookie_is_renewed_with_its_attributes() {
     // Anonymous visits store nothing and set no cookie.
     let response = harness.send(page("/no-access", None)).await;
     assert!(session_cookie(response.headers()).is_none());
-    assert!(harness.sessions.len() == 1);
+    assert_eq!(harness.session_count().await, 1);
 }
 
 #[tokio::test]
 async fn fallback_never_renders_the_interface_for_anonymous_visitors() {
-    let harness = Harness::new();
+    let harness = Harness::new().await;
     for path in ["/no-access/", "/jobs/", "/anything/", "/auth/error/x"] {
         let response = harness.send(page(path, None)).await;
         let next: String = url::form_urlencoded::byte_serialize(path.as_bytes()).collect();
@@ -993,4 +1050,125 @@ async fn fallback_never_renders_the_interface_for_anonymous_visitors() {
     let response = harness.send(page("/anything/", Some(&cookie))).await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert!(text(response).await.contains("Page not found"));
+}
+
+/// A server function call from recto's own pages.
+fn api(endpoint: &str, cookie: &str) -> Request<Body> {
+    Request::post(format!("/api/{endpoint}"))
+        .header(header::COOKIE, cookie)
+        .header(header::ORIGIN, ORIGIN)
+        .header("sec-fetch-site", "same-origin")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn disabled_user_is_signed_out_on_next_request() {
+    let harness = Harness::new().await;
+    let browser = harness.sign_in("alice-subject", "alice").await;
+    let island = harness.sign_in("alice-subject", "alice").await;
+    let administrator = harness.sign_in("admin-subject", "admin").await;
+    assert_eq!(
+        harness.send(page("/", Some(&browser))).await.status(),
+        StatusCode::OK
+    );
+    let alice = harness.user_id("alice").await;
+    let admin = harness.user_id("admin").await;
+
+    users::set_disabled(&harness.database, admin, alice, true)
+        .await
+        .unwrap();
+
+    let response = harness.send(page("/", Some(&browser))).await;
+    assert_redirect(&response, "/auth/login?next=%2F");
+    let response = harness.send(api("list_jobs", &island)).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    // Both sessions of the disabled user are gone; the administrator's stays.
+    assert_eq!(harness.session_count().await, 1);
+    assert_eq!(
+        harness.send(page("/", Some(&administrator))).await.status(),
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn password_change_ends_existing_sessions() {
+    let harness = Harness::new().await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let alice = harness.user_id("alice").await;
+    let policy = PasswordPolicy { minimum_length: 12 };
+
+    users::set_password(
+        &harness.database,
+        alice,
+        "a new long password".into(),
+        &policy,
+    )
+    .await
+    .unwrap();
+
+    let response = harness.send(page("/", Some(&cookie))).await;
+    assert_redirect(&response, "/auth/login?next=%2F");
+    // Signing in again after the change works.
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let response = harness.send(page("/", Some(&cookie))).await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn sessions_survive_a_new_router_on_the_same_database() {
+    let before = Harness::new().await;
+    let cookie = before.sign_in("alice-subject", "alice").await;
+
+    // A restart: new services and a new router, on the same database.
+    let after = Harness::with(Setup {
+        database: Some(before.database.clone()),
+        ..Setup::default()
+    })
+    .await;
+    drop(before);
+
+    let response = after.send(page("/", Some(&cookie))).await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn sign_in_routes_are_absent_without_openid_connect() {
+    let harness = Harness::with(Setup {
+        issuer: None,
+        ..Setup::default()
+    })
+    .await;
+    for uri in ["/auth/login?next=/jobs", "/auth/callback?code=c&state=s"] {
+        let response = harness.send(page(uri, None)).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
+
+    // Signing out still ends the session, without a provider to send the browser to.
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let response = harness
+        .send(post("/auth/logout", &cookie, None, vec![]))
+        .await;
+    assert_redirect(&response, "/auth/signed-out");
+    let response = harness.send(page("/", Some(&cookie))).await;
+    assert_redirect(&response, "/auth/login?next=%2F");
+}
+
+#[tokio::test]
+async fn unwritable_database_fails_at_startup() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = temp_dir();
+    let locked = dir.path().join("read-only");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let url = format!("sqlite://{}/recto.db", locked.display());
+
+    let error = recto::state::open_database(&url).await.unwrap_err();
+
+    // Let the temporary directory be removed.
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(error.starts_with("cannot open the database "), "{error}");
+    assert!(error.contains(&locked.display().to_string()), "{error}");
 }

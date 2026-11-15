@@ -11,6 +11,7 @@ use leptos::{
 use recto_authentication::User;
 use recto_printing::PrintService;
 use recto_scanning::{ResultStore, ScannerService};
+use sea_orm::DatabaseConnection;
 
 /// The services behind the interface. Trait objects, so tests swap in mocks.
 #[derive(Clone)]
@@ -18,13 +19,15 @@ pub struct AppState {
     pub print: Arc<dyn PrintService>,
     pub scan: Arc<dyn ScannerService>,
     /// Finished scans waiting to be downloaded or saved. Its I/O blocks: call it through
-    /// `tokio::task::spawn_blocking`. Results belong to [`User::subject`].
+    /// `tokio::task::spawn_blocking`. Results belong to the [`User::id`], as text.
     pub results: Arc<ResultStore>,
     /// Where "Save" writes scans; `None` hides the button.
     pub output_dir: Option<PathBuf>,
     /// Largest accepted upload, in bytes.
     pub max_upload_size: usize,
     pub leptos_options: LeptosOptions,
+    /// The accounts database (see [`recto_domain`]).
+    pub database: DatabaseConnection,
 }
 
 impl FromRef<AppState> for LeptosOptions {

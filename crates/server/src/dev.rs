@@ -1,6 +1,7 @@
 //! Development mocks: with `RECTO_DEV_MOCKS=1`, CUPS and SANE are replaced by in-memory
-//! services and every request is signed in as a fixed user, so the interface can be tried
-//! without a printer, a scanner or an identity provider.
+//! services and every request is signed in as a development user, an administrator kept in the
+//! database like any other, so the interface can be tried without a printer, a scanner or an
+//! identity provider.
 //!
 //! It signs everyone in, so it must never ship: this module only exists in debug builds with
 //! the `dev-mocks` feature (`mise run dev` enables it), and the crate refuses to compile with
@@ -8,14 +9,20 @@
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use axum::{extract::Request, middleware::Next, response::Response};
+use axum::{
+    extract::{Request, State},
+    middleware::Next,
+    response::Response,
+};
 use recto_app::state::AppState;
 use recto_authentication::User;
+use recto_domain::users::{self, Identity};
 use recto_printing::{
     Capabilities, ColorMode, Job, JobState, Printer, PrinterState, Sides, StateReason, Supply,
     testing::MockPrintService,
 };
 use recto_scanning::MockScannerService;
+use sea_orm::DatabaseConnection;
 
 /// Whether the mocks were asked for. Only the exact value `1` counts, so a stray
 /// `RECTO_DEV_MOCKS=0` does not turn them on.
@@ -23,25 +30,32 @@ pub fn requested(value: Option<&str>) -> bool {
     value == Some("1")
 }
 
-/// Who every request is signed in as.
-pub fn user() -> User {
-    User {
-        subject: "dev-mocks".into(),
-        username: "dev".into(),
+/// Who every request is signed in as: the user of a `dev-mocks` identity, created at the first
+/// run and found again afterwards, always an administrator.
+pub async fn development_user(database: &DatabaseConnection) -> recto_domain::Result<User> {
+    let identity = Identity {
+        issuer: "dev-mocks".into(),
+        subject: "dev".into(),
+        preferred_username: Some("dev".into()),
         name: Some("Development user".into()),
-    }
+        administrator: Some(true),
+        ..Identity::default()
+    };
+    let row = users::sign_in_with_identity(database, &identity).await?;
+    Ok(crate::session::user(&row))
 }
 
 /// Middleware giving every request the development user. It runs before the session is read,
 /// so a user signed in through the session still takes its place.
-pub async fn sign_in(mut request: Request, next: Next) -> Response {
-    request.extensions_mut().insert(user());
+pub async fn sign_in(State(user): State<User>, mut request: Request, next: Next) -> Response {
+    request.extensions_mut().insert(user);
     next.run(request).await
 }
 
-/// Swaps the services for mocks. Scans take a moment, as real ones do, so the waiting states
-/// of the scan page can be seen; Save writes under `target/` unless a folder is configured.
-pub fn apply(state: &mut AppState) {
+/// Swaps the services for mocks and returns the development user. Scans take a moment, as real
+/// ones do, so the waiting states of the scan page can be seen; Save writes under `target/`
+/// unless a folder is configured.
+pub async fn apply(state: &mut AppState) -> recto_domain::Result<User> {
     state.print = Arc::new(
         MockPrintService::new()
             .with_printers(printers())
@@ -56,6 +70,7 @@ pub fn apply(state: &mut AppState) {
         }
         state.output_dir = Some(dir);
     }
+    development_user(&state.database).await
 }
 
 fn supply(name: &str, level: Option<u8>, color: &str) -> Supply {
@@ -173,6 +188,19 @@ fn jobs() -> Vec<Job> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn the_development_user_is_an_administrator() {
+        let database = recto_domain::testing::database().await;
+        let first = development_user(&database).await.unwrap();
+        // A restart finds the same user.
+        let again = development_user(&database).await.unwrap();
+        assert_eq!(first, again);
+        assert_eq!(first.username, "dev");
+        assert_eq!(first.name, "Development user");
+        assert!(first.is_administrator);
+        assert!(!first.is_local);
+    }
 
     #[test]
     fn only_one_turns_the_mocks_on() {

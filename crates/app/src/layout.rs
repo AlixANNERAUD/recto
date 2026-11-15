@@ -28,7 +28,7 @@ fn destinations() -> [(&'static str, String, IconKind); 4] {
 /// The name of the signed-in user, for the header.
 #[cfg(feature = "ssr")]
 fn user_name() -> Option<String> {
-    crate::state::current_user().map(|user| user.name.unwrap_or(user.username))
+    crate::state::current_user().map(|user| user.name)
 }
 
 /// Pages render on the server only.

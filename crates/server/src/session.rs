@@ -1,39 +1,41 @@
 //! Sessions and the signed-in user.
 //!
-//! Sessions live in memory ([`Store`]) behind the `recto_session` cookie: `HttpOnly`,
-//! `SameSite=Lax`, `Secure` when the public URL is HTTPS. A signed-in session is forgotten after
-//! 12 hours without a request; a session that only holds a sign-in in progress, after 10
-//! minutes. The user is read from the session once per request and left in the request's
-//! extensions, where handlers, pages and server functions find it
-//! ([`recto_app::state::current_user`]).
+//! Sessions live in the accounts database ([`DatabaseSessionStore`]) behind the `recto_session`
+//! cookie: `HttpOnly`, `SameSite=Lax`, `Secure` when the public URL is HTTPS. A signed-in
+//! session is forgotten after 12 hours without a request; a session that only holds a sign-in
+//! in progress, after 10 minutes.
+//!
+//! A session holds the user's id and its sign-in time, not the user: the user is read from the
+//! database on every request ([`load_user`]) and left in the request's extensions, where
+//! handlers, pages and server functions find it ([`recto_app::state::current_user`]). Disabling
+//! a user or changing their password thus ends their sessions at their next request.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
-};
-
-use async_trait::async_trait;
 use axum::{
-    extract::Request,
+    extract::{Request, State},
     http::{Method, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
 };
+use chrono::Utc;
 use recto_app::{i18n, messages};
 use recto_authentication::User;
+use recto_domain::users;
+use recto_entity::users as user_rows;
+use sea_orm::DatabaseConnection;
 use tower_sessions::{
-    Expiry, Session, SessionManagerLayer, SessionStore,
-    cookie::{
-        SameSite,
-        time::{Duration, OffsetDateTime},
-    },
-    session::{Id, Record},
-    session_store::{self, ExpiredDeletion},
+    Expiry, Session, SessionManagerLayer,
+    cookie::{SameSite, time::Duration},
 };
 
-/// The signed-in [`User`].
-const USER: &str = "user";
-/// The ID token of the sign-in, a hint for the provider at sign-out.
+use crate::session_store::DatabaseSessionStore;
+
+/// The id of the signed-in user.
+const USER_ID: &str = "user_id";
+/// When the user signed in, in microseconds since the Unix epoch. Microseconds, because a
+/// session is valid only when it was signed in at or after the user's `sessions_valid_after`,
+/// which ends sessions to the microsecond (see [`recto_domain::users::set_password`]).
+const SIGNED_IN_AT: &str = "signed_in_at";
+/// The ID token of the sign-in, a hint for the provider at sign-out; empty without one.
 const ID_TOKEN: &str = "id_token";
 
 /// How long a signed-in session survives without a request.
@@ -41,86 +43,13 @@ const SIGNED_IN: Duration = Duration::hours(12);
 /// How long a session survives with only a sign-in in progress: the provider's round trip.
 const SIGNING_IN: Duration = Duration::minutes(10);
 
-/// Sessions in memory. Unlike tower-sessions' `MemoryStore`, expired records are deleted
-/// ([`ExpiredDeletion`]), so anonymous visitors starting sign-ins cannot grow memory for good.
-#[derive(Clone, Default)]
-pub struct Store(Arc<Mutex<HashMap<Id, Record>>>);
-
-// Records hold users and ID tokens; logs get the count only.
-impl std::fmt::Debug for Store {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("Store")
-            .field("records", &self.len())
-            .finish()
-    }
-}
-
-impl Store {
-    fn records(&self) -> MutexGuard<'_, HashMap<Id, Record>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// How many records are kept, expired ones included.
-    pub fn len(&self) -> usize {
-        self.records().len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.records().is_empty()
-    }
-}
-
-#[async_trait]
-impl SessionStore for Store {
-    async fn create(&self, record: &mut Record) -> session_store::Result<()> {
-        let mut records = self.records();
-        while records.contains_key(&record.id) {
-            record.id = Id::default();
-        }
-        records.insert(record.id, record.clone());
-        Ok(())
-    }
-
-    /// Updates a record that still exists, and never brings one back. Every request saves its
-    /// session, so a request that loaded it before a sign-out (or before sign-in retired its id)
-    /// would otherwise write the old user back when it ends. New and cycled ids go through
-    /// [`create`](SessionStore::create).
-    async fn save(&self, record: &Record) -> session_store::Result<()> {
-        if let Some(slot) = self.records().get_mut(&record.id) {
-            *slot = record.clone();
-        }
-        Ok(())
-    }
-
-    async fn load(&self, id: &Id) -> session_store::Result<Option<Record>> {
-        let now = OffsetDateTime::now_utc();
-        Ok(self
-            .records()
-            .get(id)
-            .filter(|record| record.expiry_date > now)
-            .cloned())
-    }
-
-    async fn delete(&self, id: &Id) -> session_store::Result<()> {
-        self.records().remove(id);
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl ExpiredDeletion for Store {
-    async fn delete_expired(&self) -> session_store::Result<()> {
-        let now = OffsetDateTime::now_utc();
-        self.records().retain(|_, record| record.expiry_date > now);
-        Ok(())
-    }
-}
-
 /// The session layer. Sessions are saved on every request (`always_save`), so the inactivity
 /// expiry moves with each request even when nothing in the session changes; a request without
 /// a session cookie and with nothing to store still creates nothing.
-pub fn layer(store: Store, secure: bool) -> SessionManagerLayer<Store> {
+pub fn layer(
+    store: DatabaseSessionStore,
+    secure: bool,
+) -> SessionManagerLayer<DatabaseSessionStore> {
     SessionManagerLayer::new(store)
         .with_name("recto_session")
         .with_http_only(true)
@@ -135,16 +64,19 @@ pub fn signing_in(session: &Session) {
     session.set_expiry(Some(Expiry::OnInactivity(SIGNING_IN)));
 }
 
-/// Starts a signed-in session. The session gets a new id, so an id planted in the browser
-/// before sign-in (session fixation) is worthless after it.
+/// Starts a signed-in session for the user `user_id`. The session gets a new id, so an id
+/// planted in the browser before sign-in (session fixation) is worthless after it.
 pub async fn sign_in(
     session: &Session,
-    user: &User,
+    user_id: i64,
     id_token: &str,
 ) -> Result<(), tower_sessions::session::Error> {
     session.cycle_id().await?;
     session.set_expiry(Some(Expiry::OnInactivity(SIGNED_IN)));
-    session.insert(USER, user).await?;
+    session.insert(USER_ID, user_id).await?;
+    session
+        .insert(SIGNED_IN_AT, Utc::now().timestamp_micros())
+        .await?;
     session.insert(ID_TOKEN, id_token).await
 }
 
@@ -157,14 +89,59 @@ pub async fn sign_out(session: &Session) -> Option<String> {
     id_token
 }
 
-/// Middleware putting the session's [`User`] in the request's extensions. A session that cannot
-/// be read counts as signed out. A session without a user holds at most a sign-in in progress,
-/// so its life stays short even though every request saves it.
-pub async fn load_user(session: Session, mut request: Request, next: Next) -> Response {
-    match session.get::<User>(USER).await {
-        Ok(Some(user)) => {
-            request.extensions_mut().insert(user);
-        }
+/// The [`User`] of a users row.
+pub fn user(row: &user_rows::Model) -> User {
+    User {
+        id: row.id,
+        username: row.username.clone(),
+        name: row.display_name.clone(),
+        is_administrator: row.is_administrator,
+        is_local: row.password_hash.is_some(),
+    }
+}
+
+/// Whether a session signed in at `signed_in_at` (microseconds since the Unix epoch) still
+/// counts for the user: the user exists, is not disabled, and the session was signed in at or
+/// after the user's `sessions_valid_after`.
+fn still_valid(row: &user_rows::Model, signed_in_at: i64) -> bool {
+    !row.is_disabled
+        && row
+            .sessions_valid_after
+            .is_none_or(|cutoff| signed_in_at >= cutoff.timestamp_micros())
+}
+
+/// Middleware putting the session's [`User`] in the request's extensions, read from the
+/// database. A session whose user is gone, disabled, or signed in before their sessions were
+/// ended is deleted, and the request is anonymous. A session without a user holds at most a
+/// sign-in in progress, so its life stays short even though every request saves it.
+pub async fn load_user(
+    State(database): State<DatabaseConnection>,
+    session: Session,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let signed_in = async {
+        let user_id = session.get::<i64>(USER_ID).await?;
+        let signed_in_at = session.get::<i64>(SIGNED_IN_AT).await?;
+        Ok::<_, tower_sessions::session::Error>(user_id.zip(signed_in_at))
+    };
+    match signed_in.await {
+        Ok(Some((user_id, signed_in_at))) => match users::find_by_id(&database, user_id).await {
+            Ok(Some(row)) if still_valid(&row, signed_in_at) => {
+                request.extensions_mut().insert(user(&row));
+            }
+            Ok(_) => {
+                tracing::info!(
+                    user_id,
+                    "session ended: the user is gone, disabled or signed out"
+                );
+                if let Err(error) = session.flush().await {
+                    tracing::warn!(%error, "ending the session failed");
+                }
+            }
+            // The session stays: it is valid again once the database answers.
+            Err(error) => tracing::error!(%error, "reading the signed-in user failed"),
+        },
         Ok(None) => signing_in(&session),
         Err(error) => {
             tracing::warn!(%error, "reading the session failed");
@@ -255,94 +232,34 @@ mod tests {
         assert_eq!(local_path(None), "/");
     }
 
-    fn record(expiry_date: OffsetDateTime) -> Record {
-        Record {
-            id: Id::default(),
-            data: Default::default(),
-            expiry_date,
-        }
-    }
-
-    #[tokio::test]
-    async fn expired_records_are_deleted() {
-        let store = Store::default();
-        let now = OffsetDateTime::now_utc();
-        let mut expired = record(now - Duration::seconds(1));
-        let mut active = record(now + Duration::minutes(5));
-        store.create(&mut expired).await.unwrap();
-        store.create(&mut active).await.unwrap();
-        // Expired records are never served, even before they are deleted.
-        assert!(store.load(&expired.id).await.unwrap().is_none());
-        assert_eq!(store.len(), 2);
-
-        store.delete_expired().await.unwrap();
-        assert_eq!(store.len(), 1);
-        let kept = store.load(&active.id).await.unwrap().unwrap();
-        assert_eq!(kept.id, active.id);
-    }
-
-    fn user() -> User {
-        User {
-            subject: "alice-subject".into(),
+    fn row(sessions_valid_after: Option<chrono::DateTime<Utc>>) -> user_rows::Model {
+        user_rows::Model {
+            id: 1,
             username: "alice".into(),
-            name: None,
+            display_name: "Alice".into(),
+            email: None,
+            password_hash: None,
+            is_administrator: false,
+            administrator_from_claim: false,
+            is_disabled: false,
+            sessions_valid_after: sessions_valid_after.map(|cutoff| cutoff.fixed_offset()),
+            created_at: Utc::now().fixed_offset(),
+            last_sign_in_at: None,
         }
-    }
-
-    fn session(store: &Store, id: Option<Id>) -> Session {
-        Session::new(id, Arc::new(store.clone()), None)
-    }
-
-    #[tokio::test]
-    async fn a_stale_request_cannot_undo_a_sign_out() {
-        let store = Store::default();
-        let signed_in = session(&store, None);
-        sign_in(&signed_in, &user(), "token").await.unwrap();
-        signed_in.save().await.unwrap();
-        let id = signed_in.id().unwrap();
-
-        // A slow request loads the session, a sign-out ends it, then the slow request ends.
-        let slow = session(&store, Some(id));
-        assert_eq!(slow.get::<User>(USER).await.unwrap(), Some(user()));
-        assert_eq!(
-            sign_out(&session(&store, Some(id))).await.as_deref(),
-            Some("token")
-        );
-        slow.save().await.unwrap();
-
-        assert!(store.load(&id).await.unwrap().is_none());
-        assert!(store.is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_stale_request_cannot_revive_an_id_retired_at_sign_in() {
-        let store = Store::default();
-        let pending = session(&store, None);
-        pending.insert("openid.next", "/jobs").await.unwrap();
-        pending.save().await.unwrap();
-        let old = pending.id().unwrap();
-
-        let slow = session(&store, Some(old));
-        assert!(slow.get::<String>("openid.next").await.unwrap().is_some());
-        let callback = session(&store, Some(old));
-        sign_in(&callback, &user(), "token").await.unwrap();
-        callback.save().await.unwrap();
-        let new = callback.id().unwrap();
-        assert_ne!(new, old);
-        slow.save().await.unwrap();
-
-        assert!(store.load(&old).await.unwrap().is_none());
-        assert!(store.load(&new).await.unwrap().is_some());
-        assert_eq!(store.len(), 1);
     }
 
     #[test]
-    fn debug_output_hides_records() {
-        let store = Store::default();
-        store.records().insert(
-            Id::default(),
-            record(OffsetDateTime::now_utc() + Duration::minutes(5)),
-        );
-        assert_eq!(format!("{store:?}"), "Store { records: 1 }");
+    fn sessions_signed_in_before_the_cutoff_are_refused() {
+        let cutoff = Utc::now();
+        let micros = cutoff.timestamp_micros();
+        assert!(still_valid(&row(None), micros));
+        assert!(still_valid(&row(Some(cutoff)), micros));
+        assert!(still_valid(&row(Some(cutoff)), micros + 1));
+        assert!(!still_valid(&row(Some(cutoff)), micros - 1));
+        let disabled = user_rows::Model {
+            is_disabled: true,
+            ..row(None)
+        };
+        assert!(!still_valid(&disabled, micros));
     }
 }

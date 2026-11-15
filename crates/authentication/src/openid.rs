@@ -39,7 +39,7 @@ use url::Url;
 
 use recto_domain::users::Identity;
 
-use crate::{claims, user::User};
+use crate::claims;
 
 /// Every claim of the ID token and UserInfo besides the standard ones.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -126,7 +126,6 @@ impl std::fmt::Debug for PendingSignIn {
 /// A completed sign-in.
 #[derive(Clone)]
 pub struct SignedIn {
-    pub user: User,
     /// What the provider says about the user, for the accounts database.
     pub identity: Identity,
     /// Kept in the session to hint the provider at sign-out.
@@ -138,7 +137,6 @@ impl std::fmt::Debug for SignedIn {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("SignedIn")
-            .field("user", &self.user)
             .field("identity", &self.identity)
             .finish_non_exhaustive()
     }
@@ -396,7 +394,8 @@ impl OpenId {
         // One request covers all of them. A provider without a UserInfo endpoint leaves the
         // claims absent.
         if (lacks_claim || lacks_profile || lacks_extra)
-            && let Ok(request) = client.user_info(token.access_token().clone(), Some(subject))
+            && let Ok(request) =
+                client.user_info(token.access_token().clone(), Some(subject.clone()))
         {
             match request.request_async(&self.http).await {
                 Ok(information) => {
@@ -428,18 +427,12 @@ impl OpenId {
         {
             return Err(OpenIdError::AccessDenied);
         }
-        let user = User::from_claims(&all)
-            .ok_or_else(|| OpenIdError::Rejected("the ID token has no subject".to_owned()))?;
-        let identity = identity(&self.settings, &all, &user.subject, incomplete);
+        let identity = identity(&self.settings, &all, subject.as_str(), incomplete);
         let id_token = token
             .id_token()
             .map(ToString::to_string)
             .unwrap_or_default();
-        Ok(SignedIn {
-            user,
-            identity,
-            id_token,
-        })
+        Ok(SignedIn { identity, id_token })
     }
 
     /// Where to send the browser to end the session at the provider, when it supports it and

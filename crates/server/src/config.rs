@@ -2,7 +2,7 @@
 
 use std::{net::SocketAddr, path::PathBuf};
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use url::Url;
 
 /// The format of log lines on standard error.
@@ -17,10 +17,28 @@ pub enum LogFormat {
 pub struct Config {
     #[arg(long, env = "RECTO_PUBLIC_URL")]
     pub public_url: Url,
-    #[arg(long, env = "RECTO_OIDC_ISSUER")]
-    pub oidc_issuer: Url,
+    /// `sqlite://<path>` (created if missing) or `postgres://<user>:<password>@<host>/<name>`
+    /// (must exist). Migrations run at startup.
+    #[arg(
+        long,
+        env = "RECTO_DATABASE_URL",
+        default_value = "sqlite:///data/recto.db",
+        hide_env_values = true
+    )]
+    pub database_url: String,
+    /// Read as text, so that a blank variable means no provider; [`Config::normalized`] parses
+    /// it into `oidc_issuer`.
+    #[arg(
+        long = "oidc-issuer",
+        env = "RECTO_OIDC_ISSUER",
+        value_name = "OIDC_ISSUER"
+    )]
+    oidc_issuer_text: Option<String>,
+    /// The OpenID Connect provider; set together with `oidc_client_id`, or neither.
+    #[arg(skip)]
+    pub oidc_issuer: Option<Url>,
     #[arg(long, env = "RECTO_OIDC_CLIENT_ID")]
-    pub oidc_client_id: String,
+    pub oidc_client_id: Option<String>,
     /// Extra scopes, separated by spaces, requested next to `openid`.
     #[arg(long, env = "RECTO_OIDC_SCOPES", value_delimiter = ' ')]
     pub oidc_scopes: Vec<String>,
@@ -28,6 +46,31 @@ pub struct Config {
     pub oidc_required_claim: Option<String>,
     #[arg(long, env = "RECTO_OIDC_REQUIRED_VALUE")]
     pub oidc_required_value: Option<String>,
+    /// A claim granting administration, checked at each sign-in.
+    #[arg(long, env = "RECTO_OIDC_ADMINISTRATOR_CLAIM")]
+    pub oidc_administrator_claim: Option<String>,
+    /// The value the administrator claim must hold; without it the claim must be present and
+    /// not `false` or `null`.
+    #[arg(long, env = "RECTO_OIDC_ADMINISTRATOR_VALUE")]
+    pub oidc_administrator_value: Option<String>,
+    /// A claim listing the user's groups.
+    #[arg(long, env = "RECTO_OIDC_GROUPS_CLAIM")]
+    pub oidc_groups_claim: Option<String>,
+    /// Sign-in with a username or email address and a password.
+    #[arg(long, env = "RECTO_LOCAL_ACCOUNTS", default_value_t = true, action = ArgAction::Set)]
+    pub local_accounts: bool,
+    /// Minimum length of local account passwords.
+    #[arg(long, env = "RECTO_PASSWORD_MINIMUM_LENGTH", default_value_t = 12)]
+    pub password_minimum_length: usize,
+    /// Read the client address from `X-Forwarded-For`, `X-Real-IP` or `Forwarded`; only behind
+    /// a proxy you control.
+    #[arg(
+        long,
+        env = "RECTO_TRUST_FORWARDED_HEADERS",
+        default_value_t = false,
+        action = ArgAction::Set
+    )]
+    pub trust_forwarded_headers: bool,
     #[arg(long, env = "RECTO_CUPS_URL", default_value = "http://localhost:631", value_parser = parse_cups_url)]
     pub cups_url: Url,
     #[arg(long, env = "RECTO_SCAN_OUTPUT_DIR", value_parser = parse_path)]
@@ -48,8 +91,13 @@ impl Config {
     pub fn normalized(mut config: Self) -> Result<Self, clap::Error> {
         config.oidc_scopes.retain(|scope| !scope.trim().is_empty());
         for value in [
+            &mut config.oidc_issuer_text,
+            &mut config.oidc_client_id,
             &mut config.oidc_required_claim,
             &mut config.oidc_required_value,
+            &mut config.oidc_administrator_claim,
+            &mut config.oidc_administrator_value,
+            &mut config.oidc_groups_claim,
         ] {
             if value.as_deref().is_some_and(|text| text.trim().is_empty()) {
                 *value = None;
@@ -68,12 +116,42 @@ impl Config {
                 format!("{message}\n"),
             ))
         };
+        config.oidc_issuer = match config.oidc_issuer_text.as_deref().map(str::trim) {
+            Some(text) => match Url::parse(text) {
+                Ok(url) => Some(url),
+                Err(error) => {
+                    return invalid(&format!("RECTO_OIDC_ISSUER is not a valid URL: {error}"));
+                }
+            },
+            None => None,
+        };
+        // Half a provider would quietly turn single sign-on off.
+        if config.oidc_issuer.is_some() != config.oidc_client_id.is_some() {
+            return invalid(
+                "RECTO_OIDC_ISSUER and RECTO_OIDC_CLIENT_ID go together: set both to sign in \
+                 with OpenID Connect, or neither",
+            );
+        }
+        if !config.local_accounts && config.oidc_issuer.is_none() {
+            return invalid(
+                "RECTO_LOCAL_ACCOUNTS is false and OpenID Connect is not configured, so nobody \
+                 could sign in: set RECTO_OIDC_ISSUER and RECTO_OIDC_CLIENT_ID, or turn local \
+                 accounts back on",
+            );
+        }
         // The value alone would be ignored: a misspelt claim variable would let every account
         // of the provider in, without a word.
         if config.oidc_required_value.is_some() && config.oidc_required_claim.is_none() {
             return invalid(
                 "RECTO_OIDC_REQUIRED_VALUE is set without RECTO_OIDC_REQUIRED_CLAIM: set the \
                  claim the value applies to, or remove the value",
+            );
+        }
+        // Likewise, the value alone would grant administration to nobody, without a word.
+        if config.oidc_administrator_value.is_some() && config.oidc_administrator_claim.is_none() {
+            return invalid(
+                "RECTO_OIDC_ADMINISTRATOR_VALUE is set without RECTO_OIDC_ADMINISTRATOR_CLAIM: set \
+                 the claim the value applies to, or remove the value",
             );
         }
         // Routes, redirects and the cookie path all assume recto is the whole site.
@@ -188,15 +266,105 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_issuer() {
-        let arguments = [
+    fn defaults_need_only_the_public_url() {
+        let config =
+            parse_arguments(["recto", "--public-url", "https://recto.example.com"]).unwrap();
+        assert_eq!(config.database_url, "sqlite:///data/recto.db");
+        assert_eq!(config.oidc_issuer, None);
+        assert_eq!(config.oidc_client_id, None);
+        assert!(config.local_accounts);
+        assert_eq!(config.password_minimum_length, 12);
+        assert!(!config.trust_forwarded_headers);
+        assert_eq!(config.oidc_administrator_claim, None);
+        assert_eq!(config.oidc_groups_claim, None);
+    }
+
+    #[test]
+    fn openid_connect_needs_both_issuer_and_client_id() {
+        let issuer_only = [
+            "recto",
+            "--public-url",
+            "https://recto.example.com",
+            "--oidc-issuer",
+            "https://id.example.com",
+        ];
+        let client_only = [
             "recto",
             "--public-url",
             "https://recto.example.com",
             "--oidc-client-id",
             "recto",
         ];
-        assert!(parse_arguments(arguments).is_err());
+        for arguments in [issuer_only, client_only] {
+            let error = parse_arguments(arguments).unwrap_err().to_string();
+            assert!(error.contains("RECTO_OIDC_ISSUER"), "{error}");
+            assert!(error.contains("RECTO_OIDC_CLIENT_ID"), "{error}");
+        }
+        let config = parse(&[]).unwrap();
+        assert_eq!(
+            config.oidc_issuer.as_ref().map(Url::as_str),
+            Some("https://id.example.com/")
+        );
+        assert_eq!(config.oidc_client_id.as_deref(), Some("recto"));
+    }
+
+    #[test]
+    fn blank_issuer_and_client_id_mean_no_openid_connect() {
+        let config = parse_arguments([
+            "recto",
+            "--public-url",
+            "https://recto.example.com",
+            "--oidc-issuer",
+            "",
+            "--oidc-client-id",
+            " ",
+        ])
+        .unwrap();
+        assert_eq!(config.oidc_issuer, None);
+        assert_eq!(config.oidc_client_id, None);
+        let mut arguments = REQUIRED;
+        arguments[4] = "not a url";
+        let error = parse_arguments(arguments).unwrap_err();
+        assert!(error.to_string().contains("RECTO_OIDC_ISSUER"), "{error}");
+    }
+
+    #[test]
+    fn some_way_to_sign_in_is_required() {
+        let error = parse_arguments([
+            "recto",
+            "--public-url",
+            "https://recto.example.com",
+            "--local-accounts",
+            "false",
+        ])
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("RECTO_LOCAL_ACCOUNTS"),
+            "{error}"
+        );
+        let config = parse(&["--local-accounts", "false"]).unwrap();
+        assert!(!config.local_accounts);
+    }
+
+    #[test]
+    fn administrator_value_needs_a_claim() {
+        let error = parse(&["--oidc-administrator-value", "admin"]).unwrap_err();
+        assert!(
+            error.to_string().contains("RECTO_OIDC_ADMINISTRATOR_CLAIM"),
+            "{error}"
+        );
+        let config = parse(&[
+            "--oidc-administrator-claim",
+            "roles",
+            "--oidc-administrator-value",
+            "admin",
+            "--oidc-groups-claim",
+            "groups",
+        ])
+        .unwrap();
+        assert_eq!(config.oidc_administrator_claim.as_deref(), Some("roles"));
+        assert_eq!(config.oidc_administrator_value.as_deref(), Some("admin"));
+        assert_eq!(config.oidc_groups_claim.as_deref(), Some("groups"));
     }
 
     /// The required arguments with another public URL.

@@ -299,9 +299,12 @@ async fn full_flow_returns_user() {
     let signed_in = sign_in(&provider, &openid, json!({}), json!({}))
         .await
         .unwrap();
-    assert_eq!(signed_in.user.subject, "subject-1");
-    assert_eq!(signed_in.user.username, "alice");
-    assert_eq!(signed_in.user.name.as_deref(), Some("Alice Martin"));
+    assert_eq!(signed_in.identity.subject, "subject-1");
+    assert_eq!(
+        signed_in.identity.preferred_username.as_deref(),
+        Some("alice")
+    );
+    assert_eq!(signed_in.identity.name.as_deref(), Some("Alice Martin"));
     assert!(!signed_in.id_token.is_empty());
 
     let post_logout: Url = "https://recto.example.org/".parse().unwrap();
@@ -387,7 +390,10 @@ async fn required_claim_from_userinfo() {
     )
     .await
     .unwrap();
-    assert_eq!(signed_in.user.username, "alice");
+    assert_eq!(
+        signed_in.identity.preferred_username.as_deref(),
+        Some("alice")
+    );
 }
 
 #[tokio::test]
@@ -460,7 +466,10 @@ async fn rotated_signing_key_is_picked_up() {
     answer.published = Key::Other;
     provider.respond(answer).await;
     let signed_in = openid.finish(pending, "the-code", &state).await.unwrap();
-    assert_eq!(signed_in.user.username, "alice");
+    assert_eq!(
+        signed_in.identity.preferred_username.as_deref(),
+        Some("alice")
+    );
     assert_eq!(provider.discovery_requests().await, 1, "one re-discovery");
 
     // The new keys are kept: the next sign-in needs no discovery.
@@ -558,7 +567,10 @@ async fn issuer_announced_with_a_trailing_slash_works() {
     let signed_in = sign_in(&provider, &openid, json!({}), json!({}))
         .await
         .unwrap();
-    assert_eq!(signed_in.user.username, "alice");
+    assert_eq!(
+        signed_in.identity.preferred_username.as_deref(),
+        Some("alice")
+    );
 }
 
 #[tokio::test]
@@ -606,8 +618,11 @@ async fn username_comes_from_user_information_when_the_id_token_has_no_profile()
     })
     .await
     .unwrap();
-    assert_eq!(signed_in.user.username, "alice.martin");
-    assert_eq!(signed_in.user.name.as_deref(), Some("Alice Martin"));
+    assert_eq!(
+        signed_in.identity.preferred_username.as_deref(),
+        Some("alice.martin")
+    );
+    assert_eq!(signed_in.identity.name.as_deref(), Some("Alice Martin"));
     assert_eq!(provider.user_information_requests().await, 1);
 }
 
@@ -620,7 +635,10 @@ async fn the_id_token_profile_needs_no_user_information() {
     })
     .await
     .unwrap();
-    assert_eq!(signed_in.user.username, "alice");
+    assert_eq!(
+        signed_in.identity.preferred_username.as_deref(),
+        Some("alice")
+    );
     assert_eq!(provider.user_information_requests().await, 0);
 }
 

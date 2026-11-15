@@ -10,9 +10,10 @@ use recto_scanning::{
     ResultStore, SaneScanners, ScanError, ScanRequest, ScannedPage, ScannerCapabilities,
     ScannerInfo, ScannerService,
 };
+use sea_orm::DatabaseConnection;
 use url::Url;
 
-use crate::config::Config;
+use crate::{config::Config, session_store::DatabaseSessionStore};
 
 /// How long a finished scan waits to be downloaded or saved.
 pub const SCAN_RESULT_TTL: Duration = Duration::from_secs(60 * 60);
@@ -20,23 +21,27 @@ pub const SCAN_RESULT_TTL: Duration = Duration::from_secs(60 * 60);
 /// What the sign-in routes need.
 #[derive(Clone)]
 pub struct AuthState {
-    pub openid: Arc<OpenId>,
+    /// The OpenID Connect provider; `None` when only local accounts sign in.
+    pub openid: Option<Arc<OpenId>>,
     /// The address users reach recto at, which CSRF checks compare `Origin` against.
     pub public_url: Url,
     /// Whether the session cookie is `Secure`: browsers drop such cookies over plain HTTP.
     pub secure_cookies: bool,
-    /// The sessions; the server deletes expired ones in the background.
-    pub sessions: crate::session::Store,
+    /// The accounts database, where sign-in finds or creates users.
+    pub database: DatabaseConnection,
+    /// The sessions, in the same database; the server deletes expired ones in the background.
+    pub sessions: DatabaseSessionStore,
 }
 
 impl AuthState {
-    pub fn new(openid: Arc<OpenId>, public_url: Url) -> Self {
+    pub fn new(openid: Option<Arc<OpenId>>, public_url: Url, database: DatabaseConnection) -> Self {
         let secure_cookies = public_url.scheme() == "https";
         Self {
             openid,
             public_url,
             secure_cookies,
-            sessions: crate::session::Store::default(),
+            sessions: DatabaseSessionStore::new(database.clone()),
+            database,
         }
     }
 
@@ -54,6 +59,39 @@ fn public_path(public_url: &Url, path: &str) -> Url {
         base.set_path(&with_slash);
     }
     base.join(path).unwrap_or(base)
+}
+
+/// Opens the database at `url` and applies the pending migrations. The error names the URL,
+/// without its password, and says why.
+pub async fn open_database(url: &str) -> Result<DatabaseConnection, String> {
+    let failed = |error: sea_orm::DbErr| {
+        format!(
+            "cannot open the database {}: {error}",
+            without_password(url)
+        )
+    };
+    let database = recto_domain::database::connect(url).await.map_err(failed)?;
+    recto_domain::database::migrate(&database)
+        .await
+        .map_err(failed)?;
+    Ok(database)
+}
+
+/// `url` with its password left out, for messages and logs. A URL that does not parse is shown
+/// up to its scheme only, since where its password is cannot be told.
+fn without_password(url: &str) -> String {
+    match Url::parse(url) {
+        Ok(mut parsed) if parsed.password().is_some() => {
+            // Setting the password only fails on URLs that cannot have one.
+            let _ = parsed.set_password(None);
+            parsed.to_string()
+        }
+        Ok(_) => url.to_owned(),
+        Err(_) => match url.split_once(':') {
+            Some((scheme, _)) => format!("{scheme}:…"),
+            None => "(unreadable URL)".to_owned(),
+        },
+    }
 }
 
 /// The directory of scan results, private to recto. Results of a previous run are unreachable
@@ -75,6 +113,7 @@ pub fn results_dir() -> std::io::Result<PathBuf> {
 pub async fn build(
     config: &Config,
     leptos_options: leptos::config::LeptosOptions,
+    database: DatabaseConnection,
 ) -> (AppState, AuthState) {
     let dir = results_dir().unwrap_or_else(|error| {
         // Scanning reports the storage error when it is used; printing must not suffer.
@@ -90,20 +129,26 @@ pub async fn build(
         output_dir: config.scan_output_dir.clone(),
         max_upload_size: config.max_upload_size,
         leptos_options,
+        database: database.clone(),
     };
-    let redirect_url = public_path(&config.public_url, "auth/callback");
-    let openid = OpenId::new(OpenIdSettings {
-        issuer: config.oidc_issuer.clone(),
-        client_id: config.oidc_client_id.clone(),
-        redirect_url,
-        extra_scopes: config.oidc_scopes.clone(),
-        required_claim: config.oidc_required_claim.clone(),
-        required_value: config.oidc_required_value.clone(),
-        administrator_claim: None,
-        administrator_value: None,
-        groups_claim: None,
-    });
-    let auth = AuthState::new(Arc::new(openid), config.public_url.clone());
+    let openid = config
+        .oidc_issuer
+        .clone()
+        .zip(config.oidc_client_id.clone())
+        .map(|(issuer, client_id)| {
+            Arc::new(OpenId::new(OpenIdSettings {
+                issuer,
+                client_id,
+                redirect_url: public_path(&config.public_url, "auth/callback"),
+                extra_scopes: config.oidc_scopes.clone(),
+                required_claim: config.oidc_required_claim.clone(),
+                required_value: config.oidc_required_value.clone(),
+                administrator_claim: config.oidc_administrator_claim.clone(),
+                administrator_value: config.oidc_administrator_value.clone(),
+                groups_claim: config.oidc_groups_claim.clone(),
+            }))
+        });
+    let auth = AuthState::new(openid, config.public_url.clone(), database);
     (state, auth)
 }
 
@@ -152,42 +197,54 @@ impl ScannerService for NoScanners {
 mod tests {
     use super::*;
 
-    fn auth(public_url: &str) -> AuthState {
+    async fn auth(public_url: &str) -> AuthState {
         let url = Url::parse(public_url).unwrap();
-        AuthState::new(
-            Arc::new(OpenId::new(OpenIdSettings {
-                issuer: Url::parse("http://127.0.0.1:9/").unwrap(),
-                client_id: "recto".into(),
-                redirect_url: url.clone(),
-                extra_scopes: vec![],
-                required_claim: None,
-                required_value: None,
-                administrator_claim: None,
-                administrator_value: None,
-                groups_claim: None,
-            })),
-            url,
-        )
+        AuthState::new(None, url, recto_domain::testing::database().await)
     }
 
-    #[test]
-    fn secure_cookies_follow_the_public_url() {
-        assert!(auth("https://recto.example.org").secure_cookies);
-        assert!(!auth("http://192.168.1.2:8080").secure_cookies);
+    #[tokio::test]
+    async fn secure_cookies_follow_the_public_url() {
+        assert!(auth("https://recto.example.org").await.secure_cookies);
+        assert!(!auth("http://192.168.1.2:8080").await.secure_cookies);
     }
 
-    #[test]
-    fn public_paths_keep_a_prefix() {
+    #[tokio::test]
+    async fn public_paths_keep_a_prefix() {
         assert_eq!(
             auth("https://example.org/recto")
+                .await
                 .public("auth/callback")
                 .as_str(),
             "https://example.org/recto/auth/callback"
         );
         assert_eq!(
-            auth("https://example.org").public("auth/callback").as_str(),
+            auth("https://example.org")
+                .await
+                .public("auth/callback")
+                .as_str(),
             "https://example.org/auth/callback"
         );
+    }
+
+    #[test]
+    fn database_urls_are_shown_without_their_password() {
+        assert_eq!(
+            without_password("postgres://recto:secret@db:5432/recto"),
+            "postgres://recto@db:5432/recto"
+        );
+        assert_eq!(
+            without_password("sqlite:///data/recto.db"),
+            "sqlite:///data/recto.db"
+        );
+        assert_eq!(
+            without_password("sqlite://target/dev.db"),
+            "sqlite://target/dev.db"
+        );
+        assert_eq!(
+            without_password("postgres://recto:secret@db:port/recto"),
+            "postgres:…"
+        );
+        assert_eq!(without_password("recto.db"), "(unreadable URL)");
     }
 
     #[tokio::test]

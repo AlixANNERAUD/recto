@@ -11,4 +11,5 @@ pub mod dev;
 pub mod routes;
 pub mod serve;
 pub mod session;
+pub mod session_store;
 pub mod state;

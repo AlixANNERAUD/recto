@@ -27,6 +27,10 @@ recto-app = { workspace = true, features = ["ssr"] }
 recto-printing = { workspace = true, features = ["service"] }
 recto-scanning = { workspace = true, features = ["sane"] }
 recto-authentication.workspace = true
+recto-domain.workspace = true
+recto-entity.workspace = true
+sea-orm.workspace = true
+chrono.workspace = true
 leptos = { workspace = true, features = ["ssr"] }
 leptos_axum.workspace = true
 axum = { workspace = true, features = ["multipart"] }
@@ -45,6 +49,7 @@ reqwest.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+recto-domain = { workspace = true, features = ["testing"] }
 recto-printing = { workspace = true, features = ["testing"] }
 recto-scanning = { workspace = true, features = ["testing"] }
 tempfile.workspace = true
