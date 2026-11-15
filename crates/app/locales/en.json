@@ -159,6 +159,7 @@
       "too_short": "The password must be at least {minimum} characters long.",
       "too_long": "The password must be at most {maximum} characters long.",
       "own_account": "You cannot change this on your own account.",
+      "from_claim": "Administration of this user comes from the identity provider. Change it there, or on the server with recto administrator --remove.",
       "not_found": "That user no longer exists.",
       "unavailable": "The change could not be saved. Try again in a moment."
     },

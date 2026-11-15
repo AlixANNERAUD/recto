@@ -50,6 +50,10 @@ pub enum Problem {
     /// lock everyone out.
     #[error("you cannot change this on your own account")]
     OwnAccount,
+    /// The identity provider's administrator claim granted administration, and the next sign-in
+    /// would apply it again, so changing it by hand would only mislead. The command line can.
+    #[error("administration of this user comes from the identity provider")]
+    AdministratorFromClaim,
 }
 
 /// The result of a domain operation.

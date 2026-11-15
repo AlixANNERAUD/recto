@@ -77,6 +77,7 @@ pub enum UsersProblem {
         maximum: usize,
     },
     OwnAccount,
+    AdministratorFromClaim,
     UserNotFound,
     /// The database failed.
     Unavailable,
@@ -97,6 +98,9 @@ impl UsersRefusal {
                 tf!("administration.errors.too_long", maximum = maximum)
             }
             UsersProblem::OwnAccount => t!("administration.errors.own_account").to_owned(),
+            UsersProblem::AdministratorFromClaim => {
+                t!("administration.errors.from_claim").to_owned()
+            }
             UsersProblem::UserNotFound => t!("administration.errors.not_found").to_owned(),
             UsersProblem::Unavailable => t!("administration.errors.unavailable").to_owned(),
         };

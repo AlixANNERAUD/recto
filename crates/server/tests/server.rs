@@ -2079,6 +2079,35 @@ async fn admin_cannot_disable_or_demote_themselves() {
         .send(page("/administration/users", Some(&admin)))
         .await;
     assert_eq!(response.status(), StatusCode::OK);
+
+    // Nor can an administrator set their own password here: it would sign them out everywhere,
+    // where the Account page keeps their session.
+    let harness = Harness::new().await;
+    harness.local_user("root", ALICE_PASSWORD).await;
+    let root_id = harness.user_id("root").await;
+    users::set_administrator_from_command_line(&harness.database, root_id, true)
+        .await
+        .unwrap();
+    let root = harness.sign_in_with_password("root", ALICE_PASSWORD).await;
+    let response = harness
+        .send(form(
+            &format!("/administration/users/{root_id}/password"),
+            Some(&root),
+            &[("password", "chosen on the wrong page")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let html = text(response).await;
+    assert!(
+        html.contains("root: You cannot change this on your own account."),
+        "{html}"
+    );
+    // The password is unchanged, and the session still signed in.
+    harness.sign_in_with_password("root", ALICE_PASSWORD).await;
+    let response = harness
+        .send(page("/administration/users", Some(&root)))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -2113,6 +2142,27 @@ async fn claim_granted_admin_has_no_manual_toggle() {
         html.contains(&format!("/administration/users/{}/disabled", bob.id)),
         "{html}"
     );
+    // A hand-made post changes nothing either way: the provider decides.
+    for value in ["false", "true"] {
+        let response = harness
+            .send(form(
+                &format!("/administration/users/{}/administrator", bob.id),
+                Some(&admin),
+                &[("value", value)],
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{value}");
+        let html = text(response).await;
+        assert!(
+            html.contains("bob: Administration of this user comes from the identity provider."),
+            "{html}"
+        );
+        let row = harness.user("bob").await;
+        assert!(
+            row.is_administrator && row.administrator_from_claim,
+            "{value}"
+        );
+    }
 }
 
 #[tokio::test]

@@ -212,6 +212,7 @@ fn refused(error: Error) -> (StatusCode, UsersProblem) {
             UsersProblem::PasswordTooLong { maximum }
         }
         Error::Invalid(Problem::OwnAccount) => UsersProblem::OwnAccount,
+        Error::Invalid(Problem::AdministratorFromClaim) => UsersProblem::AdministratorFromClaim,
         Error::NotFound => return (StatusCode::NOT_FOUND, UsersProblem::UserNotFound),
         error @ (Error::Database(_) | Error::Disabled | Error::InvalidCredentials) => {
             tracing::error!(%error, "changing a user failed");

@@ -399,7 +399,9 @@ pub async fn set_disabled(
 }
 
 /// Grants or removes administration by hand. The grant is marked as manual, so a later
-/// administrator claim of `false` does not take it back. Refused on the actor's own account.
+/// administrator claim of `false` does not take it back. Refused on the actor's own account, and
+/// on administration the claim granted ([`Problem::AdministratorFromClaim`]): removing it would
+/// last until the next sign-in, and granting it again would quietly take it from the provider.
 pub async fn set_administrator(
     database: &(impl ConnectionTrait + TransactionTrait),
     actor_id: i64,
@@ -407,6 +409,9 @@ pub async fn set_administrator(
     administrator: bool,
 ) -> Result<()> {
     let user = other_user(database, actor_id, user_id).await?;
+    if user.administrator_from_claim {
+        return Err(Error::Invalid(Problem::AdministratorFromClaim));
+    }
     store_administrator(database, user, administrator).await
 }
 
@@ -982,9 +987,11 @@ mod tests {
         let root = create_local(&database, local("root", None), &POLICY)
             .await
             .unwrap();
-        let mut alice = identity("s", "alice");
-        alice.administrator = Some(true);
-        let user = sign_in_with_identity(&database, &alice).await.unwrap();
+        // Administration granted by a claim cannot be changed by hand (see
+        // `administration_from_the_claim_is_not_changed_by_hand`), so this user has none.
+        let user = sign_in_with_identity(&database, &identity("s", "alice"))
+            .await
+            .unwrap();
 
         let before = chrono::Utc::now();
         set_disabled(&database, root.id, user.id, true)
@@ -1031,6 +1038,35 @@ mod tests {
         let unchanged = reload(&database, root.id).await;
         assert!(unchanged.is_administrator);
         assert!(!unchanged.is_disabled);
+    }
+
+    #[tokio::test]
+    async fn administration_from_the_claim_is_not_changed_by_hand() {
+        let database = crate::testing::database().await;
+        let root = create_local(&database, local("root", None), &POLICY)
+            .await
+            .unwrap();
+        let mut alice = identity("alice", "alice");
+        alice.administrator = Some(true);
+        let alice = sign_in_with_identity(&database, &alice).await.unwrap();
+
+        for administrator in [false, true] {
+            assert!(matches!(
+                set_administrator(&database, root.id, alice.id, administrator).await,
+                Err(Error::Invalid(Problem::AdministratorFromClaim))
+            ));
+            let unchanged = reload(&database, alice.id).await;
+            assert!(unchanged.is_administrator);
+            assert!(unchanged.administrator_from_claim);
+        }
+
+        // The command line still can, for when the claim is no longer configured.
+        set_administrator_from_command_line(&database, alice.id, false)
+            .await
+            .unwrap();
+        let removed = reload(&database, alice.id).await;
+        assert!(!removed.is_administrator);
+        assert!(!removed.administrator_from_claim);
     }
 
     #[tokio::test]
