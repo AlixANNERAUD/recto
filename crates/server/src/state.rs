@@ -85,20 +85,24 @@ fn public_path(public_url: &Url, path: &str) -> Url {
     base.join(path).unwrap_or(base)
 }
 
-/// Opens the database at `url` and applies the pending migrations. The error names the URL,
-/// without its password, and says why.
+/// Opens the database at `url` and applies the pending migrations. The error says why (see
+/// [`cannot_open`]).
 pub async fn open_database(url: &str) -> Result<DatabaseConnection, String> {
-    let failed = |error: sea_orm::DbErr| {
-        format!(
-            "cannot open the database {}: {error}",
-            without_password(url)
-        )
-    };
+    let failed = |error| cannot_open(url, &error);
     let database = recto_domain::database::connect(url).await.map_err(failed)?;
     recto_domain::database::migrate(&database)
         .await
         .map_err(failed)?;
     Ok(database)
+}
+
+/// The message of a database that cannot be opened: the URL, without its password, and the
+/// setting it comes from, so the operator knows what to fix.
+pub fn cannot_open(url: &str, error: &sea_orm::DbErr) -> String {
+    format!(
+        "cannot open the database {} (RECTO_DATABASE_URL): {error}",
+        without_password(url)
+    )
 }
 
 /// `url` with its password left out, for messages and logs. A URL that does not parse is shown

@@ -14,7 +14,7 @@ a default, such as `RECTO_LOCAL_ACCOUNTS`, must be left out rather than empty.
 | `RECTO_PUBLIC_URL` | required | The address people open, such as `https://recto.example.org`. Sign-in redirects, the allowed origin of forms and the `Secure` flag of the session cookie come from it. It must be the root of a site: a path such as `/recto` is refused. |
 | `RECTO_DATABASE_URL` | `sqlite:///data/recto.db` | The database. See [Database](#database). |
 | `RECTO_LOCAL_ACCOUNTS` | `true` | `true` lets local accounts sign in with a password at `/sign-in`; `false` leaves single sign-on only, and needs it configured. |
-| `RECTO_PASSWORD_MINIMUM_LENGTH` | `12` | The fewest characters a new password may have. The most is 1,024. |
+| `RECTO_PASSWORD_MINIMUM_LENGTH` | `12` | The fewest characters a new password may have, from 1 to 1,024; another value is refused at startup and by `recto create-administrator`. A password has at most 1,024 characters. |
 | `RECTO_TRUST_FORWARDED_HEADERS` | `false` | `true` counts password sign-in attempts by the address in `X-Forwarded-For`, `X-Real-IP` or `Forwarded`, rather than the connection's. Only behind a proxy that replaces these headers: see [Run behind a reverse proxy](../how-to/reverse-proxy.md#count-sign-in-attempts-per-person). |
 | `RECTO_OIDC_ISSUER` | none | The issuer URL of the OpenID Connect provider. Set it with `RECTO_OIDC_CLIENT_ID`, or neither: one without the other is refused at startup. |
 | `RECTO_OIDC_CLIENT_ID` | none | The client id of recto's public client in that provider. |

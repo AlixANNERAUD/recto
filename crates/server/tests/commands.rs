@@ -76,6 +76,35 @@ async fn create_administrator_refuses_a_short_password() {
 }
 
 #[tokio::test]
+async fn create_administrator_refuses_an_impossible_minimum_length() {
+    let database = testing::database().await;
+    for minimum in [0, 1025] {
+        let options = CreateAdministratorOptions {
+            password_minimum_length: minimum,
+            ..create_options("root")
+        };
+        let error = commands::create_administrator(&database, &options, || {
+            panic!("the password is not asked for")
+        })
+        .await
+        .unwrap_err();
+        assert!(error.contains("RECTO_PASSWORD_MINIMUM_LENGTH"), "{error}");
+    }
+    assert!(users::list(&database).await.unwrap().is_empty());
+}
+
+#[test]
+fn a_piped_password_is_one_line() {
+    assert_eq!(
+        commands::read_password_line(&b"correct horse battery\r\nmore"[..]).unwrap(),
+        "correct horse battery"
+    );
+    assert_eq!(commands::read_password_line(&b"last"[..]).unwrap(), "last");
+    let error = commands::read_password_line(&b""[..]).unwrap_err();
+    assert!(error.contains("no password"), "{error}");
+}
+
+#[tokio::test]
 async fn administrator_grants_and_removes() {
     let database = testing::database().await;
     commands::create_administrator(&database, &create_options("root"), || {

@@ -12,8 +12,8 @@ use recto_domain::{
 use sea_orm::DatabaseConnection;
 
 use crate::{
-    config::{AdministratorOptions, CreateAdministratorOptions},
-    state::{open_database, without_password},
+    config::{AdministratorOptions, CreateAdministratorOptions, check_password_minimum_length},
+    state::{cannot_open, open_database},
 };
 
 /// Applies the pending migrations.
@@ -59,12 +59,9 @@ pub fn require_existing_database(url: &str) -> Result<(), String> {
 pub async fn backup(url: &str, destination: &Path) -> Result<(), String> {
     check_backup_url(url)?;
     require_existing_database(url)?;
-    let database = database::connect(url).await.map_err(|error| {
-        format!(
-            "cannot open the database {}: {error}",
-            without_password(url)
-        )
-    })?;
+    let database = database::connect(url)
+        .await
+        .map_err(|error| cannot_open(url, &error))?;
     database::backup(&database, destination)
         .await
         .map_err(|error| match error {
@@ -88,22 +85,32 @@ pub fn read_password() -> Result<String, String> {
         }
         Ok(password)
     } else {
-        let mut line = String::new();
-        std::io::stdin()
-            .lock()
-            .read_line(&mut line)
-            .map_err(|error| format!("cannot read the password: {error}"))?;
-        Ok(line.trim_end_matches(['\r', '\n']).to_owned())
+        read_password_line(std::io::stdin().lock())
     }
 }
 
+/// The first line of `input`, without its line ending: a password piped to the command.
+pub fn read_password_line(mut input: impl BufRead) -> Result<String, String> {
+    let mut line = String::new();
+    let read = input
+        .read_line(&mut line)
+        .map_err(|error| format!("cannot read the password: {error}"))?;
+    // Nothing at all, as from `< /dev/null`, is a mistake rather than an empty password.
+    if read == 0 {
+        return Err("no password was given on standard input".to_owned());
+    }
+    Ok(line.trim_end_matches(['\r', '\n']).to_owned())
+}
+
 /// Creates a local administrator. `read_password` is a parameter so tests need no terminal; it
-/// runs only once the database is open, so a bad URL fails before any prompt.
+/// runs only once the database is open and the options are checked, so a bad URL or minimum
+/// length fails before any prompt.
 pub async fn create_administrator(
     database: &DatabaseConnection,
     options: &CreateAdministratorOptions,
     read_password: impl FnOnce() -> Result<String, String>,
 ) -> Result<(), String> {
+    check_password_minimum_length(options.password_minimum_length)?;
     let password = read_password()?;
     let user = users::create_local(
         database,

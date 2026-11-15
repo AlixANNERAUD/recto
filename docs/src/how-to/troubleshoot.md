@@ -14,17 +14,17 @@ Set `RECTO_LOG_FORMAT: text` to read it more easily, and `RUST_LOG: debug` for m
 **recto exits with a message about a setting.** recto checks its settings before it starts. A
 required setting is missing, a URL is malformed, `RECTO_PUBLIC_URL` has a path, only one of
 `RECTO_OIDC_ISSUER` and `RECTO_OIDC_CLIENT_ID` is set, local accounts are off without a provider,
-or a `_VALUE` setting is set without its `_CLAIM`. The message names the setting; see
-[Configuration](../reference/configuration.md).
+a `_VALUE` setting is set without its `_CLAIM`, or `RECTO_PASSWORD_MINIMUM_LENGTH` is not between
+1 and 1,024. The message names the setting; see [Configuration](../reference/configuration.md).
 
-**recto: cannot open the database sqlite:///data/recto.db: … unable to open database file.** No
-volume is mounted on `/data`, so the read-only file system has no room for the database, or the
-folder mounted there is not writable by user 65532. Mount a volume, as `compose.yml` does (see
-[Upgrade](upgrade.md#from-a-version-without-accounts)).
+**recto: cannot open the database sqlite:///data/recto.db (RECTO_DATABASE_URL): … unable to
+open database file.** No volume is mounted on `/data`, so the read-only file system has no room
+for the database, or the folder mounted there is not writable by user 65532. Mount a volume, as
+`compose.yml` does (see [Upgrade](upgrade.md#from-a-version-without-accounts)).
 
-**recto: cannot open the database postgres://…** PostgreSQL is not reachable, the database does
-not exist, or the password is wrong. The message hides the password. Check
-`RECTO_DATABASE_URL`, and percent-encode special characters in the password (see
+**recto: cannot open the database postgres://… (RECTO_DATABASE_URL): …** PostgreSQL is not
+reachable, the database does not exist, or the password is wrong. The message hides the
+password. Check `RECTO_DATABASE_URL`, and percent-encode special characters in the password (see
 [Database](../reference/configuration.md#database)).
 
 **Compose says `set RECTO_PUBLIC_URL to the address users open`.** The `.env` file is missing or

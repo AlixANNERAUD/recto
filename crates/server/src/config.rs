@@ -160,6 +160,9 @@ impl Config {
                  the claim the value applies to, or remove the value",
             );
         }
+        if let Err(message) = check_password_minimum_length(config.password_minimum_length) {
+            return invalid(&message);
+        }
         // Routes, redirects and the cookie path all assume recto is the whole site.
         if config.public_url.path() != "/" {
             return invalid(
@@ -168,6 +171,19 @@ impl Config {
             );
         }
         Ok(config)
+    }
+}
+
+/// Refuses a minimum password length no password could meet, or one of 0, which would accept
+/// an empty password.
+pub fn check_password_minimum_length(length: usize) -> Result<(), String> {
+    if (1..=passwords::MAXIMUM_LENGTH).contains(&length) {
+        Ok(())
+    } else {
+        Err(format!(
+            "RECTO_PASSWORD_MINIMUM_LENGTH must be between 1 and {}, not {length}",
+            passwords::MAXIMUM_LENGTH
+        ))
     }
 }
 
@@ -263,7 +279,8 @@ pub enum Command {
     Migrate(DatabaseOptions),
     /// Copy the SQLite database to a new file (use pg_dump for PostgreSQL).
     Backup(BackupOptions),
-    /// Create a local administrator; the password is read from standard input.
+    /// Create a local administrator; the password is asked twice on a terminal, otherwise read
+    /// from one line of standard input.
     CreateAdministrator(CreateAdministratorOptions),
     /// Grant or remove administration of an existing user.
     Administrator(AdministratorOptions),
@@ -457,6 +474,21 @@ mod tests {
             "recto",
         ]);
         assert_eq!(both.unwrap().oidc_required_value.as_deref(), Some("recto"));
+    }
+
+    #[test]
+    fn password_minimum_length_is_bounded() {
+        for length in ["0", "1025"] {
+            let error = parse(&["--password-minimum-length", length]).unwrap_err();
+            assert!(
+                error.to_string().contains("RECTO_PASSWORD_MINIMUM_LENGTH"),
+                "{error}"
+            );
+        }
+        for length in [1, 1024] {
+            let config = parse(&["--password-minimum-length", &length.to_string()]).unwrap();
+            assert_eq!(config.password_minimum_length, length);
+        }
     }
 
     #[test]

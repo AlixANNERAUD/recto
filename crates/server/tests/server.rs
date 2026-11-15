@@ -1293,6 +1293,8 @@ async fn unwritable_database_fails_at_startup() {
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(error.starts_with("cannot open the database "), "{error}");
     assert!(error.contains(&locked.display().to_string()), "{error}");
+    // The setting to fix.
+    assert!(error.contains("RECTO_DATABASE_URL"), "{error}");
 }
 
 const ALICE_PASSWORD: &str = "correct horse battery";

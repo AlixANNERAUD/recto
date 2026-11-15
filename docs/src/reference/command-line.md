@@ -12,7 +12,7 @@ Commands:
   healthcheck           Exit 0 when a running server answers `/health`; for container health checks
   migrate               Apply the pending database migrations and exit
   backup                Copy the SQLite database to a new file (use pg_dump for PostgreSQL)
-  create-administrator  Create a local administrator; the password is read from standard input
+  create-administrator  Create a local administrator; the password is asked twice on a terminal, otherwise read from one line of standard input
   administrator         Grant or remove administration of an existing user
   help                  Print this message or the help of the given subcommand(s)
 
@@ -96,7 +96,8 @@ Creates a local account that is an administrator. The username follows the rules
 [local accounts](accounts.md#local-accounts); the display name defaults to it.
 
 On a terminal, the command asks for the password twice, without showing it. Otherwise it reads
-one line of standard input, so a script can pipe the password in:
+one line of standard input, so a script can pipe the password in; an empty standard input is
+refused:
 
 ```sh
 printf '%s\n' "$PASSWORD" | recto create-administrator --username admin
@@ -104,7 +105,7 @@ printf '%s\n' "$PASSWORD" | recto create-administrator --username admin
 
 | Option | Variable | Default |
 | --- | --- | --- |
-| `--password-minimum-length <LENGTH>` | `RECTO_PASSWORD_MINIMUM_LENGTH` | `12` |
+| `--password-minimum-length <LENGTH>` | `RECTO_PASSWORD_MINIMUM_LENGTH` | `12`, from 1 to 1,024 |
 
 It creates the database if it does not exist yet, so it can run before the first start of the
 server.
