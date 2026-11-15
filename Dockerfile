@@ -61,7 +61,7 @@ COPY --from=builder /out/site /site
 FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 LABEL org.opencontainers.image.title="recto" \
-      org.opencontainers.image.description="Print and scan from a browser: CUPS and SANE behind OpenID Connect." \
+      org.opencontainers.image.description="Print and scan from a browser: CUPS and SANE behind local accounts or OpenID Connect." \
       org.opencontainers.image.source="https://github.com/AlixANNERAUD/recto" \
       org.opencontainers.image.licenses="Apache-2.0"
 

@@ -132,8 +132,8 @@ jobs:
           platforms: linux/${{ matrix.architecture }}
           cache-from: type=gha,scope=image-${{ matrix.architecture }}
           cache-to: type=gha,scope=image-${{ matrix.architecture }},mode=max
-      # Through compose.yml, so the file users start from is tested too. The identity provider is
-      # never contacted at startup, so dummy values are enough for the image to turn healthy.
+      # Through compose.yml, so the file users start from is tested too, with its defaults: local
+      # accounts and SQLite on the recto-data volume, without an identity provider.
       - name: Start the image and wait until it reports healthy
         run: |
           mkdir consume
@@ -149,8 +149,20 @@ jobs:
         env:
           RECTO_IMAGE: recto:ci
           RECTO_PUBLIC_URL: http://localhost:8080
-          RECTO_OIDC_ISSUER: http://127.0.0.1:9/
-          RECTO_OIDC_CLIENT_ID: recto-ci
+      # The quick start's first administrator, then a password sign-in, which must redirect home.
+      - name: Create an administrator and sign in
+        run: |
+          echo 'ci-password-long-enough' |
+            docker compose exec -T recto /app/recto create-administrator --username admin
+          status=$(curl --silent --output /dev/null --write-out '%{http_code} %{redirect_url}' \
+            --header 'Origin: http://localhost:8080' \
+            --data 'login=admin&password=ci-password-long-enough&next=/' \
+            http://localhost:8080/sign-in)
+          echo "$status"
+          test "$status" = "303 http://localhost:8080/"
+        env:
+          RECTO_IMAGE: recto:ci
+          RECTO_PUBLIC_URL: http://localhost:8080
       - name: Report size
         run: docker image ls recto:ci
 

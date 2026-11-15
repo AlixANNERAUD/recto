@@ -1,16 +1,17 @@
 # recto with Docker Compose:
 #
 #   mkdir -p consume && sudo chown 65532:65532 consume
-#   RECTO_PUBLIC_URL=https://recto.example.org \
-#   RECTO_OIDC_ISSUER=https://id.example.org \
-#   RECTO_OIDC_CLIENT_ID=... \
-#   docker compose up -d --wait
+#   RECTO_PUBLIC_URL=https://recto.example.org docker compose up -d --wait
+#   docker compose exec recto /app/recto create-administrator --username admin
 #
-# or put those variables in a `.env` file next to this one, then open http://localhost:8080. The
+# or put the variables in a `.env` file next to this one, then open http://localhost:8080. The
 # published image is used (amd64 and arm64); with `docker compose up --build` it is built from this
 # checkout.
 #
-# The identity provider needs a public client (authorization code with PKCE) whose redirect URI is
+# People sign in with a local account, a username and a password, or through an OpenID Connect
+# provider, or both. The first administrator is created with the command above and creates the
+# other local accounts. For single sign-on, set RECTO_OIDC_ISSUER and RECTO_OIDC_CLIENT_ID: the
+# provider needs a public client (authorization code with PKCE) whose redirect URI is
 # $RECTO_PUBLIC_URL/auth/callback. Every RECTO_* variable of docs/src/reference/configuration.md
 # works under `environment`.
 #
@@ -34,19 +35,26 @@ services:
     environment:
       # The address users reach recto at: sign-in redirects and the Secure cookie flag use it.
       RECTO_PUBLIC_URL: ${RECTO_PUBLIC_URL:?set RECTO_PUBLIC_URL to the address users open}
-      RECTO_OIDC_ISSUER: ${RECTO_OIDC_ISSUER:?set RECTO_OIDC_ISSUER to your identity provider}
-      RECTO_OIDC_CLIENT_ID: ${RECTO_OIDC_CLIENT_ID:?set RECTO_OIDC_CLIENT_ID to the public client}
+      # Single sign-on, optional: both or neither. Left empty, only local accounts sign in.
+      RECTO_OIDC_ISSUER: ${RECTO_OIDC_ISSUER:-}
+      RECTO_OIDC_CLIENT_ID: ${RECTO_OIDC_CLIENT_ID:-}
       RECTO_CUPS_URL: http://cups:631
       # Where "Save" on the scan page writes; it must be writable by uid 65532 (chown 65532 consume).
       RECTO_SCAN_OUTPUT_DIR: /consume
       RECTO_LOG_FORMAT: ${RECTO_LOG_FORMAT:-json}
-      # Optional settings must be absent rather than empty, so set them here, for example to let
-      # only members of a Zitadel role in:
+      # The database defaults to SQLite in the recto-data volume (sqlite:///data/recto.db). For
+      # PostgreSQL, see examples/compose-postgres.yml.
+      # RECTO_DATABASE_URL: postgres://recto:password@postgres:5432/recto
+      # Behind a reverse proxy that overwrites X-Forwarded-For, so password sign-in attempts are
+      # counted per client address rather than for everyone at once (see reverse-proxy.md):
+      # RECTO_TRUST_FORWARDED_HEADERS: "true"
+      # Other optional settings go here, for example to let only members of a Zitadel role in:
       # RECTO_OIDC_SCOPES: urn:zitadel:iam:org:projects:roles
       # RECTO_OIDC_REQUIRED_CLAIM: urn:zitadel:iam:org:project:roles
       # RECTO_OIDC_REQUIRED_VALUE: recto
     volumes:
-      # The database (users, sessions): back this volume up.
+      # The database (users, groups, sessions): back it up with `recto backup`, see
+      # docs/src/how-to/back-up.md.
       - recto-data:/data
       - ./consume:/consume
       # Docker's bridge network carries no multicast, so sane-airscan cannot discover scanners:

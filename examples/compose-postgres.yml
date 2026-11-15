@@ -1,0 +1,42 @@
+# recto with its database on PostgreSQL, in a third container. This file adds to compose.yml
+# rather than replacing it, so CUPS, the scan folder and the hardening stay as they are:
+#
+#   docker compose -f compose.yml -f examples/compose-postgres.yml up -d --wait
+#   docker compose -f compose.yml -f examples/compose-postgres.yml exec recto \
+#     /app/recto create-administrator --username admin
+#
+# or put `COMPOSE_FILE=compose.yml:examples/compose-postgres.yml` in the `.env` file, and every
+# `docker compose` command uses both files.
+#
+# Set RECTO_POSTGRES_PASSWORD (in the environment or the `.env` file) first. It is part of a URL,
+# so keep it to letters, digits and `-._~`. Back the database up with pg_dump: `recto backup`
+# copies SQLite only (docs/src/how-to/back-up.md).
+services:
+  postgres:
+    # Pinned by the digest of the multi-architecture index. To update, run
+    # `docker buildx imagetools inspect postgres:17-alpine` and copy its Digest. A new major
+    # version needs a dump and a restore, which PostgreSQL's documentation describes.
+    image: postgres:17-alpine@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: recto
+      POSTGRES_PASSWORD: ${RECTO_POSTGRES_PASSWORD:?set RECTO_POSTGRES_PASSWORD to a long random password}
+      POSTGRES_DB: recto
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "--username", "recto", "--dbname", "recto"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  recto:
+    # recto applies its migrations at startup, so it waits until PostgreSQL accepts connections.
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      RECTO_DATABASE_URL: postgres://recto:${RECTO_POSTGRES_PASSWORD}@postgres:5432/recto
+
+volumes:
+  postgres-data:
