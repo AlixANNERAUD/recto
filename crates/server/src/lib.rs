@@ -5,6 +5,7 @@
 #[cfg(all(feature = "dev-mocks", not(debug_assertions)))]
 compile_error!("the `dev-mocks` feature signs everyone in and is for debug builds only");
 
+pub mod commands;
 pub mod config;
 #[cfg(any(test, all(feature = "dev-mocks", debug_assertions)))]
 pub mod dev;

@@ -101,7 +101,7 @@ pub async fn open_database(url: &str) -> Result<DatabaseConnection, String> {
 
 /// `url` with its password left out, for messages and logs. A URL that does not parse is shown
 /// up to its scheme only, since where its password is cannot be told.
-fn without_password(url: &str) -> String {
+pub fn without_password(url: &str) -> String {
     match Url::parse(url) {
         Ok(mut parsed) if parsed.password().is_some() => {
             // Setting the password only fails on URLs that cannot have one.

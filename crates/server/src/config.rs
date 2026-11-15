@@ -2,7 +2,7 @@
 
 use std::{net::SocketAddr, path::PathBuf};
 
-use clap::{ArgAction, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use url::Url;
 
 /// The format of log lines on standard error.
@@ -200,12 +200,67 @@ pub struct CommandLine {
     pub command: Command,
 }
 
+/// The database every command except `healthcheck` works on.
+#[derive(Clone, Debug, Args)]
+pub struct DatabaseOptions {
+    /// `sqlite://<path>` or `postgres://<user>:<password>@<host>/<name>`.
+    #[arg(
+        long,
+        env = "RECTO_DATABASE_URL",
+        default_value = "sqlite:///data/recto.db",
+        hide_env_values = true
+    )]
+    pub database_url: String,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct BackupOptions {
+    /// Where to write the copy; it must not exist yet.
+    pub file: PathBuf,
+    #[command(flatten)]
+    pub database: DatabaseOptions,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct CreateAdministratorOptions {
+    #[arg(long)]
+    pub username: String,
+    /// Defaults to the username.
+    #[arg(long)]
+    pub display_name: Option<String>,
+    #[arg(long)]
+    pub email: Option<String>,
+    /// Minimum length of the password.
+    #[arg(long, env = "RECTO_PASSWORD_MINIMUM_LENGTH", default_value_t = 12)]
+    pub password_minimum_length: usize,
+    #[command(flatten)]
+    pub database: DatabaseOptions,
+}
+
+#[derive(Clone, Debug, Args)]
+pub struct AdministratorOptions {
+    pub username: String,
+    /// Remove administration instead of granting it.
+    #[arg(long)]
+    pub remove: bool,
+    #[command(flatten)]
+    pub database: DatabaseOptions,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Run the web server.
     Serve(Box<Config>),
     /// Exit 0 when a running server answers `/health`; for container health checks.
     Healthcheck(Healthcheck),
+    /// Apply the pending database migrations and exit.
+    Migrate(DatabaseOptions),
+    /// Copy the SQLite database to a new file (use pg_dump for PostgreSQL).
+    Backup(BackupOptions),
+    /// Create a local administrator; the password is read from standard input.
+    CreateAdministrator(CreateAdministratorOptions),
+    /// Grant or remove administration of an existing user.
+    Administrator(AdministratorOptions),
 }
 
 #[cfg(test)]

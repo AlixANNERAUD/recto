@@ -407,6 +407,27 @@ pub async fn set_administrator(
     administrator: bool,
 ) -> Result<()> {
     let user = other_user(database, actor_id, user_id).await?;
+    store_administrator(database, user, administrator).await
+}
+
+/// Like [`set_administrator`], for the command line. It has no actor, so nothing is refused: the
+/// operator can reach the database anyway, and this is how the last administrator is replaced.
+pub async fn set_administrator_from_command_line(
+    database: &(impl ConnectionTrait + TransactionTrait),
+    user_id: i64,
+    administrator: bool,
+) -> Result<()> {
+    let user = find_by_id(database, user_id)
+        .await?
+        .ok_or(Error::NotFound)?;
+    store_administrator(database, user, administrator).await
+}
+
+async fn store_administrator(
+    database: &impl ConnectionTrait,
+    user: users::Model,
+    administrator: bool,
+) -> Result<()> {
     let mut changes: users::ActiveModel = user.into();
     changes.is_administrator = Set(administrator);
     changes.administrator_from_claim = Set(false);
