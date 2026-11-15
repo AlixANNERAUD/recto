@@ -99,6 +99,9 @@ pub async fn build(
         extra_scopes: config.oidc_scopes.clone(),
         required_claim: config.oidc_required_claim.clone(),
         required_value: config.oidc_required_value.clone(),
+        administrator_claim: None,
+        administrator_value: None,
+        groups_claim: None,
     });
     let auth = AuthState::new(Arc::new(openid), config.public_url.clone());
     (state, auth)
@@ -159,6 +162,9 @@ mod tests {
                 extra_scopes: vec![],
                 required_claim: None,
                 required_value: None,
+                administrator_claim: None,
+                administrator_value: None,
+                groups_claim: None,
             })),
             url,
         )

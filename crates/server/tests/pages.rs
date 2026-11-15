@@ -111,6 +111,9 @@ impl Harness {
             extra_scopes: vec![],
             required_claim: None,
             required_value: None,
+            administrator_claim: None,
+            administrator_value: None,
+            groups_claim: None,
         });
         let auth = AuthState::new(Arc::new(openid), public_url);
         let sessions = auth.sessions.clone();

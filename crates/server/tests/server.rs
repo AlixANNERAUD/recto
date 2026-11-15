@@ -139,6 +139,9 @@ impl Harness {
             extra_scopes: vec![],
             required_claim: None,
             required_value: None,
+            administrator_claim: None,
+            administrator_value: None,
+            groups_claim: None,
         })
         .retry_after(Duration::ZERO);
         let auth = AuthState::new(Arc::new(openid), public_url);

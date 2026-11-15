@@ -37,6 +37,8 @@ use serde_json::{Map, Value};
 use tokio::sync::Mutex;
 use url::Url;
 
+use recto_domain::users::Identity;
+
 use crate::{claims, user::User};
 
 /// Every claim of the ID token and UserInfo besides the standard ones.
@@ -91,6 +93,14 @@ pub struct OpenIdSettings {
     pub required_claim: Option<String>,
     /// The value that claim must hold; its presence is enough when unset.
     pub required_value: Option<String>,
+    /// A claim that makes the user an administrator, matched like `required_claim`. Unset
+    /// leaves administration to the database.
+    pub administrator_claim: Option<String>,
+    /// The value that claim must hold; its presence is enough when unset.
+    pub administrator_value: Option<String>,
+    /// A claim listing the user's groups (a string, a list of strings or an object whose keys
+    /// are the groups). Unset leaves group memberships to the database.
+    pub groups_claim: Option<String>,
 }
 
 /// What the callback needs from the start of a sign-in, kept in the session meanwhile. It
@@ -117,6 +127,8 @@ impl std::fmt::Debug for PendingSignIn {
 #[derive(Clone)]
 pub struct SignedIn {
     pub user: User,
+    /// What the provider says about the user, for the accounts database.
+    pub identity: Identity,
     /// Kept in the session to hint the provider at sign-out.
     pub id_token: String,
 }
@@ -127,6 +139,7 @@ impl std::fmt::Debug for SignedIn {
         formatter
             .debug_struct("SignedIn")
             .field("user", &self.user)
+            .field("identity", &self.identity)
             .finish_non_exhaustive()
     }
 }
@@ -369,9 +382,20 @@ impl OpenId {
                 .and_then(Value::as_str)
                 .is_some_and(|value| !value.is_empty())
         });
-        // One request covers both. A provider without a UserInfo endpoint leaves the claims
-        // absent.
-        if (lacks_claim || lacks_profile)
+        // A configured claim that is nowhere in the ID token may be in UserInfo.
+        let lacks_extra = [
+            &self.settings.administrator_claim,
+            &self.settings.groups_claim,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|claim| claims::lookup(&all, claim).is_none());
+        // Set when UserInfo was needed and could not be read: a claim missing after that is
+        // unknown, not absent, so nobody loses administration or groups over an outage.
+        let mut incomplete = false;
+        // One request covers all of them. A provider without a UserInfo endpoint leaves the
+        // claims absent.
+        if (lacks_claim || lacks_profile || lacks_extra)
             && let Ok(request) = client.user_info(token.access_token().clone(), Some(subject))
         {
             match request.request_async(&self.http).await {
@@ -394,6 +418,7 @@ impl OpenId {
                     return Err(OpenIdError::Unavailable(error.to_string()));
                 }
                 Err(error) => {
+                    incomplete = true;
                     tracing::warn!(%error, "reading the user information failed");
                 }
             }
@@ -405,11 +430,16 @@ impl OpenId {
         }
         let user = User::from_claims(&all)
             .ok_or_else(|| OpenIdError::Rejected("the ID token has no subject".to_owned()))?;
+        let identity = identity(&self.settings, &all, &user.subject, incomplete);
         let id_token = token
             .id_token()
             .map(ToString::to_string)
             .unwrap_or_default();
-        Ok(SignedIn { user, id_token })
+        Ok(SignedIn {
+            user,
+            identity,
+            id_token,
+        })
     }
 
     /// Where to send the browser to end the session at the provider, when it supports it and
@@ -471,6 +501,52 @@ fn verify(
         }
     }
     Ok((to_map(claims), claims.subject().clone()))
+}
+
+/// Builds the identity from the claims. `incomplete` says UserInfo failed, so a configured
+/// claim that is missing is unknown (`None`) rather than absent (no administration, no groups).
+fn identity(
+    settings: &OpenIdSettings,
+    all: &Map<String, Value>,
+    subject: &str,
+    incomplete: bool,
+) -> Identity {
+    let text = |key: &str| {
+        all.get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let administrator = settings.administrator_claim.as_deref().and_then(|claim| {
+        if claims::lookup(all, claim).is_none() && incomplete {
+            return None;
+        }
+        Some(claims::allows(
+            all,
+            claim,
+            settings.administrator_value.as_deref(),
+        ))
+    });
+    let groups =
+        settings
+            .groups_claim
+            .as_deref()
+            .and_then(|claim| match claims::lookup(all, claim) {
+                Some(value) => Some(claims::names(value)),
+                None if incomplete => None,
+                None => Some(Vec::new()),
+            });
+    Identity {
+        // As configured, so the same provider always yields the same string even when the
+        // discovered issuer is spelled with or without a trailing slash.
+        issuer: settings.issuer.as_str().to_owned(),
+        subject: subject.to_owned(),
+        preferred_username: text("preferred_username"),
+        email: text("email"),
+        name: text("name"),
+        administrator,
+        groups,
+    }
 }
 
 /// All claims, standard ones included, as one JSON object.

@@ -101,6 +101,9 @@ impl Provider {
             extra_scopes: Vec::new(),
             required_claim: None,
             required_value: None,
+            administrator_claim: None,
+            administrator_value: None,
+            groups_claim: None,
         }
     }
 
@@ -213,7 +216,9 @@ impl Provider {
         }
         Mock::given(method("GET"))
             .and(path("/userinfo"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(information))
+            .respond_with(
+                ResponseTemplate::new(answer.information_status).set_body_json(information),
+            )
             .mount(&self.server)
             .await;
     }
@@ -230,6 +235,8 @@ struct Answer {
     published: Key,
     extra: Value,
     information: Value,
+    /// The status of the user information answer.
+    information_status: u16,
     /// Put `preferred_username`, `name` and `email` in the ID token, as Zitadel does only when
     /// "User Info inside ID Token" is on.
     profile: bool,
@@ -246,6 +253,7 @@ impl Answer {
             published: Key::Signing,
             extra: json!({}),
             information: json!({}),
+            information_status: 200,
             profile: true,
         }
     }
@@ -650,4 +658,125 @@ async fn sign_out_without_an_id_token_names_the_client() {
             .query_pairs()
             .any(|(name, _)| name == "id_token_hint")
     );
+}
+
+fn administrators(provider: &Provider) -> OpenId {
+    OpenId::new(OpenIdSettings {
+        administrator_claim: Some("roles".to_owned()),
+        administrator_value: Some("admin".to_owned()),
+        groups_claim: Some("groups".to_owned()),
+        ..provider.settings()
+    })
+}
+
+#[tokio::test]
+async fn identity_carries_issuer_subject_and_profile() {
+    let provider = Provider::start().await;
+    let openid = OpenId::new(provider.settings());
+    let identity = sign_in(&provider, &openid, json!({}), json!({}))
+        .await
+        .unwrap()
+        .identity;
+    assert_eq!(identity.issuer, provider.settings().issuer.as_str());
+    assert_eq!(identity.subject, "subject-1");
+    assert_eq!(identity.preferred_username.as_deref(), Some("alice"));
+    assert_eq!(identity.email.as_deref(), Some("alice@example.org"));
+    assert_eq!(identity.name.as_deref(), Some("Alice Martin"));
+    assert_eq!(identity.administrator, None);
+    assert_eq!(identity.groups, None);
+}
+
+#[tokio::test]
+async fn administrator_claim_is_read() {
+    let provider = Provider::start().await;
+    let openid = administrators(&provider);
+    let admin = sign_in(&provider, &openid, json!({"roles": ["admin"]}), json!({}))
+        .await
+        .unwrap();
+    assert_eq!(admin.identity.administrator, Some(true));
+    let other = sign_in(&provider, &openid, json!({"roles": ["user"]}), json!({}))
+        .await
+        .unwrap();
+    assert_eq!(other.identity.administrator, Some(false));
+
+    let unconfigured = OpenId::new(provider.settings());
+    let none = sign_in(
+        &provider,
+        &unconfigured,
+        json!({"roles": ["admin"]}),
+        json!({}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(none.identity.administrator, None);
+}
+
+#[tokio::test]
+async fn groups_claim_is_read_from_strings_lists_and_objects() {
+    let provider = Provider::start().await;
+    let openid = administrators(&provider);
+    for (claim, expected) in [
+        (json!("staff"), vec!["staff"]),
+        (json!(["staff", "printers"]), vec!["staff", "printers"]),
+        (json!({"staff": {"1": "x"}}), vec!["staff"]),
+    ] {
+        let groups = sign_in(&provider, &openid, json!({"groups": claim}), json!({}))
+            .await
+            .unwrap()
+            .identity
+            .groups;
+        assert_eq!(
+            groups,
+            Some(expected.into_iter().map(String::from).collect())
+        );
+    }
+}
+
+#[tokio::test]
+async fn missing_admin_or_group_claims_are_fetched_from_userinfo() {
+    let provider = Provider::start().await;
+    let openid = administrators(&provider);
+    let identity = sign_in(
+        &provider,
+        &openid,
+        json!({}),
+        json!({"roles": ["admin"], "groups": ["staff"]}),
+    )
+    .await
+    .unwrap()
+    .identity;
+    assert_eq!(identity.administrator, Some(true));
+    assert_eq!(identity.groups, Some(vec!["staff".to_owned()]));
+    assert_eq!(provider.user_information_requests().await, 1);
+
+    // UserInfo answered and has neither claim: the user has no groups and is no administrator.
+    let identity = sign_in(&provider, &openid, json!({}), json!({}))
+        .await
+        .unwrap()
+        .identity;
+    assert_eq!(identity.administrator, Some(false));
+    assert_eq!(identity.groups, Some(Vec::new()));
+}
+
+#[tokio::test]
+async fn userinfo_failure_leaves_admin_and_groups_unknown() {
+    let provider = Provider::start().await;
+    let openid = administrators(&provider);
+    let identity = sign_in_with(&provider, &openid, |answer| answer.information_status = 500)
+        .await
+        .unwrap()
+        .identity;
+    assert_eq!(identity.administrator, None);
+    assert_eq!(identity.groups, None);
+
+    // What the ID token does carry still counts.
+    let identity = sign_in_with(&provider, &openid, |answer| {
+        answer.information_status = 500;
+        answer.extra = json!({"roles": ["admin"]});
+    })
+    .await
+    .unwrap()
+    .identity;
+    assert_eq!(identity.administrator, Some(true));
+    assert_eq!(identity.groups, None);
 }

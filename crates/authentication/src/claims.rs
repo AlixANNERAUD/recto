@@ -5,7 +5,8 @@
 
 use serde_json::{Map, Value};
 
-fn lookup<'a>(claims: &'a Map<String, Value>, claim: &str) -> Option<&'a Value> {
+/// The claim as a whole name, else as a path into nested objects.
+pub fn lookup<'a>(claims: &'a Map<String, Value>, claim: &str) -> Option<&'a Value> {
     if let Some(value) = claims.get(claim) {
         return Some(value);
     }
@@ -32,6 +33,19 @@ pub fn allows(claims: &Map<String, Value>, claim: &str, value: Option<&str>) -> 
         Value::Array(items) => items.iter().any(|item| item.as_str() == Some(expected)),
         Value::Object(map) => map.contains_key(expected),
         _ => false,
+    }
+}
+
+/// The names a claim holds: a string gives itself, a list its strings, an object its keys.
+pub fn names(value: &Value) -> Vec<String> {
+    match value {
+        Value::String(text) => vec![text.clone()],
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| item.as_str().map(str::to_owned))
+            .collect(),
+        Value::Object(map) => map.keys().cloned().collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -88,6 +102,14 @@ mod tests {
         let claims = claims(json!({"other": "x"}));
         assert!(!allows(&claims, "role", Some("x")));
         assert!(!allows(&claims, "role", None));
+    }
+
+    #[test]
+    fn names_of_strings_lists_and_objects() {
+        assert_eq!(names(&json!("a")), ["a"]);
+        assert_eq!(names(&json!(["a", 1, "b"])), ["a", "b"]);
+        assert_eq!(names(&json!({"a": {}})), ["a"]);
+        assert!(names(&json!(true)).is_empty());
     }
 
     #[test]
