@@ -12,8 +12,8 @@ the scanner, preview it, and get a PDF to download or to drop straight into
 
 recto does not drive printers and scanners itself. [CUPS](https://openprinting.github.io/cups/)
 does the printing, over IPP, and [SANE](http://www.sane-project.org) does the scanning, through
-libsane. recto is the web layer on top: one page for everyone in the house, behind the sign-in
-you already have, with no drivers to install on each device.
+libsane. recto is the web layer on top: one page for everyone in the house, behind a sign-in,
+with no drivers to install on each device.
 
 ## What it does
 
@@ -26,10 +26,13 @@ you already have, with no drivers to install on each device.
   only part of it.
 - **Saves** scans to a folder, such as the consume folder of Paperless-ngx, without ever
   overwriting a file.
-- **Signs people in** with your own OpenID Connect provider (Zitadel, Keycloak, Authentik and
-  others), optionally only those with a given role or group. recto keeps no passwords.
+- **Signs people in** with local accounts, a username and a password, or with your own OpenID
+  Connect provider (Zitadel, Keycloak, Authentik and others), optionally only those with a given
+  role or group. Administrators create the local accounts, reset passwords and disable users from
+  the **Administration** page.
 
-It runs as one container next to a CUPS server, configured with environment variables only.
+It runs as one container next to a CUPS server, configured with environment variables only. Its
+users and sessions live in a SQLite file on a volume, or in PostgreSQL.
 
 ## What it does not do
 
@@ -40,7 +43,8 @@ It runs as one container next to a CUPS server, configured with environment vari
 - **It does not keep scans.** A scan stays available for an hour, for its owner only, then it is
   deleted. Save it to a folder to keep it.
 - **It does not separate users.** Anyone signed in can use every printer and scanner, and see and
-  cancel every print job. recto is built for a household, or a small team, that trusts itself.
+  cancel every print job; administrators only manage accounts. recto is built for a household,
+  or a small team, that trusts itself.
 
 ## How this documentation is organized
 
@@ -48,12 +52,12 @@ It has four parts, one per need:
 
 - **[Tutorials](tutorials/first-print-and-scan.md)** are lessons. [Your first print and
   scan](tutorials/first-print-and-scan.md) runs recto on your machine with a virtual printer and
-  a virtual scanner, so you need no hardware to follow it.
+  a virtual scanner, so you need no hardware and no identity provider to follow it.
 - **[How-to guides](how-to/install.md)** are recipes for a goal you already have: install recto,
-  connect your identity provider, add a network scanner, save into Paperless-ngx, fix a printer
-  that answers `400`.
+  manage users, connect your identity provider, add a network scanner, save into Paperless-ngx,
+  back up, fix a printer that answers `400`.
 - **[Reference](reference/configuration.md)** describes the machinery: every setting, command,
-  print and scan option, endpoint and log field. Look things up there.
+  account rule, print and scan option, endpoint and log field. Look things up there.
 - **[Explanation](explanation/architecture.md)** is background: how recto talks to CUPS and SANE,
   how sign-in and sessions work, what happens to a scan, and what protects what.
 

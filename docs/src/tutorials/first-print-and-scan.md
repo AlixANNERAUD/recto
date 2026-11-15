@@ -1,33 +1,16 @@
 # Your first print and scan
 
-In this tutorial you run recto on your own machine, print a document on a virtual printer that
-writes PDF files, and scan a test pattern from SANE's virtual scanner into a folder. You need no
-printer and no scanner. It takes about twenty minutes.
+In this tutorial you run recto on your own machine, create its first administrator, print a
+document on a virtual printer that writes PDF files, and scan a test pattern from SANE's virtual
+scanner into a folder. You need no printer, no scanner and no identity provider. It takes about
+twenty minutes.
 
 You need:
 
 - Docker with Compose, and git.
-- An OpenID Connect provider in which you can create an application, such as Zitadel, Keycloak
-  or Authentik. recto has no accounts of its own: everyone signs in through it.
 - Port 8080 free on your machine.
 
-## 1. Register recto with your identity provider
-
-In your provider, create an application for recto:
-
-- **Type:** a public client (no client secret) using the authorization code flow with **PKCE**.
-  Zitadel calls it a *User Agent* application, Keycloak a client with *Client authentication*
-  off.
-- **Redirect URI:** `http://localhost:8080/auth/callback`
-- **Post-logout redirect URI:** `http://localhost:8080/auth/signed-out`
-
-Some providers refuse `http://` addresses unless told otherwise; in Zitadel, turn on
-*Development mode* in the application. Copy the **client id**, and note the **issuer URL** of your
-provider, such as `https://id.example.org`.
-
-[Set up sign-in](../how-to/sign-in.md) has the details for each provider.
-
-## 2. Get recto
+## 1. Get recto
 
 Clone the repository, which contains a ready `compose.yml`, and create the folder where scans
 will be saved. recto runs as user 65532, so that user must own it:
@@ -38,19 +21,16 @@ cd recto
 mkdir -p consume && sudo chown 65532:65532 consume
 ```
 
-Write your provider's details into a `.env` file next to `compose.yml`:
+Write the address you will open recto at into a `.env` file next to `compose.yml`:
 
 ```sh
-cat > .env <<'ENV'
-RECTO_PUBLIC_URL=http://localhost:8080
-RECTO_OIDC_ISSUER=https://id.example.org
-RECTO_OIDC_CLIENT_ID=your-client-id
-ENV
+echo 'RECTO_PUBLIC_URL=http://localhost:8080' > .env
 ```
 
-Replace the last two values with yours.
+That is the only setting recto needs. Without an identity provider, people sign in with local
+accounts, which you will create.
 
-## 3. Add a virtual scanner
+## 2. Add a virtual scanner
 
 SANE ships a `test` backend: a scanner that only exists in software and returns test patterns.
 Enable it with two configuration files:
@@ -79,7 +59,7 @@ services:
 YAML
 ```
 
-## 4. Start recto
+## 3. Start recto
 
 ```sh
 docker compose up -d --wait
@@ -88,6 +68,8 @@ docker compose up -d --wait
 The command returns once recto reports itself healthy. Before the first release is published,
 the image may not exist yet; if Compose says so, run `docker compose up -d --wait --build` to
 build it from the checkout (it takes several minutes).
+
+recto created its database, a SQLite file with no users yet, in the `recto-data` volume.
 
 Check that recto sees the virtual scanner:
 
@@ -98,6 +80,18 @@ docker compose exec recto scanimage -L
 ```text
 device `test:0' is a Noname frontend-tester virtual device
 ```
+
+## 4. Create your administrator
+
+Nobody can sign in yet: the database has no users. Create the first one, an administrator named
+`admin`:
+
+```sh
+docker compose exec recto /app/recto create-administrator --username admin
+```
+
+recto asks for a password twice. Choose one of at least 12 characters; it is not shown as you
+type. The last line the command prints says `administrator created`.
 
 ## 5. Add a virtual printer
 
@@ -114,8 +108,9 @@ CUPS; the printer works.
 
 ## 6. Sign in
 
-Open <http://localhost:8080>. recto sends you to your provider; sign in there. You come back to
-the **Print** page, with your name at the top.
+Open <http://localhost:8080>. recto shows its sign-in page. Enter `admin` and your password, then
+press **Sign in**. You land on the **Print** page, with **admin** at the top and an
+**Administration** entry in the menu, which only administrators have.
 
 ## 7. Print a document
 
@@ -161,9 +156,21 @@ ls consume
 That folder is where, at home, you would point Paperless-ngx (see
 [Save scans into Paperless-ngx](../how-to/paperless.md)).
 
-## 9. Clean up
+## 9. Create an account for someone else
 
-Stop recto and the CUPS server, and delete their volumes, the override and the files you made:
+1. Open **Administration**. The **Users** tab lists one user, **admin**, marked **You**.
+2. Under **New local user**, set **Username** to `alex`, **Display name** to `Alex`, and a
+   **Password** of at least 12 characters. Leave **Administrator** unchecked.
+3. Press **Create user**. recto says **The account alex was created.**, and Alex appears in the
+   list, with **Password** as the way to sign in.
+
+Press **Sign out** at the top, then sign in as `alex`. The menu has no **Administration** entry:
+Alex can print and scan, but not manage accounts.
+
+## 10. Clean up
+
+Stop recto and the CUPS server, and delete their volumes (the database among them), the override
+and the files you made:
 
 ```sh
 docker compose down -v
@@ -173,7 +180,9 @@ sudo rm -r consume
 
 ## What you have learned
 
-You ran recto next to a CUPS server, signed in through your provider, printed on a CUPS printer
-and scanned from a SANE scanner, then saved the scan to a folder. With real hardware, only two
-steps change: [Add a printer](../how-to/add-printer.md) and [Add a scanner](../how-to/add-scanner.md).
-To run recto for good, follow [Install recto](../how-to/install.md).
+You ran recto next to a CUPS server, created its first administrator and a second account,
+printed on a CUPS printer and scanned from a SANE scanner, then saved the scan to a folder. With
+real hardware, only two steps change: [Add a printer](../how-to/add-printer.md) and
+[Add a scanner](../how-to/add-scanner.md). To run recto for good, follow
+[Install recto](../how-to/install.md); to sign in with an identity provider you already have, see
+[Set up single sign-on](../how-to/sign-in.md).

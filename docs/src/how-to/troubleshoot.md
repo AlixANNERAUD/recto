@@ -12,9 +12,20 @@ Set `RECTO_LOG_FORMAT: text` to read it more easily, and `RUST_LOG: debug` for m
 ## Startup
 
 **recto exits with a message about a setting.** recto checks its settings before it starts. A
-required setting is missing, a URL is malformed, `RECTO_PUBLIC_URL` has a path, or
-`RECTO_OIDC_REQUIRED_VALUE` is set without `RECTO_OIDC_REQUIRED_CLAIM`. The message names the
-setting; see [Configuration](../reference/configuration.md).
+required setting is missing, a URL is malformed, `RECTO_PUBLIC_URL` has a path, only one of
+`RECTO_OIDC_ISSUER` and `RECTO_OIDC_CLIENT_ID` is set, local accounts are off without a provider,
+or a `_VALUE` setting is set without its `_CLAIM`. The message names the setting; see
+[Configuration](../reference/configuration.md).
+
+**recto: cannot open the database sqlite:///data/recto.db: … unable to open database file.** No
+volume is mounted on `/data`, so the read-only file system has no room for the database, or the
+folder mounted there is not writable by user 65532. Mount a volume, as `compose.yml` does (see
+[Upgrade](upgrade.md#from-a-version-without-accounts)).
+
+**recto: cannot open the database postgres://…** PostgreSQL is not reachable, the database does
+not exist, or the password is wrong. The message hides the password. Check
+`RECTO_DATABASE_URL`, and percent-encode special characters in the password (see
+[Database](../reference/configuration.md#database)).
 
 **Compose says `set RECTO_PUBLIC_URL to the address users open`.** The `.env` file is missing or
 not next to `compose.yml`.
@@ -23,6 +34,20 @@ not next to `compose.yml`.
 the image with `docker compose up -d --wait --build`.
 
 ## Sign-in
+
+**The username or password is wrong.** recto gives the same answer for an unknown username, a
+wrong password, a disabled account and a single sign-on user without a password, so as not to tell
+which accounts exist. An administrator can check the account on the Users page, and set a new
+password (see [Manage users and administrators](manage-users.md#reset-a-password)).
+
+**Too many attempts. Wait a few seconds, then try again.** More than 5 password attempts came from
+the same address in a row; one more is allowed every 4 seconds. If it happens to everyone at once
+behind a reverse proxy, every client shares the proxy's address: see
+[Run behind a reverse proxy](reverse-proxy.md#count-sign-in-attempts-per-person).
+
+**Nobody can sign in, or no administrator is left.** Create an administrator, or make an
+existing user one, on the server (see
+[Manage users and administrators](manage-users.md#regain-access-without-an-administrator)).
 
 **Your provider shows an error about the redirect URI.** The redirect URI registered in the
 provider must be exactly `{RECTO_PUBLIC_URL}/auth/callback`, scheme and port included.
@@ -40,11 +65,21 @@ recto keeps trying at each sign-in; nothing needs restarting once the provider i
 than 10 minutes, or the browser lost the session cookie between leaving and coming back. The
 second happens when you open recto at another address than `RECTO_PUBLIC_URL`: use that one.
 
-**No access to recto.** You signed in, but the token lacks the required claim or value. See
-[Let only some people in](restrict-access.md#check).
+**No access to recto.** You signed in through the provider, but the token lacks the required
+claim or value (see [Let only some people in](restrict-access.md#check)), or an administrator
+disabled your account.
 
-**Everyone is signed out.** recto restarted: sessions are kept in memory. A session also ends
-after 12 hours without a request.
+**Someone is signed out.** A session ends after 12 hours without a request, and when the user's
+password is set or they are disabled. Sessions are kept in the database, so restarts do not end
+them; upgrading from a version without accounts signs everyone out once (see
+[Upgrade](upgrade.md#from-a-version-without-accounts)).
+
+**The Administration entry is missing.** Only administrators have it. With the administrator
+claim, check its name and value, and sign out and in again: the claim is read at sign-in.
+
+**Single sign-on users have the wrong username.** The username is taken at the first sign-in,
+from `preferred_username`, else `email`, else `sub`, and never changes. Have the provider send
+`preferred_username` before people first sign in.
 
 **This request did not come from recto's own pages, so it was refused.** The browser sent a form
 from another origin than `RECTO_PUBLIC_URL`, which recto refuses to prevent cross-site requests.

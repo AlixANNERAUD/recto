@@ -4,6 +4,10 @@ By default, everyone your identity provider signs in can use recto. To limit it 
 give them a role or a group in your provider, and tell recto which claim of the sign-in token
 carries it.
 
+This only concerns single sign-on. Local accounts exist only when an administrator creates them,
+and any account can be disabled on the Users page (see
+[Manage users and administrators](manage-users.md#disable-a-user)).
+
 Two settings do it:
 
 - `RECTO_OIDC_REQUIRED_CLAIM`: the claim that must be in the token.

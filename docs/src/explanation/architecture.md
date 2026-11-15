@@ -2,14 +2,16 @@
 
 recto is a web layer. The hard parts of printing and scanning, drivers, page description
 languages and device protocols, are left to two mature projects: CUPS and SANE. recto turns them
-into one web page anyone in the house can open, behind the sign-in they already have.
+into one web page anyone in the house can open, behind a sign-in.
 
-```text
- browser ──HTTPS──> reverse proxy ──HTTP──> recto ──IPP over HTTP──> CUPS ──> printers
-                                              │
-                                              ├──libsane──> SANE backends ──> scanners
-                                              │
-                                              └──HTTPS──> OpenID Connect provider
+```mermaid
+flowchart LR
+    browser([Browser]) -- HTTPS --> proxy[Reverse proxy]
+    proxy -- HTTP --> recto[recto]
+    recto -- IPP over HTTP --> cups[CUPS] --> printers([Printers])
+    recto -- libsane --> sane[SANE backends] --> scanners([Scanners])
+    recto -- SQL --> database[(SQLite or PostgreSQL)]
+    recto -. HTTPS, optional .-> provider[OpenID Connect provider]
 ```
 
 ## Printing: an IPP client of CUPS
@@ -54,15 +56,31 @@ selection and results).
 
 ## State
 
-recto keeps almost nothing:
+recto keeps little, and only its accounts on disk:
 
 | What | Where | Lifetime |
 | --- | --- | --- |
-| Sessions | memory | 12 hours without a request, or until recto restarts |
+| Users, groups, password hashes | the database | until deleted |
+| Sessions | the database | 12 hours without a request |
 | Scan results | `/tmp/recto-scans` | 1 hour, or until recto restarts |
 | The scanner list | memory | until someone looks again |
+| Password sign-in attempts | memory | a few seconds, or until recto restarts |
 | Configuration | environment | the life of the process |
 
-Printers, jobs and users live in CUPS and in the identity provider. That is why recto has no
-database, no migrations and nothing to back up, and why an upgrade only replaces the container.
-The price is that a restart signs everyone out.
+Printers and jobs live in CUPS, and recto asks CUPS for them at every page load. The database
+holds only what CUPS and SANE cannot: who may sign in, and who is signed in. Keeping sessions
+there, rather than in memory, is what lets recto restart or upgrade without signing anyone out,
+and lets a password change or a disabled account end sessions at once.
+
+## SQLite or PostgreSQL
+
+The database is a SQLite file by default, `/data/recto.db` on a volume. It needs no server, no
+password and no tuning, and recto's data is tiny: a household's accounts and sessions. SQLite
+runs in write-ahead log mode, so pages being read never wait for a sign-in being written; that
+is also why the file must not be copied while recto runs, and why `recto backup` exists.
+
+PostgreSQL is there for those who already run it: one server to back up, monitor and replicate for
+all their apps, or a managed database. recto gains nothing else from it.
+
+The schema is the same on both, built by migrations that recto applies at startup. Migrations only
+go forward, so a backup taken before an upgrade is the way back to the older version.

@@ -18,6 +18,9 @@ mr-boxington = "latest"
 "github:CycloneDX/cyclonedx-rust-cargo" = { version = "0.5.10", version_prefix = "cargo-cyclonedx-", bin = "cargo-cyclonedx" }
 # Builds the documentation in docs/ (mise run docs).
 "github:rust-lang/mdBook" = { version = "0.5.4", bin = "mdbook" }
+# Draws the Mermaid diagrams of the documentation. The release ships the mermaid.min.js and
+# mermaid-init.js that `mdbook-mermaid install docs` copied into docs/: update them together.
+"github:badboy/mdbook-mermaid" = "0.17.1"
 
 [env]
 # The browser bundle is built separately for wasm32, so server-side commands leave it out to

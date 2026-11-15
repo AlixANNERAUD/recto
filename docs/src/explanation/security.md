@@ -7,12 +7,16 @@ against, and how.
 
 recto is built for a household, or a small team, that trusts itself:
 
-- **Everyone signed in is equal.** Anyone who passes sign-in, and the required claim when one is
-  set, can use every printer and scanner, and see and cancel every print job. There are no
-  roles inside recto.
+- **Everyone signed in is equal for printing and scanning.** Anyone who passes sign-in, and the
+  required claim when one is set, can use every printer and scanner, and see and cancel every
+  print job.
+- **Administrators manage accounts, nothing more.** They create local accounts, set passwords,
+  disable users and appoint other administrators. They cannot read passwords, and they cannot
+  act on their own account from the web page.
 - **Scans are private.** A scan result can only be reached by the person who made it, and only for
   an hour. Scans saved to a folder belong to that folder's readers.
-- **The identity provider decides who gets in.** recto keeps no accounts or passwords.
+- **Whoever runs the server is above all of them.** The command line and the database give full
+  control over accounts, which is how a lost administrator is replaced.
 
 recto defends against people **outside** that group: anyone on the internet, or on your network,
 who is not signed in, and other websites trying to act through a signed-in person's browser.
@@ -22,11 +26,55 @@ who is not signed in, and other websites trying to act through a signed-in perso
 Every page, form and server function requires a session, except the sign-in addresses, `/health`
 and the interface's static files (scripts, styles and icons, which hold no data). The check runs
 for every request at the router, and again inside each action that touches a printer, a scanner or
-a result.
+a result. The administration pages and forms also require an administrator, checked before the
+form is even read; to anyone else, they do not exist.
 
 Sign-in details are in [Sign-in and sessions](sign-in.md): PKCE, `state` and `nonce` against
 forged or replayed sign-ins, signature and audience checks on the ID token, and a new session id
-at sign-in.
+at every sign-in.
+
+## Passwords
+
+Local passwords are hashed with Argon2id, a slow hash built to make guessing from a stolen
+database expensive, with a random salt per password. Hashing runs off the threads that serve
+requests, so a burst of sign-ins does not stall the pages. recto never stores or logs a password
+in clear, and never shows one again.
+
+A failed password sign-in answers the same, in the same time, whether the username is unknown,
+the password wrong, or the account disabled or without a password: a dummy hash is checked when
+there is no real one. Nobody can learn from the form which accounts exist.
+
+To slow down guessing online, password sign-in attempts are limited per client address: 5 at
+once, then one every 4 seconds, about 900 an hour. With passwords of 12 characters or more, that
+is far too slow to matter. The limit is kept in memory, and counts the address of the
+connection unless `RECTO_TRUST_FORWARDED_HEADERS` is on. Behind a proxy without it, all clients
+share the proxy's budget, so one person's typos make everyone wait; with it on and a proxy that
+does not replace `X-Forwarded-For`, a client can claim a new address at each attempt and escape
+the limit (see
+[Run behind a reverse proxy](../how-to/reverse-proxy.md#count-sign-in-attempts-per-person)).
+
+Setting a user's password, or disabling them, ends all their sessions. Changing your own password
+on the Account page asks for the current one, and ends your other sessions.
+
+## Administrators
+
+The web page refuses an administrator's actions on their own account: disabling it, changing its
+administration or setting its password there. An administrator cannot lock everyone out by
+mistake, and someone who borrows an administrator's open session cannot lock the owner out.
+
+Administration granted by the identity provider's claim is only changed in the provider. It
+takes back only what it granted, so a claim that stops matching cannot remove the administrators
+appointed in recto.
+
+## Sessions and the database
+
+The session cookie holds only a random identifier. Sessions are stored in the database and
+checked against the user at every request, so a disabled user or a reset password takes effect
+at the next request.
+
+The database holds password hashes and the identifiers of open sessions. Whoever reads it, or a
+backup of it, can sign in as anyone with a session open at the time, and try to guess the
+passwords offline. Keep it, and its backups, as private as the server itself.
 
 ## Cross-site requests
 
@@ -92,6 +140,8 @@ jobs. Within the trusted group, that is the point; outside it, CUPS is unreachab
 
 - **The network between the proxy and recto** is plain HTTP. Keep it on the same machine or a
   private network.
-- **A restart signs everyone out**, by design: sessions are not written to disk.
-- **There is no rate limiting** in recto. Put it in the reverse proxy if recto is reachable from
-  the internet.
+- **Only password sign-in is rate limited.** Single sign-on relies on the provider's own limits,
+  and the rest of recto requires a session. Put a limit in the reverse proxy if recto is reachable
+  from the internet.
+- **There is no two-factor authentication for local accounts.** For that, use single sign-on with
+  a provider that offers it.

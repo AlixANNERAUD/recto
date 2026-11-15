@@ -20,6 +20,7 @@ The image is published to the GitHub Container Registry as `ghcr.io/alixanneraud
 | Packages | `libsane1`, `sane-airscan`, `sane-utils` (for `scanimage`), `ca-certificates` |
 | Binary | `/app/recto` |
 | Interface files | `/app/site` |
+| Database folder | `/data`, owned by `65532:65532` |
 | Entry point | `/app/recto`, command `serve` |
 | User | `65532:65532`, not root |
 | Port | `8080` |
@@ -36,10 +37,13 @@ The image is published to the GitHub Container Registry as `ghcr.io/alixanneraud
 
 | Path | What |
 | --- | --- |
+| `/data` | The SQLite database, `recto.db` with its `-wal` and `-shm` files, unless `RECTO_DATABASE_URL` points elsewhere. Mount a volume here: `compose.yml` mounts `recto-data`. |
 | `/tmp/recto-scans` | Scan results, deleted after an hour. In `compose.yml`, `/tmp` is a memory-backed `tmpfs`. |
 | `RECTO_SCAN_OUTPUT_DIR` | Scans saved with **Save to folder**. |
 
-Everything else can be read-only: `compose.yml` runs the container with `read_only: true`.
+Everything else can be read-only: `compose.yml` runs the container with `read_only: true`. A new
+named volume mounted on `/data` takes the folder's owner, so recto can write to it; a folder of the
+host mounted there must be writable by user 65532.
 
 ## SANE configuration
 

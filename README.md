@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>Print and scan from any browser, through your home server.</strong><br>
-  A small self-hosted web app for CUPS and SANE, behind your OpenID Connect sign-in.
+  A small self-hosted web app for CUPS and SANE, with local accounts or your OpenID Connect sign-in.
 </p>
 
 <p align="center">
@@ -17,8 +17,9 @@
 recto gives everyone in the house one page to **print** a file on any CUPS printer and to **scan**
 from any SANE scanner, from a phone or a laptop, with no driver to install. Scans can be
 downloaded or saved straight into a folder such as the consume folder of
-[Paperless-ngx](https://docs.paperless-ngx.com). Sign-in goes through your own **OpenID Connect**
-provider (Zitadel, Keycloak, Authentik and others), so recto keeps no passwords.
+[Paperless-ngx](https://docs.paperless-ngx.com). People sign in with **local accounts** that an
+administrator creates, or through your own **OpenID Connect** provider (Zitadel, Keycloak,
+Authentik and others), or both.
 
 <p align="center">
   <picture>
@@ -60,29 +61,31 @@ provider (Zitadel, Keycloak, Authentik and others), so recto keeps no passwords.
   preview the glass and drag to scan only part of it. Feeder batches become one PDF.
 - **Save to a folder** for Paperless-ngx or any folder watcher: files appear complete, and never
   overwrite one another.
-- **Single sign-on** with any OpenID Connect provider, optionally limited to a role or group.
+- **Local accounts** with passwords hashed with Argon2id and rate-limited sign-in, created by
+  **administrators** who also reset passwords and disable users from the web page.
+- **Single sign-on** with any OpenID Connect provider, optionally limited to a role or group, with
+  administrators and groups read from the provider's claims.
 - **One small container**, configured with environment variables only, running as non-root with a
-  read-only file system, for amd64 and arm64. No database: nothing to back up.
+  read-only file system, for amd64 and arm64. Accounts and sessions live in a **SQLite** file on a
+  volume, or in **PostgreSQL**; `recto backup` copies SQLite while it runs.
 - **Works on phones**, in light and dark mode.
 
 ## Quick start
 
-You need Docker with Compose and an OpenID Connect provider in which to create a public client
-with PKCE, whose redirect URI is `{RECTO_PUBLIC_URL}/auth/callback`
-([how](https://alixanneraud.github.io/recto/how-to/sign-in.html)).
+You need Docker with Compose.
 
 ```sh
 git clone https://github.com/AlixANNERAUD/recto && cd recto
 mkdir -p consume && sudo chown 65532:65532 consume
-cat > .env <<'ENV'
-RECTO_PUBLIC_URL=https://recto.example.org
-RECTO_OIDC_ISSUER=https://id.example.org
-RECTO_OIDC_CLIENT_ID=your-client-id
-ENV
+echo 'RECTO_PUBLIC_URL=https://recto.example.org' > .env
 docker compose up -d --wait
+docker compose exec recto /app/recto create-administrator --username admin
 ```
 
-This starts recto on port 8080 and a locked-down CUPS server next to it. Add a printer:
+This starts recto on port 8080 and a locked-down CUPS server next to it, then creates an
+administrator with the password the command asks for; the administrator creates the other
+accounts from the web page. To sign in with your identity provider too,
+[set up single sign-on](https://alixanneraud.github.io/recto/how-to/sign-in.html). Add a printer:
 
 ```sh
 docker compose exec cups lpadmin -p office -E -v ipp://192.168.1.60/ipp/print -m everywhere
@@ -99,12 +102,14 @@ from the checkout with `docker compose up -d --wait --build`.
 The [guide](https://alixanneraud.github.io/recto/) has:
 
 - a [tutorial](https://alixanneraud.github.io/recto/tutorials/first-print-and-scan.html) that runs
-  recto with a virtual printer and scanner, no hardware needed;
+  recto with a virtual printer and scanner, no hardware or identity provider needed;
 - how-to guides to [install](https://alixanneraud.github.io/recto/how-to/install.html),
-  [set up sign-in](https://alixanneraud.github.io/recto/how-to/sign-in.html) with Zitadel,
+  [manage users](https://alixanneraud.github.io/recto/how-to/manage-users.html),
+  [set up single sign-on](https://alixanneraud.github.io/recto/how-to/sign-in.html) with Zitadel,
   Keycloak or Authentik, [add printers](https://alixanneraud.github.io/recto/how-to/add-printer.html)
   and [scanners](https://alixanneraud.github.io/recto/how-to/add-scanner.html),
-  [save into Paperless-ngx](https://alixanneraud.github.io/recto/how-to/paperless.html) and
+  [save into Paperless-ngx](https://alixanneraud.github.io/recto/how-to/paperless.html),
+  [back up](https://alixanneraud.github.io/recto/how-to/back-up.html) and
   [troubleshoot](https://alixanneraud.github.io/recto/how-to/troubleshoot.html);
 - the [configuration reference](https://alixanneraud.github.io/recto/reference/configuration.html)
   and everything else to look up;

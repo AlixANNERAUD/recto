@@ -27,6 +27,32 @@ finished.** The scanner may still finish, but the result is lost.
 Files up to `RECTO_MAX_UPLOAD_SIZE` (50 MiB by default) are sent to recto in one request. nginx
 refuses bodies over 1 MiB by default: set `client_max_body_size` to at least that size.
 
+## Count sign-in attempts per person
+
+recto limits password sign-in attempts per client address (see
+[Password sign-in limit](../reference/accounts.md#password-sign-in-limit)). Behind a proxy, every
+request comes from the proxy's address, so all your users share one budget: a few wrong
+passwords from one person make everyone wait.
+
+To count them per client, have the proxy send the client's address in `X-Forwarded-For`, and tell
+recto to read it:
+
+```yaml
+RECTO_TRUST_FORWARDED_HEADERS: "true"
+```
+
+The proxy must **replace** any `X-Forwarded-For` the client sent, not add to it. Otherwise a
+client can send its own header with a new address at each attempt, and never be limited.
+
+- **nginx:** `proxy_set_header X-Forwarded-For $remote_addr;`, as in the example below. Not
+  `$proxy_add_x_forwarded_for`, which keeps what the client sent.
+- **Caddy:** replaces it by default.
+- **Traefik:** replaces it by default, unless `forwardedHeaders.trustedIPs` or `insecure` is set
+  on the entry point.
+
+Leave the setting off when recto is reachable without the proxy, such as on its published port:
+anyone could then send the header.
+
 ## Examples
 
 ### Caddy
@@ -50,6 +76,8 @@ server {
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
+        # With RECTO_TRUST_FORWARDED_HEADERS=true: the client's address, replacing its own header.
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_read_timeout 600s;
     }
 }

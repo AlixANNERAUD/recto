@@ -25,7 +25,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # Only mdBook is installed here: running it must not install the rest of mise.toml.
+  # Only mdBook and its Mermaid preprocessor are installed here: running them must not install the
+  # rest of mise.toml.
   MISE_EXEC_AUTO_INSTALL: "false"
   MISE_NOT_FOUND_AUTO_INSTALL: "false"
   MISE_TASK_RUN_AUTO_INSTALL: "false"
@@ -36,10 +37,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7.0.1
-      # mdBook's version comes from mise.toml, like the other tools.
+      # Their versions come from mise.toml, like the other tools.
       - uses: jdx/mise-action@v5.2.7
         with:
-          install_args: github:rust-lang/mdBook
+          install_args: github:rust-lang/mdBook github:badboy/mdbook-mermaid
       - run: mdbook build docs
       - if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v5.0.0

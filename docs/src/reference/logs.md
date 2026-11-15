@@ -21,6 +21,12 @@ only.
 | info | `listening` | `address` |
 | info | `scanners listed` | `count` |
 | info | `signed in` | `user` |
+| info | `signed in with a password` | `user` |
+| info | `user created at first sign-in` | `user` |
+| info | `local user created`, `administrator created` | `user` |
+| info | `password changed` | `user` |
+| info | `password set`, `disabled changed`, `administration changed` | `by`, `user_id`, and `value` for the last two |
+| info | `session ended: the user is gone, disabled or signed out` | `user_id` |
 | info | `document sent to the printer` | `user`, `job` |
 | info | `job canceled` | `user`, `job` |
 | info | `scan saved` | `user`, `path` |
@@ -30,11 +36,17 @@ only.
 | warn | `scanning failed` | `error`, `user` |
 | warn | `saving a scan failed` | `error` |
 | warn | `sign-in refused`, `starting a sign-in failed` | `error` |
+| warn | `password sign-in refused` | `client`, `refusal` |
+| warn | `disabled user refused` | `subject` |
 | warn | `reading the user information failed` | `error` |
 | warn | `SANE could not start; scanning is off` | `error` |
 | error | `starting the session failed` | `error` |
+| error | `password sign-in failed`, `changing a password failed`, `changing a user failed` | `error` |
 
-Tokens, cookies and file contents are never logged.
+Commands such as `recto create-administrator` write their messages as text.
+
+Tokens, cookies, passwords and file contents are never logged. The password of a PostgreSQL URL
+is hidden in messages.
 
 ## Health
 

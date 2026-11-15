@@ -1,6 +1,6 @@
 [book]
 title = "recto"
-description = "Guide to recto, the self-hosted web app to print and scan from any browser through your home server: CUPS printing over IPP, SANE scanning with preview, scans saved to Paperless-ngx, single sign-on with OpenID Connect."
+description = "Guide to recto, the self-hosted web app to print and scan from any browser through your home server: CUPS printing over IPP, SANE scanning with preview, scans saved to Paperless-ngx, local accounts or single sign-on with OpenID Connect, on SQLite or PostgreSQL."
 authors = ["Alix ANNERAUD"]
 language = "en"
 src = "src"
@@ -15,3 +15,10 @@ create-missing = false
 site-url = "/recto/"
 git-repository-url = "https://github.com/AlixANNERAUD/recto"
 edit-url-template = "https://github.com/AlixANNERAUD/recto/edit/main/docs/{path}"
+# Mermaid 11.6.0 (MIT) and its start-up script (MPL-2.0), as `mdbook-mermaid install docs` of the
+# version pinned in mise.toml wrote them.
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+
+# Turns ```mermaid blocks into diagrams; mise.toml pins it.
+[preprocessor.mermaid]
+command = "mdbook-mermaid"

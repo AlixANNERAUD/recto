@@ -4,18 +4,26 @@ recto reads its settings from environment variables only; there is no configurat
 variable can also be given as a command-line option of `recto serve`: `RECTO_PUBLIC_URL` is
 `--public-url`, and so on (see [Command line](command-line.md)).
 
-An optional variable set to an empty value counts as unset.
+An optional variable without a default, set to an empty value, counts as unset. A variable with
+a default, such as `RECTO_LOCAL_ACCOUNTS`, must be left out rather than empty.
 
 ## Settings
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `RECTO_PUBLIC_URL` | required | The address people open, such as `https://recto.example.org`. Sign-in redirects, the allowed origin of forms and the `Secure` flag of the session cookie come from it. It must be the root of a site: a path such as `/recto` is refused. |
-| `RECTO_OIDC_ISSUER` | required | The issuer URL of the OpenID Connect provider. |
-| `RECTO_OIDC_CLIENT_ID` | required | The client id of recto's public client in that provider. |
+| `RECTO_DATABASE_URL` | `sqlite:///data/recto.db` | The database. See [Database](#database). |
+| `RECTO_LOCAL_ACCOUNTS` | `true` | `true` lets local accounts sign in with a password at `/sign-in`; `false` leaves single sign-on only, and needs it configured. |
+| `RECTO_PASSWORD_MINIMUM_LENGTH` | `12` | The fewest characters a new password may have. The most is 1,024. |
+| `RECTO_TRUST_FORWARDED_HEADERS` | `false` | `true` counts password sign-in attempts by the address in `X-Forwarded-For`, `X-Real-IP` or `Forwarded`, rather than the connection's. Only behind a proxy that replaces these headers: see [Run behind a reverse proxy](../how-to/reverse-proxy.md#count-sign-in-attempts-per-person). |
+| `RECTO_OIDC_ISSUER` | none | The issuer URL of the OpenID Connect provider. Set it with `RECTO_OIDC_CLIENT_ID`, or neither: one without the other is refused at startup. |
+| `RECTO_OIDC_CLIENT_ID` | none | The client id of recto's public client in that provider. |
 | `RECTO_OIDC_SCOPES` | none | Extra scopes, separated by spaces. recto always asks for `openid`, `profile` and `email`. |
 | `RECTO_OIDC_REQUIRED_CLAIM` | none | Let in only people whose sign-in token has this claim. See [Required claim](#required-claim). |
 | `RECTO_OIDC_REQUIRED_VALUE` | none | The value the required claim must hold. Setting it without `RECTO_OIDC_REQUIRED_CLAIM` is refused at startup. |
+| `RECTO_OIDC_ADMINISTRATOR_CLAIM` | none | The claim that makes a single sign-on user an administrator. See [Administrator claim](accounts.md#administrator-claim). |
+| `RECTO_OIDC_ADMINISTRATOR_VALUE` | none | The value the administrator claim must hold. Setting it without `RECTO_OIDC_ADMINISTRATOR_CLAIM` is refused at startup. |
+| `RECTO_OIDC_GROUPS_CLAIM` | none | The claim holding a single sign-on user's groups. See [Groups](accounts.md#groups). |
 | `RECTO_CUPS_URL` | `http://localhost:631` | The CUPS server. `ipp://` means `http://` and `ipps://` means `https://`. Without a port, the scheme's default (80 or 443) is used, not 631. |
 | `RECTO_SCAN_OUTPUT_DIR` | none | The folder **Save to folder** writes into. Without it, scans can only be downloaded and the button is hidden. |
 | `RECTO_MAX_UPLOAD_SIZE` | `52428800` (50 MiB) | The largest file accepted for printing, in bytes. |
@@ -23,23 +31,46 @@ An optional variable set to an empty value counts as unset.
 | `RECTO_SITE_ROOT` | `/app/site` | The folder of the built interface. The image sets it. |
 | `RECTO_LOG_FORMAT` | `json` | `json` for one JSON object per line, or `text`. |
 
+At least one way to sign in is needed: `RECTO_LOCAL_ACCOUNTS=false` without an OpenID Connect
+provider is refused at startup.
+
 `RUST_LOG` sets which log lines are written; see [Logs and health](logs.md).
+
+## Database
+
+`RECTO_DATABASE_URL` takes one of two forms:
+
+| Form | Database |
+| --- | --- |
+| `sqlite://<path>` | A SQLite file, created if missing. Three slashes for an absolute path: `sqlite:///data/recto.db`. |
+| `postgres://<user>:<password>@<host>:<port>/<database>` | A PostgreSQL database, which must exist. `postgresql://` works too. |
+
+recto applies the pending migrations of the schema at startup, before it accepts requests.
+
+In a PostgreSQL URL, characters of the user or the password other than letters, digits and
+`-._~` must be percent-encoded: `@` is `%40`, `:` is `%3A`, `/` is `%2F`, `%` is `%25`. Options
+follow a `?`, such as `?sslmode=verify-full`, or `&sslrootcert=/path/to/ca.pem` after another
+option.
 
 ## In compose.yml
 
-`compose.yml` reads `RECTO_PUBLIC_URL`, `RECTO_OIDC_ISSUER` and `RECTO_OIDC_CLIENT_ID` from `.env`
-and sets `RECTO_CUPS_URL` and `RECTO_SCAN_OUTPUT_DIR` for its own `cups` service and `./consume`
-folder. Two more variables of `.env` are read by Compose itself, not by recto:
+`compose.yml` reads `RECTO_PUBLIC_URL`, and `RECTO_OIDC_ISSUER` and `RECTO_OIDC_CLIENT_ID` when
+they are set, from `.env`. It sets `RECTO_CUPS_URL` and `RECTO_SCAN_OUTPUT_DIR` for its own `cups`
+service and `./consume` folder, and mounts the `recto-data` volume at `/data` for the database.
+More variables of `.env` are read by Compose itself, not by recto:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `RECTO_IMAGE` | `ghcr.io/alixanneraud/recto:latest` | The image to run. |
 | `RECTO_PORT` | `8080` | The port published on the host. |
+| `RECTO_POSTGRES_PASSWORD` | required by `examples/compose-postgres.yml` | The password of its PostgreSQL database. |
+| `COMPOSE_FILE` | `compose.yml` and `compose.override.yml` | The Compose files to use, separated by `:`, such as `compose.yml:examples/compose-postgres.yml`. Once it is set, `compose.override.yml` is only read if listed. |
 
 ## Required claim
 
 With `RECTO_OIDC_REQUIRED_CLAIM` set, recto checks the claims of the ID token, completed by the
-UserInfo endpoint when the claim is missing from the token, at each sign-in.
+UserInfo endpoint when the claim is missing from the token, at each single sign-on. The
+administrator claim is matched the same way.
 
 The claim is looked up by its whole name first, then as a path of names separated by dots into
 nested objects: `realm_access.roles` reads `roles` inside `realm_access`.
@@ -61,6 +92,9 @@ These are not configurable:
 | --- | --- |
 | Session lifetime without a request | 12 hours |
 | Time to finish a sign-in at the provider | 10 minutes |
+| Password sign-in attempts per client address | 5 at once, then one every 4 seconds |
+| Longest password | 1,024 characters |
+| Connections to the database | at most 8 |
 | Lifetime of a scan result | 1 hour |
 | Largest scanned page, before compression | 300 MB |
 | Timeout of a request to CUPS | 10 seconds; longer for sending a file |
