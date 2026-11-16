@@ -2,8 +2,9 @@
 //! whether the job finished or was refunded. The quotas and the usage reports read them.
 //!
 //! The counts are null when they are unknown (a PDF recto could not read), which is not the same
-//! as 0. Existing rows keep the defaults: a count of nothing, which is what quotas should assume
-//! of jobs that were never counted.
+//! as 0. The jobs recorded before this migration were never counted: their counts stay null, their
+//! cost 0, and they are marked finished, because they are history that the job state poll must
+//! not look at again.
 
 use sea_orm_migration::{prelude::*, schema::*};
 
@@ -65,6 +66,15 @@ impl MigrationTrait for Migration {
                 )
                 .await?;
         }
+        // Every row so far predates the ledger, so none is waiting for a final state.
+        manager
+            .exec_stmt(
+                Query::update()
+                    .table(PrintJobs::Table)
+                    .value(PrintJobs::Finished, true)
+                    .to_owned(),
+            )
+            .await?;
         // Quota checks sum a user's jobs since the start of a period; the state poll looks for
         // the jobs that are not finished.
         manager

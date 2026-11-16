@@ -176,6 +176,7 @@ impl Harness {
             job_visibility: setup.job_visibility,
             currency: Currency::new("EUR"),
             timezone: chrono_tz::UTC,
+            page_counter: Default::default(),
         };
         let public_url = Url::parse(setup.public_url).unwrap();
         let openid = setup.issuer.map(|issuer| {

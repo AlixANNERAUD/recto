@@ -10,6 +10,7 @@ use recto_app::{
 };
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::passwords::{self, PasswordPolicy};
+use recto_printing::count::PageCounter;
 use recto_printing::{Cups, CupsAdmin, PrinterAdmin};
 use recto_scanning::{
     ResultStore, SaneScanners, ScanError, ScanRequest, ScannedPage, ScannerCapabilities,
@@ -185,6 +186,7 @@ pub async fn build(
         job_visibility: config.job_visibility,
         currency: Currency::new(&config.currency),
         timezone: config.timezone,
+        page_counter: PageCounter::default(),
     };
     let openid = config
         .oidc_issuer

@@ -31,7 +31,7 @@ a default, such as `RECTO_LOCAL_ACCOUNTS`, must be left out rather than empty.
 | `RECTO_LISTEN_ADDRESS` | `0.0.0.0:8080` | The address and port recto listens on. |
 | `RECTO_SITE_ROOT` | `/app/site` | The folder of the built interface. The image sets it. |
 | `RECTO_JOB_VISIBILITY` | `all` | `all` shows every print job to everyone. `own` shows people only the jobs they submitted through recto, and administrators every job: see [Keep jobs private](../how-to/restrict-access.md#keep-jobs-private). |
-| `RECTO_CURRENCY` | `EUR` | The ISO 4217 code of the currency costs are shown in, three letters. It only changes how amounts read: recto converts nothing. |
+| `RECTO_CURRENCY` | `EUR` | The code of the currency costs are shown in: any three letters are accepted, such as `EUR` or `USD`. It only changes how amounts read, with the decimals of the currencies recto knows (none for `JPY`, three for `KWD`, two otherwise): recto converts nothing. |
 | `RECTO_TIMEZONE` | `UTC` | The IANA time zone name, such as `Europe/Paris`, whose calendar day, week and month the print periods follow. |
 | `RECTO_LOG_FORMAT` | `json` | `json` for one JSON object per line, or `text`. |
 | `RECTO_BRAND_NAME` | `recto` | The name in the header, the page titles, messages and the installed app. 1 to 64 characters once spaces around it are removed. See [Brand recto](../how-to/brand.md). |

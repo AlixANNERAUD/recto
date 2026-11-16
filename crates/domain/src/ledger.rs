@@ -264,4 +264,46 @@ mod tests {
             .unwrap();
         assert!(row.refunded && row.finished);
     }
+
+    #[tokio::test]
+    async fn jobs_recorded_before_the_ledger_are_finished_afterwards() {
+        use recto_migration::{Migrator, MigratorTrait};
+        use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+
+        let url = format!(
+            "sqlite:file:recto-ledger-migration-{}?mode=memory&cache=shared",
+            std::process::id()
+        );
+        let database = crate::database::connect(&url).await.unwrap();
+        // Everything but the ledger migration, which is the last.
+        let before = Migrator::migrations().len() as u32 - 1;
+        Migrator::up(&database, Some(before)).await.unwrap();
+        for sql in [
+            "INSERT INTO users (username, display_name, is_administrator, administrator_from_claim, \
+             is_disabled, created_at) VALUES ('old', 'Old', 0, 0, 0, '2026-01-01T00:00:00+00:00')",
+            "INSERT INTO print_jobs (user_id, printer, cups_job_id, document_name, submitted_at, state) \
+             VALUES (1, 'office', 4, 'a.pdf', '2026-01-02T00:00:00+00:00', 'completed')",
+            "INSERT INTO print_jobs (user_id, printer, cups_job_id, document_name, submitted_at, state) \
+             VALUES (1, 'office', NULL, 'b.pdf', '2026-01-02T00:00:00+00:00', 'pending')",
+        ] {
+            database.execute_unprepared(sql).await.unwrap();
+        }
+
+        Migrator::up(&database, None).await.unwrap();
+
+        let rows = database
+            .query_all_raw(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT finished, pages, cost, refunded FROM print_jobs",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        for row in rows {
+            assert!(row.try_get::<bool>("", "finished").unwrap());
+            assert_eq!(row.try_get::<Option<i64>>("", "pages").unwrap(), None);
+            assert_eq!(row.try_get::<i64>("", "cost").unwrap(), 0);
+            assert!(!row.try_get::<bool>("", "refunded").unwrap());
+        }
+    }
 }

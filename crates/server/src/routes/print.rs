@@ -21,8 +21,7 @@ use recto_domain::{
 };
 use recto_printing::{
     Capabilities, ColorMode, DocumentFormat, PageRanges, PrintError, PrintOptions, PrintRequest,
-    Sides,
-    count::{pdf_pages, printed_pages},
+    Sides, count::printed_pages,
 };
 
 /// Room for the form fields and multipart headers next to the largest accepted file, so a file
@@ -91,13 +90,8 @@ async fn submit_form(state: &AppState, user: &User, multipart: Multipart) -> Res
     }
     let options = options(&form.options, &printer.capabilities, format)?;
     let document_pages = match format {
-        DocumentFormat::Pdf => {
-            // Parsing a large document is CPU work: keep it off the async threads.
-            let bytes = document.clone();
-            tokio::task::spawn_blocking(move || pdf_pages(&bytes))
-                .await
-                .unwrap_or(None)
-        }
+        // Bounded in concurrency and time, and not copied: see `PageCounter`.
+        DocumentFormat::Pdf => state.page_counter.pdf_pages(document.clone()).await,
         DocumentFormat::Jpeg | DocumentFormat::Png => Some(1),
     };
     let printed = document_pages.map(|pages| printed_pages(pages, options.page_ranges.as_ref()));
@@ -154,7 +148,11 @@ async fn submit_form(state: &AppState, user: &User, multipart: Multipart) -> Res
     if let Some(entry_id) = entry_id
         && let Err(error) = ledger::attach(&state.database, entry_id, id).await
     {
-        tracing::error!(%error, job = id, "recording the job failed");
+        tracing::error!(
+            %error,
+            job = id,
+            "linking the CUPS job to its ledger entry failed"
+        );
     }
     Ok(id)
 }

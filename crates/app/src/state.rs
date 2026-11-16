@@ -8,7 +8,7 @@ use leptos::{
     config::LeptosOptions,
     prelude::{ServerFnError, use_context},
 };
-use recto_printing::{PrintService, PrinterAdmin};
+use recto_printing::{PrintService, PrinterAdmin, count::PageCounter};
 use recto_scanning::{ResultStore, ScannerService};
 use sea_orm::DatabaseConnection;
 
@@ -34,6 +34,9 @@ pub struct Currency {
     pub decimals: u32,
 }
 
+/// Currencies with a thousandth as the minor unit (ISO 4217 exponent 3).
+const THREE_DECIMALS: [&str; 7] = ["BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND"];
+
 /// Currencies without a minor unit (ISO 4217 exponent 0); every other one has two decimals.
 const ZERO_DECIMAL: [&str; 16] = [
     "BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW", "PYG", "RWF", "UGX", "VND", "VUV",
@@ -46,6 +49,8 @@ impl Currency {
         let code = code.to_ascii_uppercase();
         let decimals = if ZERO_DECIMAL.contains(&code.as_str()) {
             0
+        } else if THREE_DECIMALS.contains(&code.as_str()) {
+            3
         } else {
             2
         };
@@ -96,6 +101,8 @@ pub struct AppState {
     pub currency: Currency,
     /// The zone calendar periods of quotas follow (`RECTO_TIMEZONE`).
     pub timezone: chrono_tz::Tz,
+    /// Reads the page count of uploaded PDFs, within bounds.
+    pub page_counter: PageCounter,
 }
 
 /// The signed-in user of a request, read from the accounts database on every request, so that
@@ -166,5 +173,9 @@ mod tests {
         assert_eq!(euro.format(5), "0.05 EUR");
         assert_eq!(euro.format(-250), "-2.50 EUR");
         assert_eq!(Currency::new("JPY").format(1234), "1234 JPY");
+        let dinar = Currency::new("KWD");
+        assert_eq!(dinar.decimals, 3);
+        assert_eq!(dinar.format(12_345), "12.345 KWD");
+        assert_eq!(dinar.format(7), "0.007 KWD");
     }
 }

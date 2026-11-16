@@ -50,7 +50,9 @@ only.
 | warn | `printer administration failed` | `error`, and `by` and `printer` for a printer form |
 | error | `starting the session failed` | `error` |
 | error | `password sign-in failed`, `changing a password failed`, `changing a user failed` | `error` |
-| error | `recording the job failed` | `error`, `job` |
+| error | `writing the ledger entry failed` | `error` |
+| error | `refunding the ledger entry failed` | `error` |
+| error | `linking the CUPS job to its ledger entry failed` | `error`, `job` |
 | error | `reading the job records failed` | `error`, and `job` when canceling |
 | error | `updating the job records failed` | `error` |
 | error | `reading the printer access rules failed`, `reading the scanner access rules failed` | `error` |
