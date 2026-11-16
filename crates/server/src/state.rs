@@ -141,7 +141,8 @@ pub fn results_dir() -> std::io::Result<PathBuf> {
 fn printer_admin(config: &Config) -> Option<Arc<dyn PrinterAdmin>> {
     let socket = config.cups_admin_socket.as_deref()?;
     if !socket.exists() {
-        tracing::warn!(socket = %socket.display(), "the CUPS socket does not exist yet");
+        // CUPS may still be starting: each request connects anew, so this is only a hint.
+        tracing::info!(socket = %socket.display(), "the CUPS socket does not exist yet");
     }
     match CupsAdmin::over_socket(socket) {
         Ok(admin) => Some(Arc::new(admin)),

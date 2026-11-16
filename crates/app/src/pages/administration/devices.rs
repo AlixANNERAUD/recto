@@ -141,8 +141,12 @@ pub enum DevicesProblem {
     UnknownGroup,
     /// The database failed.
     Unavailable,
-    /// The printer name is not one CUPS accepts.
+    /// The name of a new printer is not a plain one.
     InvalidName,
+    /// The name of an existing printer is not one CUPS accepts.
+    InvalidQueueName,
+    /// A description or location is too long or has control characters.
+    InvalidText,
     /// The printer address is not one recto sends to CUPS.
     InvalidAddress,
     /// A printer of that name, whatever its case, is already in CUPS.
@@ -167,6 +171,10 @@ impl DevicesProblem {
             DevicesProblem::UnknownGroup => t!("administration.devices.errors.unknown_group"),
             DevicesProblem::Unavailable => t!("administration.devices.errors.unavailable"),
             DevicesProblem::InvalidName => t!("administration.printers.errors.invalid_name"),
+            DevicesProblem::InvalidQueueName => {
+                t!("administration.printers.errors.invalid_queue_name")
+            }
+            DevicesProblem::InvalidText => t!("administration.printers.errors.invalid_text"),
             DevicesProblem::InvalidAddress => t!("administration.printers.errors.invalid_address"),
             DevicesProblem::NameTaken => t!("administration.printers.errors.name_taken"),
             DevicesProblem::NeedsConfirmation => {
@@ -201,6 +209,10 @@ impl DevicesProblem {
         text.into_any()
     }
 }
+
+/// The longest description or location of a printer the server accepts, in characters. The
+/// browser counts `maxlength` in UTF-16 units, never fewer, so it lets through nothing longer.
+pub const PRINTER_TEXT_MAX: usize = 1023;
 
 /// The guide to the CUPS setup that lets recto administer printers.
 const SETUP_GUIDE: &str = "https://alixanneraud.github.io/recto/how-to/add-printer.html";
@@ -424,6 +436,12 @@ fn Device(kind: DeviceKind, device: DeviceRow, groups: Vec<GroupChoice>) -> impl
         }
         .into_any()
     };
+    // With the printer actions, the section is about more than access.
+    let summary = if device.controls.is_some() {
+        t!("administration.printers.manage.summary")
+    } else {
+        t!("administration.devices.change")
+    };
     let manage = device
         .controls
         .clone()
@@ -451,7 +469,7 @@ fn Device(kind: DeviceKind, device: DeviceRow, groups: Vec<GroupChoice>) -> impl
             <p class="text-sm">{access}</p>
             <details class="text-sm">
                 <summary class="text-brand min-h-8 cursor-pointer font-semibold">
-                    {t!("administration.devices.change")}
+                    {summary}
                 </summary>
                 <div class="grid gap-4 pt-2">
                     <form method="post" action=format!("{}/access", kind.path())>
@@ -630,6 +648,7 @@ fn AddPrinter(tools: PrinterTools) -> impl IntoView {
                             name="description"
                             type="text"
                             value=draft.description
+                            maxlength=PRINTER_TEXT_MAX.to_string()
                             autocomplete="off"
                             class=INPUT
                         />
@@ -643,6 +662,7 @@ fn AddPrinter(tools: PrinterTools) -> impl IntoView {
                             name="location"
                             type="text"
                             value=draft.location
+                            maxlength=PRINTER_TEXT_MAX.to_string()
                             autocomplete="off"
                             class=INPUT
                         />
@@ -702,7 +722,10 @@ fn ManagePrinter(name: String, controls: PrinterControls) -> impl IntoView {
     };
     view! {
         <div class="grid gap-4 border-t pt-4">
-            <h3 class="font-semibold">{t!("administration.printers.manage.title")}</h3>
+            // Every row has the same buttons: the heading says which printer they act on.
+            <h3 class="font-semibold">
+                {tf!("administration.printers.manage.title", printer = name.clone())}
+            </h3>
             <form
                 method="post"
                 action=format!("{}/describe", DeviceKind::Printer.path())
@@ -715,6 +738,7 @@ fn ManagePrinter(name: String, controls: PrinterControls) -> impl IntoView {
                         name="description"
                         type="text"
                         value=controls.description
+                        maxlength=PRINTER_TEXT_MAX.to_string()
                         autocomplete="off"
                         class=format!("{INPUT} font-normal")
                     />
@@ -725,6 +749,7 @@ fn ManagePrinter(name: String, controls: PrinterControls) -> impl IntoView {
                         name="location"
                         type="text"
                         value=controls.location
+                        maxlength=PRINTER_TEXT_MAX.to_string()
                         autocomplete="off"
                         class=format!("{INPUT} font-normal")
                     />

@@ -23,7 +23,7 @@ use recto_app::{
             devices::{
                 DeviceAccess, DeviceKind as PageKind, DeviceRow, DevicesPageData, DevicesProblem,
                 DriverChoice, GroupChoice, NewPrinterDraft, Notice as DeviceNotice,
-                PrinterControls, PrinterTools,
+                PRINTER_TEXT_MAX, PrinterControls, PrinterTools,
             },
             groups::{GroupMember, GroupRow, GroupsPageData},
             users::{NewUserDraft, Notice, UserRow, UsersPageData, UsersProblem, UsersRefusal},
@@ -751,12 +751,26 @@ const DEVICE_SCHEMES: [&str; 8] = [
     "ipp", "ipps", "http", "https", "socket", "lpd", "dnssd", "usb",
 ];
 
-/// A queue name CUPS accepts: it ends up in a URI and in file names.
+/// A name for a new printer: plain, since it ends up in URIs, file names and commands.
 fn valid_printer_name(name: &str) -> bool {
     (1..=127).contains(&name.len())
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+}
+
+/// The name of an existing printer, by CUPS's own rule, so that a queue made with `lpadmin`,
+/// such as `Büro` or `HP+`, can be managed too.
+fn valid_queue_name(name: &str) -> bool {
+    (1..=127).contains(&name.len())
+        && !name
+            .chars()
+            .any(|c| c.is_control() || c == ' ' || matches!(c, '/' | '\\' | '?' | '\'' | '"' | '#'))
+}
+
+/// A description or location CUPS keeps: one line, no control characters, a bounded length.
+fn valid_printer_text(text: &str) -> bool {
+    text.chars().count() <= PRINTER_TEXT_MAX && !text.chars().any(char::is_control)
 }
 
 /// An address of a printer: a known scheme and a host, or for `usb` and `dnssd`, which name
@@ -796,11 +810,14 @@ enum PrinterAction {
 }
 
 impl PrinterAction {
-    /// Logs what an administrator did to a printer. One call per message keeps each a literal,
-    /// as the log reference lists them.
-    fn log(self, by: &str, printer: &str) {
+    /// Logs what an administrator did to a printer, with the address of a new one. One call
+    /// per message keeps each a literal, as the log reference lists them.
+    fn log(self, by: &str, printer: &str, address: Option<&str>) {
         match self {
-            PrinterAction::Add => tracing::info!(by, printer, "printer added"),
+            PrinterAction::Add => {
+                let address = address.unwrap_or_default();
+                tracing::info!(by, printer, address, "printer added");
+            }
             PrinterAction::Describe => tracing::info!(by, printer, "printer described"),
             PrinterAction::Default => tracing::info!(by, printer, "default printer set"),
             PrinterAction::Pause => tracing::info!(by, printer, "printer paused"),
@@ -850,8 +867,8 @@ impl Refusal {
         })
     }
 
-    fn from_cups(error: AdminError) -> Box<Self> {
-        tracing::warn!(%error, "printer administration failed");
+    fn from_cups(error: AdminError, by: &str, printer: &str) -> Box<Self> {
+        tracing::warn!(%error, by, printer, "printer administration failed");
         match error {
             AdminError::Refused => Self::new(StatusCode::BAD_GATEWAY, DevicesProblem::CupsRefused),
             AdminError::Unreachable(message) => Self::new(
@@ -878,13 +895,14 @@ fn some_text(text: String) -> Option<String> {
     Some(text).filter(|text| !text.is_empty())
 }
 
-/// Asks CUPS for what the form says. Returns what to tell and log, and the printer.
+/// Asks CUPS for what the form says, on behalf of `by`, and logs it. Returns what to tell.
 async fn perform(
     state: &AdministrationState,
     admin: &dyn PrinterAdmin,
     action: PrinterAction,
+    by: &str,
     body: &[u8],
-) -> Result<(DeviceNotice, String), Box<Refusal>> {
+) -> Result<DeviceNotice, Box<Refusal>> {
     if let PrinterAction::Add = action {
         let draft = NewPrinterDraft {
             name: text_field(body, "name"),
@@ -907,6 +925,9 @@ async fn perform(
         }
         if !valid_device_uri(&draft.address) {
             return Err(refuse(DevicesProblem::InvalidAddress, draft));
+        }
+        if !valid_printer_text(&draft.description) || !valid_printer_text(&draft.location) {
+            return Err(refuse(DevicesProblem::InvalidText, draft));
         }
         // CUPS-Add-Modify-Printer would silently replace a queue of that name, whatever its
         // case, with its jobs and settings.
@@ -944,11 +965,14 @@ async fn perform(
             location: some_text(draft.location.clone()),
         };
         return match admin.add(printer).await {
-            Ok(()) => Ok((DeviceNotice::Added, draft.name)),
-            Err(error) => Err(Box::new(Refusal {
-                draft,
-                ..*Refusal::from_cups(error)
-            })),
+            Ok(()) => {
+                action.log(by, &draft.name, Some(&draft.address));
+                Ok(DeviceNotice::Added)
+            }
+            Err(error) => {
+                let refusal = Refusal::from_cups(error, by, &draft.name);
+                Err(Box::new(Refusal { draft, ..*refusal }))
+            }
         };
     }
 
@@ -959,23 +983,29 @@ async fn perform(
             DevicesProblem::NoDevice,
         ));
     }
-    if !valid_printer_name(&printer) {
+    if !valid_queue_name(&printer) {
         return Err(Refusal::new(
             StatusCode::BAD_REQUEST,
-            DevicesProblem::InvalidName,
+            DevicesProblem::InvalidQueueName,
         ));
     }
     let name = printer.as_str();
     let done = match action {
         PrinterAction::Add => unreachable!("handled above"),
-        PrinterAction::Describe => admin
-            .describe(
-                name,
-                Some(text_field(body, "description")),
-                Some(text_field(body, "location")),
-            )
-            .await
-            .map(|()| DeviceNotice::Described),
+        PrinterAction::Describe => {
+            let description = text_field(body, "description");
+            let location = text_field(body, "location");
+            if !valid_printer_text(&description) || !valid_printer_text(&location) {
+                return Err(Refusal::new(
+                    StatusCode::BAD_REQUEST,
+                    DevicesProblem::InvalidText,
+                ));
+            }
+            admin
+                .describe(name, Some(description), Some(location))
+                .await
+                .map(|()| DeviceNotice::Described)
+        }
         PrinterAction::Default => admin
             .set_default(name)
             .await
@@ -1004,8 +1034,13 @@ async fn perform(
             removed.map(|()| DeviceNotice::Removed)
         }
     };
-    done.map(|notice| (notice, printer))
-        .map_err(Refusal::from_cups)
+    match done {
+        Ok(notice) => {
+            action.log(by, name, None);
+            Ok(notice)
+        }
+        Err(error) => Err(Refusal::from_cups(error, by, name)),
+    }
 }
 
 async fn administer(
@@ -1018,11 +1053,8 @@ async fn administer(
     let Some(admin) = state.app.printer_admin.clone() else {
         return not_found(&state, parts).await;
     };
-    match perform(&state, &*admin, action, &body).await {
-        Ok((notice, printer)) => {
-            action.log(&actor.username, &printer);
-            devices_done(DeviceKind::Printer, notice)
-        }
+    match perform(&state, &*admin, action, &actor.username, &body).await {
+        Ok(notice) => devices_done(DeviceKind::Printer, notice),
         Err(refusal) => {
             let refusal = *refusal;
             devices_view_with(
@@ -1049,6 +1081,46 @@ mod tests {
         }
         for name in ["", "my printer", "a/b", "a#b", "é", &"a".repeat(128)] {
             assert!(!valid_printer_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn existing_names_follow_cups() {
+        for name in [
+            "office",
+            "Büro",
+            "HP+",
+            "lab@home",
+            &"a".repeat(127),
+            &"é".repeat(63),
+        ] {
+            assert!(valid_queue_name(name), "{name}");
+        }
+        for name in [
+            "",
+            "a b",
+            "a/b",
+            "a\\b",
+            "a?b",
+            "a'b",
+            "a\"b",
+            "a#b",
+            "a\tb",
+            "a\u{7f}b",
+            &"a".repeat(128),
+            &"é".repeat(64),
+        ] {
+            assert!(!valid_queue_name(name), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn texts_are_one_bounded_line() {
+        for text in ["", "Office laser, 2nd floor", &"é".repeat(1023)] {
+            assert!(valid_printer_text(text), "{text}");
+        }
+        for text in ["a\nb", "a\rb", "a\u{0}b", &"a".repeat(1024)] {
+            assert!(!valid_printer_text(text), "{text:?}");
         }
     }
 

@@ -45,15 +45,17 @@ These work without JavaScript and accept only requests from recto's own pages (s
 | `POST /administration/users/{id}/password` | Sets a user's password. |
 | `POST /administration/printers/access` and `/administration/scanners/access` | Sets who may use a device. Fields: `device`, `access` (`everyone` or `groups`) and one `groups` field per group id; `groups` with none means administrators only. Redirects to the page with `?done=access`. Answers `400` with the page when `device` or `access` is missing or a group is unknown, and `503` when the database fails. |
 | `POST /administration/printers/forget` and `/administration/scanners/forget` | Drops the rule of a device that is gone. Field: `device`. Redirects with `?done=forgotten`. |
-| `POST /administration/printers/add` | Adds a printer to CUPS. Fields: `name` (1 to 127 of `A-Za-z0-9_.-`), `address` (a URL with the scheme `ipp`, `ipps`, `http`, `https`, `socket`, `lpd`, `dnssd` or `usb`), `driver` (`everywhere` or a driver name from the list), and optional `description` and `location`. Redirects with `?done=added`. |
-| `POST /administration/printers/describe` | Sets the description and location, an empty one clearing it. Fields: `printer`, `description`, `location`. Redirects with `?done=described`. |
+| `POST /administration/printers/add` | Adds a printer to CUPS. Fields: `name` (1 to 127 of `A-Za-z0-9_.-`), `address` (a URL with the scheme `ipp`, `ipps`, `http`, `https`, `socket`, `lpd`, `dnssd` or `usb`), `driver` (`everywhere` or a driver name from the list), and optional `description` and `location` (up to 1023 characters each, without control characters). A name CUPS already has, whatever its case, is refused. Redirects with `?done=added`. |
+| `POST /administration/printers/describe` | Sets the description and location, an empty one clearing it. Fields: `printer`, `description`, `location`, the last two up to 1023 characters each, without control characters. Redirects with `?done=described`. |
 | `POST /administration/printers/default`, `/pause`, `/resume`, `/accept` and `/reject` | Makes the printer the default, pauses or resumes it, makes it accept or turn away jobs. Field: `printer`. Redirects with `?done=default`, `paused`, `resumed`, `accepting` or `rejecting`. |
 | `POST /administration/printers/remove` | Removes a printer from CUPS and forgets its access rule. Fields: `printer` and `confirm=yes`. Redirects with `?done=removed`. |
 
-The printer forms answer `404` when `RECTO_CUPS_ADMIN_SOCKET` is not set. A refused one renders
-the Printers page again with the reason: `400` for an invalid name or address, a missing printer
-or confirmation, or a change CUPS declined; `502` when CUPS refused recto or could not reach the
-printer; `503` when CUPS did not answer.
+The printer forms answer `404` when `RECTO_CUPS_ADMIN_SOCKET` is not set. The `printer` field of
+the forms other than add takes any name CUPS accepts: up to 127 bytes, without spaces, control
+characters or any of `/ \ ? ' " #`. A refused form renders the Printers page again with the
+reason: `400` for an invalid name, address, description or location, a missing printer or
+confirmation, or a change CUPS declined; `409` when adding a name CUPS already has; `502` when
+CUPS refused recto or could not reach the printer; `503` when CUPS did not answer.
 
 The administration pages and their forms answer `404`, with the not-found page, to anyone but an
 administrator. The account page and its form answer `404` to users without a password.

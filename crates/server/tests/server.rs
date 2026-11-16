@@ -3497,16 +3497,20 @@ async fn an_administrator_adds_an_ipp_everywhere_printer() {
 async fn bad_names_and_addresses_are_refused() {
     let (harness, admin) = managed_harness().await;
     let long = "a".repeat(128);
+    const NAME: &str = "The name must";
+    const ADDRESS: &str = "The address must";
     let cases = [
-        ("my printer", "ipp://192.168.1.20/ipp/print"),
-        ("a/b", "ipp://192.168.1.20/ipp/print"),
-        ("", "ipp://192.168.1.20/ipp/print"),
-        (long.as_str(), "ipp://192.168.1.20/ipp/print"),
-        ("lab", "192.168.1.20"),
-        ("lab", "file:///etc/passwd"),
-        ("lab", "cups-pdf:/"),
+        ("my printer", "ipp://192.168.1.20/ipp/print", NAME),
+        ("a/b", "ipp://192.168.1.20/ipp/print", NAME),
+        ("", "ipp://192.168.1.20/ipp/print", NAME),
+        (long.as_str(), "ipp://192.168.1.20/ipp/print", NAME),
+        // Other actions take CUPS's wider rule, but a new printer gets a plain name.
+        ("Büro", "ipp://192.168.1.20/ipp/print", NAME),
+        ("lab", "192.168.1.20", ADDRESS),
+        ("lab", "file:///etc/passwd", ADDRESS),
+        ("lab", "cups-pdf:/", ADDRESS),
     ];
-    for (name, address) in cases {
+    for (name, address, message) in cases {
         let response = harness
             .send(form(
                 "/administration/printers/add",
@@ -3521,8 +3525,121 @@ async fn bad_names_and_addresses_are_refused() {
         );
         let html = text(response).await;
         assert!(html.contains("role=\"alert\""), "{html}");
+        assert!(html.contains(message), "{name} {address}: {html}");
     }
     assert!(harness.admin.calls().is_empty());
+}
+
+#[tokio::test]
+async fn actions_take_any_name_cups_accepts() {
+    let (harness, admin) = managed_harness().await;
+    // Queues made with lpadmin may have names the Add form would not give.
+    for name in ["Büro", "HP+", "lab@home"] {
+        let response = harness
+            .send(form(
+                "/administration/printers/pause",
+                Some(&admin),
+                &[("printer", name)],
+            ))
+            .await;
+        assert_redirect(&response, "/administration/printers?done=paused");
+        assert_eq!(
+            harness.admin.calls().last(),
+            Some(&AdminCall::Pause(name.into()))
+        );
+    }
+    let long = "é".repeat(64);
+    for name in [
+        "a/b",
+        "a b",
+        "a#b",
+        "a?b",
+        "a'b",
+        "a\"b",
+        "a\\b",
+        "a\tb",
+        long.as_str(),
+    ] {
+        let response = harness
+            .send(form(
+                "/administration/printers/pause",
+                Some(&admin),
+                &[("printer", name)],
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{name:?}");
+        assert!(text(response).await.contains("The name must"), "{name:?}");
+    }
+    let response = harness
+        .send(form(
+            "/administration/printers/pause",
+            Some(&admin),
+            &[("printer", "")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(harness.admin.calls().len(), 3);
+}
+
+#[tokio::test]
+async fn descriptions_and_locations_are_bounded_plain_text() {
+    let (harness, admin) = managed_harness().await;
+    let longest = "a".repeat(1023);
+    let too_long = "a".repeat(1024);
+    for (description, location) in [
+        (too_long.as_str(), ""),
+        ("", too_long.as_str()),
+        ("Laser\nprinter", ""),
+        ("", "Study\u{7}"),
+    ] {
+        let response = harness
+            .send(form(
+                "/administration/printers/describe",
+                Some(&admin),
+                &[
+                    ("printer", "office"),
+                    ("description", description),
+                    ("location", location),
+                ],
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            text(response).await.contains("at most 1023 characters"),
+            "{description:?} {location:?}"
+        );
+
+        let mut fields = add_form("lab", "ipp://192.168.1.20/ipp/print");
+        fields.push(("description", description));
+        fields.push(("location", location));
+        let response = harness
+            .send(form("/administration/printers/add", Some(&admin), &fields))
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let html = text(response).await;
+        assert!(html.contains("at most 1023 characters"), "{html}");
+        // What was typed is kept.
+        assert!(html.contains("ipp://192.168.1.20/ipp/print"), "{html}");
+    }
+    assert!(harness.admin.calls().is_empty());
+
+    // Characters, not bytes: 1023 accented letters are fine.
+    let accented = "é".repeat(1023);
+    for text in [longest.as_str(), accented.as_str()] {
+        let response = harness
+            .send(form(
+                "/administration/printers/describe",
+                Some(&admin),
+                &[
+                    ("printer", "office"),
+                    ("description", text),
+                    ("location", text),
+                ],
+            ))
+            .await;
+        assert_redirect(&response, "/administration/printers?done=described");
+    }
+    assert_eq!(harness.admin.calls().len(), 2);
 }
 
 #[tokio::test]

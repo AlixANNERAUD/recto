@@ -1299,6 +1299,22 @@ async fn with_the_socket_printers_have_actions() {
     // The removal form asks for a confirmation.
     assert!(second.contains(r#"name="confirm""#), "{html}");
     assert!(second.contains("required"), "{html}");
+    // The section opens on more than access, and says which printer it manages, so screen
+    // reader users can tell the rows apart.
+    assert!(!html.contains("Change who may use it"), "{html}");
+    assert!(first.contains(">Manage<"), "{html}");
+    assert!(first.contains("Manage busy"), "{html}");
+    assert!(second.contains("Manage idle"), "{html}");
+    // The texts CUPS keeps are bounded as recto checks them.
+    assert_eq!(html.matches(r#"maxlength="1023""#).count(), 6, "{html}");
+}
+
+#[tokio::test]
+async fn without_the_socket_rows_only_change_access() {
+    let harness = Harness::new(vec![printer("open", false)], vec![]).await;
+    let admin = administrator(&harness, "admin-subject", "admin").await;
+    let html = harness.page("/administration/printers", &admin).await;
+    assert!(html.contains("Change who may use it"), "{html}");
 }
 
 #[tokio::test]
