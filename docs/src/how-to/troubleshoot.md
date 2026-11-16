@@ -53,11 +53,17 @@ existing user one, on the server (see
 provider must be exactly `{RECTO_PUBLIC_URL}/auth/callback`, scheme and port included.
 
 **Sign-in failed: Sign-in provider unavailable.** recto could not reach the issuer, or its
-discovery document. Check `RECTO_OIDC_ISSUER` from inside the container:
+discovery document. The recto image has no shell, so fetch the document from a throwaway curl
+container that shares recto's network, with `RECTO_OIDC_ISSUER` in place of
+`https://id.example.org`:
 
 ```sh
-docker compose exec recto bash -c 'exec 3<>/dev/tcp/id.example.org/443' && echo reachable
+docker run --rm --network container:"$(docker compose ps --quiet recto)" \
+  curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93 \
+  --fail --silent --show-error https://id.example.org/.well-known/openid-configuration
 ```
+
+It prints the provider's settings when recto can reach it, and the reason otherwise.
 
 recto keeps trying at each sign-in; nothing needs restarting once the provider is back.
 

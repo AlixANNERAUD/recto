@@ -16,8 +16,8 @@ The image is published to the GitHub Container Registry as `ghcr.io/alixanneraud
 
 | What | Value |
 | --- | --- |
-| Base | `debian:trixie-slim`, pinned by digest |
-| Packages | `libsane1`, `sane-airscan`, `sane-utils` (for `scanimage`), `ca-certificates` |
+| Base | `gcr.io/distroless/cc-debian13:nonroot` (Debian 13: glibc, OpenSSL, CA certificates), pinned by digest |
+| SANE | Debian 13's `libsane1` with every backend, `sane-airscan`, `scanimage` from `sane-utils`, and the libraries and plugins they load |
 | Binary | `/app/recto` |
 | Interface files | `/app/site` |
 | Database folder | `/data`, owned by `65532:65532` |
@@ -25,6 +25,19 @@ The image is published to the GitHub Container Registry as `ghcr.io/alixanneraud
 | User | `65532:65532`, not root |
 | Port | `8080` |
 | Health check | `/app/recto healthcheck` every 30 seconds, after a 20-second start period |
+| Size | About 57 MB to download and 150 MB unpacked on `arm64`, less on `amd64` |
+
+The SANE packages are installed in a Debian 13 build stage, and only the files they load at run
+time are copied into the image, so their packages' other dependencies (Perl, systemd) stay out.
+The build fails unless every backend loads in the result.
+
+## No shell
+
+The image has no shell, package manager or other tools: only `/app/recto` and `scanimage` run in
+it, for example `docker compose exec recto scanimage -L`. For anything else, start a throwaway
+container next to recto's: with `--network container:<recto>` it shares recto's network, with
+`--volumes-from <recto>` its volumes. [Troubleshoot](../how-to/troubleshoot.md) and
+[Back up and restore](../how-to/back-up.md#restore-a-sqlite-backup) have examples.
 
 ## Environment set by the image
 

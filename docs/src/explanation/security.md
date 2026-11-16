@@ -137,7 +137,9 @@ Without that check, a crafted id could make a network backend connect to an arbi
 
 ## The containers
 
-recto's image runs as user 65532, not root. `compose.yml` adds:
+recto's image runs as user 65532, not root, and holds only recto, the SANE libraries and
+`scanimage`: no shell, package manager or other programs an intruder could use. `compose.yml`
+adds:
 
 - `read_only: true`: the file system cannot be changed, except a memory-backed `/tmp` and the
   output folder.

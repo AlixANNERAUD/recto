@@ -46,11 +46,13 @@ it.
    belong to the old database.
 3. Start recto. If the backup comes from an older version, its migrations run at startup.
 
-With Compose, a one-off container of the recto image does the copy, as recto's user:
+With Compose, the recto image has no shell, so a throwaway BusyBox container with recto's
+volumes does the copy, as recto's user:
 
 ```sh
 docker compose stop recto
-docker compose run --rm --no-deps --entrypoint sh recto -c '
+docker run --rm --volumes-from "$(docker compose ps --all --quiet recto)" --user 65532:65532 \
+  busybox:1.37.0@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec sh -c '
   cp /backups/recto-2026-11-15.db /data/recto.db &&
   rm -f /data/recto.db-wal /data/recto.db-shm'
 docker compose start recto
