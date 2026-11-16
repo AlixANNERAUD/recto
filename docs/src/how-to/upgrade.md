@@ -59,3 +59,8 @@ The `cups` service is pinned to an image digest in `compose.yml`, which `git pul
 printers live in the `cups-config` volume and survive the upgrade. Do not run
 `docker compose down -v`: it deletes that volume, with your printers, and the `recto-data` volume,
 with recto's database.
+
+The `cups` and `recto` services share CUPS's socket through the `cups-socket` volume, and the
+`cups` service creates the `recto` account that printer management uses. After an upgrade that
+changes `compose.yml`, run `docker compose up -d`: it recreates both services, so they share the
+volume again. Printer management stays off until then.

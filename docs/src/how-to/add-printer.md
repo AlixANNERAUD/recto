@@ -1,24 +1,34 @@
 # Add a printer
 
-recto prints on the printers of its CUPS server. With printer management on, administrators add,
-describe and remove printers on the **Printers** page of **Administration**. Without it, you add
-them with `lpadmin` in the `cups` service of `compose.yml`, as the rest of this guide shows.
+recto prints on the printers of its CUPS server. With the `compose.yml` of this repository,
+administrators add, describe and remove printers on the **Printers** page of **Administration**,
+with nothing to set up. With another CUPS server, or when you prefer the command line, you add
+them with `lpadmin`, as the rest of this guide shows.
 
 To use a CUPS server that already runs on your network instead, see
 [Use an existing CUPS server](existing-cups.md).
 
 ## Add a printer from recto
 
-Printer management is on when `RECTO_CUPS_ADMIN_SOCKET` names the CUPS socket and the `cups`
-service lets recto administer it. If **Administration > Printers** has no **Add a printer**
-section, it is off: see [Configuration](../reference/configuration.md) and
+Printer management is on when `RECTO_CUPS_ADMIN_SOCKET` names the CUPS socket. `compose.yml`
+sets it, shares the socket between the `cups` and `recto` services in the `cups-socket` volume,
+and has the `cups` service create a `recto` account that `examples/cups/cups-files.conf` makes an
+administrator over that socket. If **Administration > Printers** has no **Add a printer** section,
+it is off: see [Configuration](../reference/configuration.md) and
 [Security](../explanation/security.md#cups).
+
+If recto runs with another uid, with `user:` on the `recto` service, CUPS must know that uid: edit
+the two `65532` in the `entrypoint` of the `cups` service to match. With a CUPS of your own, you
+need the same three things: recto and CUPS share the socket, CUPS has a `recto` account with
+recto's uid, and `SystemGroup` lists `root` first, then that account. Never list a group whose
+users have passwords.
 
 1. Open **Administration > Printers**.
 2. Under **Add a printer**, give a short **Name**: letters, digits, dots, underscores and hyphens.
 3. Give the **Address** of the printer, such as `ipp://192.168.1.60/ipp/print`. The schemes are
    `ipp`, `ipps`, `http`, `https`, `socket`, `lpd`, `dnssd` and `usb`. Give the printer a fixed
-   address in your router, since CUPS keeps this one.
+   address in your router, since CUPS keeps this one. An address with a user name or password
+   (`ipp://user:pass@host/...`) is refused, because CUPS would store it in clear.
 4. Leave the **Driver** on **IPP Everywhere** if the printer speaks it (most printers made since
    about 2015, also sold as AirPrint or Mopria). CUPS then asks the printer for its capabilities,
    so the address must answer: an unreachable printer is reported on the page, after up to a
@@ -37,9 +47,10 @@ description and location, make it the default printer (the first on the Print pa
 resume it, make it accept or turn away new jobs, and remove it. Removing asks for a tick in a
 checkbox, cancels the printer's waiting jobs and forgets its access rule.
 
-A refusal that says CUPS refused the change means the `cups` service does not let recto
-administer it: check the `RECTO_CUPS_ADMIN_SOCKET` setting and the CUPS configuration in
-`examples/cups/`.
+A refusal that says CUPS refused the change means CUPS does not accept recto as an
+administrator: check that the `recto` account exists in the `cups` container (`docker compose
+exec cups grep recto /etc/passwd`), that its uid is recto's, and the `SystemGroup` line of
+`examples/cups/cups-files.conf`.
 
 ## Add a printer with the command line
 

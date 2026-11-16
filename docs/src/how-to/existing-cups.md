@@ -61,6 +61,16 @@ Edit the server's `cupsd.conf` (usually `/etc/cups/cupsd.conf`):
 
 4. Restart CUPS: `sudo systemctl restart cups`.
 
+## Printer management
+
+The **Printers** page can add and manage printers only through CUPS's local socket, which recto
+can reach when CUPS runs on the same host and the socket is mounted into the `recto` container
+(`RECTO_CUPS_ADMIN_SOCKET`). CUPS must also know a `recto` account with recto's uid, listed in
+`SystemGroup` after `root` in `cups-files.conf`: see
+[Add a printer](add-printer.md#add-a-printer-from-recto). With a CUPS on another machine, leave
+`RECTO_CUPS_ADMIN_SOCKET` unset: the page then only lists printers, and you manage them with
+CUPS's own tools.
+
 ## Check
 
 Reload the **Printers** page in recto: it lists the server's printers. If it says the printing

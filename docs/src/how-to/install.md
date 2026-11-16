@@ -79,7 +79,8 @@ With single sign-on, you can skip this and let the provider name the administrat
 
 ## Add printers and scanners
 
-CUPS starts with no printers, and recto finds no scanner until SANE is told where to look:
+CUPS starts with no printers, and recto finds no scanner until SANE is told where to look.
+Administrators add printers on recto's **Printers** page, so no `lpadmin` is needed:
 
 - [Add a printer](add-printer.md)
 - [Add a scanner](add-scanner.md)
