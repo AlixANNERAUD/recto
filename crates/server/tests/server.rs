@@ -30,7 +30,8 @@ use recto_domain::{
 use recto_entity::{groups, print_jobs, sessions};
 use recto_printing::{
     Capabilities, ColorMode, DocumentFormat, Job, JobState, PageRanges, PrintOptions, Printer,
-    PrinterState, Sides, testing::MockPrintService,
+    PrinterState, Sides,
+    testing::{AdminCall, MockPrintService, MockPrinterAdmin},
 };
 use recto_scanning::{MockScannerService, OutputFormat, ResultStore};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
@@ -87,6 +88,8 @@ struct Setup {
     jobs: Option<Vec<Job>>,
     /// The printers CUPS holds; the office printer by default.
     printers: Option<Vec<Printer>>,
+    /// Whether recto can administer CUPS: `Harness::admin` records what it was asked.
+    managed: bool,
 }
 
 impl Default for Setup {
@@ -104,6 +107,7 @@ impl Default for Setup {
             job_visibility: JobVisibility::All,
             jobs: None,
             printers: None,
+            managed: false,
         }
     }
 }
@@ -111,6 +115,7 @@ impl Default for Setup {
 struct Harness {
     router: Router,
     print: Arc<MockPrintService>,
+    admin: Arc<MockPrinterAdmin>,
     scan: Arc<MockScannerService>,
     results: Arc<ResultStore>,
     sessions: DatabaseSessionStore,
@@ -152,8 +157,11 @@ impl Harness {
         let site = dir.path().join("site");
         std::fs::create_dir_all(site.join("pkg")).unwrap();
         std::fs::write(site.join("pkg/recto.css"), STYLESHEET).unwrap();
+        let admin = Arc::new(MockPrinterAdmin::new());
         let state = AppState {
-            printer_admin: None,
+            printer_admin: setup
+                .managed
+                .then(|| admin.clone() as Arc<dyn recto_printing::PrinterAdmin>),
             print: print.clone(),
             scan: scan.clone(),
             results: results.clone(),
@@ -192,6 +200,7 @@ impl Harness {
         Self {
             router: router(state, auth),
             print,
+            admin,
             scan,
             results,
             sessions,
@@ -3414,4 +3423,327 @@ async fn the_printers_page_lists_the_rules_when_cups_is_down() {
     assert!(html.contains("CUPS did not answer"), "{html}");
     assert!(html.contains("Bureau / 2e étage"), "{html}");
     assert!(html.contains("Groups: staff"), "{html}");
+}
+
+async fn managed_harness() -> (Harness, String) {
+    let harness = Harness::with(Setup {
+        managed: true,
+        ..Setup::default()
+    })
+    .await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    (harness, admin)
+}
+
+fn add_form<'a>(name: &'a str, address: &'a str) -> Vec<(&'a str, &'a str)> {
+    vec![
+        ("name", name),
+        ("address", address),
+        ("driver", "everywhere"),
+    ]
+}
+
+#[tokio::test]
+async fn an_administrator_adds_an_ipp_everywhere_printer() {
+    let (harness, admin) = managed_harness().await;
+    let response = harness
+        .send(form(
+            "/administration/printers/add",
+            Some(&admin),
+            &[
+                ("name", "lab"),
+                ("address", "ipp://192.168.1.20/ipp/print"),
+                ("driver", "everywhere"),
+                ("description", "Lab laser"),
+                ("location", ""),
+            ],
+        ))
+        .await;
+    assert_redirect(&response, "/administration/printers?done=added");
+    assert_eq!(
+        harness.admin.calls(),
+        vec![AdminCall::Add(recto_printing::NewPrinter {
+            name: "lab".into(),
+            device_uri: "ipp://192.168.1.20/ipp/print".into(),
+            driver: recto_printing::Driver::Everywhere,
+            description: Some("Lab laser".into()),
+            location: None,
+        })]
+    );
+
+    let response = harness
+        .send(form(
+            "/administration/printers/add",
+            Some(&admin),
+            &[
+                ("name", "old"),
+                ("address", "socket://192.168.1.21:9100"),
+                ("driver", "drv:///hp/laserjet.ppd"),
+            ],
+        ))
+        .await;
+    assert_redirect(&response, "/administration/printers?done=added");
+    let calls = harness.admin.calls();
+    let Some(AdminCall::Add(printer)) = calls.last() else {
+        panic!("an add");
+    };
+    assert_eq!(
+        printer.driver,
+        recto_printing::Driver::Ppd("drv:///hp/laserjet.ppd".into())
+    );
+}
+
+#[tokio::test]
+async fn bad_names_and_addresses_are_refused() {
+    let (harness, admin) = managed_harness().await;
+    let long = "a".repeat(128);
+    let cases = [
+        ("my printer", "ipp://192.168.1.20/ipp/print"),
+        ("a/b", "ipp://192.168.1.20/ipp/print"),
+        ("", "ipp://192.168.1.20/ipp/print"),
+        (long.as_str(), "ipp://192.168.1.20/ipp/print"),
+        ("lab", "192.168.1.20"),
+        ("lab", "file:///etc/passwd"),
+        ("lab", "cups-pdf:/"),
+    ];
+    for (name, address) in cases {
+        let response = harness
+            .send(form(
+                "/administration/printers/add",
+                Some(&admin),
+                &add_form(name, address),
+            ))
+            .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "{name} {address}"
+        );
+        let html = text(response).await;
+        assert!(html.contains("role=\"alert\""), "{html}");
+    }
+    assert!(harness.admin.calls().is_empty());
+}
+
+#[tokio::test]
+async fn an_unreachable_printer_is_reported() {
+    let (harness, admin) = managed_harness().await;
+    harness
+        .admin
+        .fail_with(recto_printing::AdminError::Unreachable(
+            "Unable to connect to 192.0.2.10:631".into(),
+        ));
+    let response = harness
+        .send(form(
+            "/administration/printers/add",
+            Some(&admin),
+            &add_form("lab", "ipp://192.0.2.10/ipp/print"),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let html = text(response).await;
+    assert!(
+        html.contains("The printer could not be reached: Unable to connect to 192.0.2.10:631"),
+        "{html}"
+    );
+    // What was typed is kept.
+    assert!(html.contains("ipp://192.0.2.10/ipp/print"), "{html}");
+}
+
+#[tokio::test]
+async fn a_refused_administration_points_to_the_setup() {
+    let (harness, admin) = managed_harness().await;
+    harness.admin.fail_with(recto_printing::AdminError::Refused);
+    let response = harness
+        .send(form(
+            "/administration/printers/pause",
+            Some(&admin),
+            &[("printer", "office")],
+        ))
+        .await;
+    let html = text(response).await;
+    assert!(html.contains("CUPS refused the change"), "{html}");
+    assert!(html.contains("how-to/add-printer.html"), "{html}");
+}
+
+#[tokio::test]
+async fn printer_actions_reach_cups() {
+    let (harness, admin) = managed_harness().await;
+    for (action, fields, done, call) in [
+        (
+            "describe",
+            vec![
+                ("printer", "office"),
+                ("description", "Laser"),
+                ("location", ""),
+            ],
+            "described",
+            AdminCall::Describe {
+                name: "office".into(),
+                description: Some("Laser".into()),
+                location: Some(String::new()),
+            },
+        ),
+        (
+            "default",
+            vec![("printer", "office")],
+            "default",
+            AdminCall::SetDefault("office".into()),
+        ),
+        (
+            "pause",
+            vec![("printer", "office")],
+            "paused",
+            AdminCall::Pause("office".into()),
+        ),
+        (
+            "resume",
+            vec![("printer", "office")],
+            "resumed",
+            AdminCall::Resume("office".into()),
+        ),
+        (
+            "accept",
+            vec![("printer", "office")],
+            "accepting",
+            AdminCall::Accept("office".into()),
+        ),
+        (
+            "reject",
+            vec![("printer", "office")],
+            "rejecting",
+            AdminCall::Reject("office".into()),
+        ),
+    ] {
+        let response = harness
+            .send(form(
+                &format!("/administration/printers/{action}"),
+                Some(&admin),
+                &fields,
+            ))
+            .await;
+        assert_redirect(&response, &format!("/administration/printers?done={done}"));
+        assert_eq!(harness.admin.calls().last(), Some(&call), "{action}");
+    }
+    assert_eq!(harness.admin.calls().len(), 6);
+
+    let response = harness
+        .send(form("/administration/printers/pause", Some(&admin), &[]))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(harness.admin.calls().len(), 6);
+}
+
+#[tokio::test]
+async fn removing_needs_confirmation_and_forgets_the_rule() {
+    let (harness, admin) = managed_harness().await;
+    access::set(
+        &harness.database,
+        DeviceKind::Printer,
+        "office",
+        Access::Groups(vec![]),
+    )
+    .await
+    .unwrap();
+    let response = harness
+        .send(form(
+            "/administration/printers/remove",
+            Some(&admin),
+            &[("printer", "office")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let html = text(response).await;
+    assert!(html.contains("Tick the confirmation"), "{html}");
+    assert!(harness.admin.calls().is_empty());
+    assert_eq!(harness.printer_rules().await.len(), 1);
+
+    let response = harness
+        .send(form(
+            "/administration/printers/remove",
+            Some(&admin),
+            &[("printer", "office"), ("confirm", "yes")],
+        ))
+        .await;
+    assert_redirect(&response, "/administration/printers?done=removed");
+    assert_eq!(
+        harness.admin.calls(),
+        vec![AdminCall::Delete("office".into())]
+    );
+    assert!(harness.printer_rules().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_removal_keeps_the_rule() {
+    let (harness, admin) = managed_harness().await;
+    access::set(
+        &harness.database,
+        DeviceKind::Printer,
+        "office",
+        Access::Groups(vec![]),
+    )
+    .await
+    .unwrap();
+    harness
+        .admin
+        .fail_with(recto_printing::AdminError::Rejected("Busy".into()));
+    let response = harness
+        .send(form(
+            "/administration/printers/remove",
+            Some(&admin),
+            &[("printer", "office"), ("confirm", "yes")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(harness.printer_rules().await.len(), 1);
+}
+
+const PRINTER_ROUTES: [&str; 8] = [
+    "add", "describe", "default", "pause", "resume", "accept", "reject", "remove",
+];
+
+#[tokio::test]
+async fn printer_management_needs_an_administrator() {
+    let (harness, _) = managed_harness().await;
+    let plain = harness.sign_in("alice-subject", "alice").await;
+    for route in PRINTER_ROUTES {
+        let response = harness
+            .send(form(
+                &format!("/administration/printers/{route}"),
+                Some(&plain),
+                &[
+                    ("printer", "office"),
+                    ("name", "lab"),
+                    ("address", "ipp://192.168.1.20/ipp/print"),
+                    ("driver", "everywhere"),
+                    ("confirm", "yes"),
+                ],
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{route}");
+    }
+    assert!(harness.admin.calls().is_empty());
+}
+
+#[tokio::test]
+async fn printer_management_is_off_without_the_socket() {
+    let harness = Harness::new().await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    for route in PRINTER_ROUTES {
+        let response = harness
+            .send(form(
+                &format!("/administration/printers/{route}"),
+                Some(&admin),
+                &[
+                    ("printer", "office"),
+                    ("name", "lab"),
+                    ("address", "ipp://192.168.1.20/ipp/print"),
+                    ("driver", "everywhere"),
+                    ("confirm", "yes"),
+                ],
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{route}");
+    }
+    assert!(harness.admin.calls().is_empty());
 }

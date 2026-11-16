@@ -198,7 +198,59 @@
       "intro": "Choose who may print on each printer. A printer without a rule is open to everyone.",
       "empty": "No printers",
       "empty_body": "CUPS lists no printer, and no printer has a rule.",
-      "listing_failed": "CUPS did not answer, so only the printers with a rule are listed. Their rules can still be changed."
+      "listing_failed": "CUPS did not answer, so only the printers with a rule are listed. Their rules can still be changed.",
+      "add": {
+        "title": "Add a printer",
+        "intro": "Give the address of the printer. recto asks CUPS to add it.",
+        "search": "Find a driver",
+        "search_hint": "Only for a printer that is not IPP Everywhere. Words of the make and model, such as laserjet 1020. Searching reloads the page, so search before you fill in the rest.",
+        "search_submit": "Search",
+        "search_failed": "CUPS did not answer the driver search. The printer can still be added with IPP Everywhere.",
+        "name": "Name",
+        "name_hint": "Letters, digits, dots, underscores and hyphens, up to 127 characters.",
+        "address": "Address",
+        "address_hint": "Starts with ipp://, ipps://, http://, https://, socket://, lpd://, dnssd:// or usb://.",
+        "driver": "Driver",
+        "driver_hint": "IPP Everywhere asks the printer for its capabilities, and the printer must answer.",
+        "everywhere": "IPP Everywhere (no driver)",
+        "description": "Description (optional)",
+        "location": "Location (optional)",
+        "submit": "Add printer"
+      },
+      "manage": {
+        "title": "Manage this printer",
+        "description": "Description",
+        "location": "Location",
+        "save_texts": "Save description and location",
+        "is_default": "Default printer",
+        "make_default": "Make default",
+        "pause": "Pause",
+        "resume": "Resume",
+        "accept": "Accept jobs",
+        "reject": "Turn jobs away",
+        "confirm": "Remove {printer} from CUPS. Its waiting jobs are canceled and its access rule is forgotten.",
+        "remove": "Remove printer"
+      },
+      "done": {
+        "added": "The printer was added.",
+        "described": "The description and location were saved.",
+        "default": "The default printer was changed.",
+        "paused": "The printer is paused: it holds its jobs.",
+        "resumed": "The printer is running again.",
+        "accepting": "The printer accepts jobs again.",
+        "rejecting": "The printer turns new jobs away.",
+        "removed": "The printer was removed."
+      },
+      "errors": {
+        "invalid_name": "The name must be 1 to 127 characters among letters, digits, dots, underscores and hyphens.",
+        "invalid_address": "The address must start with ipp://, ipps://, http://, https://, socket://, lpd://, dnssd:// or usb:// and name a host.",
+        "needs_confirmation": "Tick the confirmation to remove the printer.",
+        "refused": "CUPS refused the change: check that the cups service lets recto administer it.",
+        "refused_guide": "How to set it up",
+        "unreachable": "The printer could not be reached: {message}",
+        "rejected": "CUPS declined the change: {message}",
+        "cups_unavailable": "CUPS did not answer. Try again in a moment."
+      }
     },
     "scanners": {
       "tab": "Scanners",

@@ -1,8 +1,8 @@
 //! `/administration/printers` and `/administration/scanners`: each device and the groups that
 //! may use it, one row per device. The server answers an accepted form with
 //! `<page>?done=<notice>` and a refused one by rendering the page again with its
-//! [`DevicesProblem`]. A later change adds the management of the devices themselves to the
-//! printers' row, in the same `<details>`.
+//! [`DevicesProblem`]. When recto can administer CUPS, the printers' page also adds printers and
+//! each row manages its printer, in the same `<details>`.
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_query_map;
@@ -10,7 +10,9 @@ use leptos_router::hooks::use_query_map;
 use super::{Section, Sections, page_data};
 use crate::{
     NotFound,
-    components::ui::{Alert, ButtonVariant, Empty, Tone, small_button_class},
+    components::ui::{
+        Alert, ButtonVariant, Card, Empty, Field, INPUT, Tone, button_class, small_button_class,
+    },
     layout::Layout,
     t, tf,
 };
@@ -49,8 +51,64 @@ pub struct DeviceRow {
     /// What helps to tell it apart: a description, a model.
     pub detail: Option<String>,
     pub access: DeviceAccess,
+    /// What the printer's actions start from; `None` when recto cannot administer CUPS or the
+    /// printer is not listed.
+    pub controls: Option<PrinterControls>,
     /// `false` for a rule whose device the service no longer lists.
     pub listed: bool,
+}
+
+/// The state of a printer, which decides the actions its row offers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrinterControls {
+    pub description: String,
+    pub location: String,
+    pub is_default: bool,
+    /// Stopped: the queue holds its jobs.
+    pub paused: bool,
+    pub accepting_jobs: bool,
+}
+
+/// A driver of the Add printer list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverChoice {
+    /// The `ppd-name` the form posts.
+    pub name: String,
+    pub make_and_model: String,
+}
+
+/// What the Add printer form was filled in with, kept when CUPS or the checks refuse it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewPrinterDraft {
+    pub name: String,
+    pub address: String,
+    /// `everywhere` or a `ppd-name`.
+    pub driver: String,
+    pub description: String,
+    pub location: String,
+}
+
+impl Default for NewPrinterDraft {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            address: String::new(),
+            driver: "everywhere".into(),
+            description: String::new(),
+            location: String::new(),
+        }
+    }
+}
+
+/// The Add printer section, present when recto can administer CUPS.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PrinterTools {
+    /// What the driver search asked for.
+    pub search: String,
+    pub drivers: Vec<DriverChoice>,
+    /// The search could not be answered.
+    pub search_failed: bool,
+    pub draft: NewPrinterDraft,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,11 +126,12 @@ pub struct DevicesPageData {
     pub groups: Vec<GroupChoice>,
     /// CUPS or SANE did not answer: only the stored rules are listed.
     pub listing_failed: bool,
+    pub tools: Option<PrinterTools>,
     pub refusal: Option<DevicesProblem>,
 }
 
 /// Why a form of the page was refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DevicesProblem {
     /// No device name came with the form.
     NoDevice,
@@ -82,18 +141,66 @@ pub enum DevicesProblem {
     UnknownGroup,
     /// The database failed.
     Unavailable,
+    /// The printer name is not one CUPS accepts.
+    InvalidName,
+    /// The printer address is not one recto sends to CUPS.
+    InvalidAddress,
+    /// The removal was not confirmed.
+    NeedsConfirmation,
+    /// CUPS does not let recto administer it.
+    CupsRefused,
+    /// CUPS could not reach the printer, in its own words.
+    Unreachable(String),
+    /// CUPS declined the change, in its own words.
+    Rejected(String),
+    /// CUPS could not be asked.
+    CupsUnavailable,
 }
 
 impl DevicesProblem {
-    fn message(self) -> &'static str {
-        match self {
+    fn message(self) -> AnyView {
+        let text = match self {
             DevicesProblem::NoDevice => t!("administration.devices.errors.no_device"),
             DevicesProblem::NoAccess => t!("administration.devices.errors.no_access"),
             DevicesProblem::UnknownGroup => t!("administration.devices.errors.unknown_group"),
             DevicesProblem::Unavailable => t!("administration.devices.errors.unavailable"),
-        }
+            DevicesProblem::InvalidName => t!("administration.printers.errors.invalid_name"),
+            DevicesProblem::InvalidAddress => t!("administration.printers.errors.invalid_address"),
+            DevicesProblem::NeedsConfirmation => {
+                t!("administration.printers.errors.needs_confirmation")
+            }
+            DevicesProblem::CupsUnavailable => {
+                t!("administration.printers.errors.cups_unavailable")
+            }
+            DevicesProblem::CupsRefused => {
+                // The setup is the fix, so the message points to the guide.
+                return view! {
+                    {t!("administration.printers.errors.refused")}
+                    " "
+                    <a href=SETUP_GUIDE class="underline">
+                        {t!("administration.printers.errors.refused_guide")}
+                    </a>
+                }
+                .into_any();
+            }
+            DevicesProblem::Unreachable(message) => {
+                return tf!(
+                    "administration.printers.errors.unreachable",
+                    message = message
+                )
+                .into_any();
+            }
+            DevicesProblem::Rejected(message) => {
+                return tf!("administration.printers.errors.rejected", message = message)
+                    .into_any();
+            }
+        };
+        text.into_any()
     }
 }
+
+/// The guide to the CUPS setup that lets recto administer printers.
+const SETUP_GUIDE: &str = "https://alixanneraud.github.io/recto/how-to/add-printer.html";
 
 /// What an accepted form did, named by the `done` query parameter: only a code travels in the
 /// address, so a crafted link cannot put arbitrary text on the page.
@@ -101,16 +208,43 @@ impl DevicesProblem {
 pub enum Notice {
     Access,
     Forgotten,
+    Added,
+    Described,
+    Default,
+    Paused,
+    Resumed,
+    Accepting,
+    Rejecting,
+    Removed,
 }
 
 impl Notice {
-    const ALL: [Notice; 2] = [Notice::Access, Notice::Forgotten];
+    const ALL: [Notice; 10] = [
+        Notice::Access,
+        Notice::Forgotten,
+        Notice::Added,
+        Notice::Described,
+        Notice::Default,
+        Notice::Paused,
+        Notice::Resumed,
+        Notice::Accepting,
+        Notice::Rejecting,
+        Notice::Removed,
+    ];
 
     /// The value of the `done` query parameter.
     pub fn code(self) -> &'static str {
         match self {
             Notice::Access => "access",
             Notice::Forgotten => "forgotten",
+            Notice::Added => "added",
+            Notice::Described => "described",
+            Notice::Default => "default",
+            Notice::Paused => "paused",
+            Notice::Resumed => "resumed",
+            Notice::Accepting => "accepting",
+            Notice::Rejecting => "rejecting",
+            Notice::Removed => "removed",
         }
     }
 
@@ -122,6 +256,14 @@ impl Notice {
         match self {
             Notice::Access => t!("administration.devices.done.access"),
             Notice::Forgotten => t!("administration.devices.done.forgotten"),
+            Notice::Added => t!("administration.printers.done.added"),
+            Notice::Described => t!("administration.printers.done.described"),
+            Notice::Default => t!("administration.printers.done.default"),
+            Notice::Paused => t!("administration.printers.done.paused"),
+            Notice::Resumed => t!("administration.printers.done.resumed"),
+            Notice::Accepting => t!("administration.printers.done.accepting"),
+            Notice::Rejecting => t!("administration.printers.done.rejecting"),
+            Notice::Removed => t!("administration.printers.done.removed"),
         }
     }
 }
@@ -174,6 +316,7 @@ fn DevicesPage(kind: DeviceKind) -> impl IntoView {
         .listing_failed
         .then(|| view! { <Alert tone=Tone::Danger>{listing_failed}</Alert> });
     let groups = data.groups;
+    let add = data.tools.map(|tools| view! { <AddPrinter tools /> });
     let list = match data.devices {
         None => view! {
             <Alert tone=Tone::Danger>{t!("administration.devices.load_failed")}</Alert>
@@ -200,6 +343,7 @@ fn DevicesPage(kind: DeviceKind) -> impl IntoView {
             <p class="text-muted-foreground text-sm">{intro}</p>
             {alert}
             {failed}
+            {add}
             {list}
         </Layout>
     }
@@ -277,6 +421,10 @@ fn Device(kind: DeviceKind, device: DeviceRow, groups: Vec<GroupChoice>) -> impl
         }
         .into_any()
     };
+    let manage = device
+        .controls
+        .clone()
+        .map(|controls| view! { <ManagePrinter name=device.name.clone() controls /> });
     let forget = (!device.listed).then(|| {
         view! {
             <form method="post" action=format!("{}/forget", kind.path())>
@@ -344,9 +492,269 @@ fn Device(kind: DeviceKind, device: DeviceRow, groups: Vec<GroupChoice>) -> impl
                             </div>
                         </fieldset>
                     </form>
+                    {manage}
                     {forget}
                 </div>
             </details>
         </li>
+    }
+}
+
+/// The Add printer section. Searching the drivers is a GET form of its own, so it works without
+/// JavaScript; it reloads the page with the matches in the driver list.
+#[component]
+fn AddPrinter(tools: PrinterTools) -> impl IntoView {
+    let draft = tools.draft;
+    let listed = tools
+        .drivers
+        .iter()
+        .any(|driver| driver.name == draft.driver);
+    // A driver chosen before a refusal stays selectable although the search is gone.
+    let kept = (draft.driver != "everywhere" && !listed).then(|| {
+        let name = draft.driver.clone();
+        view! { <option value=name.clone() selected>{name.clone()}</option> }
+    });
+    let options = tools
+        .drivers
+        .into_iter()
+        .map(|driver| {
+            let selected = driver.name == draft.driver;
+            view! {
+                <option value=driver.name selected=selected>
+                    {driver.make_and_model}
+                </option>
+            }
+        })
+        .collect_view();
+    let failed = tools
+        .search_failed
+        .then(|| view! { <Alert tone=Tone::Danger>{t!("administration.printers.add.search_failed")}</Alert> });
+    view! {
+        <Card title=t!("administration.printers.add.title")>
+            <div class="grid gap-4">
+                <p class="text-muted-foreground text-sm">{t!("administration.printers.add.intro")}</p>
+                <form method="get" action=DeviceKind::Printer.path() class="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
+                    <Field
+                        label=t!("administration.printers.add.search")
+                        input_id="driver-search"
+                        hint=t!("administration.printers.add.search_hint")
+                    >
+                        <input
+                            id="driver-search"
+                            name="drivers"
+                            type="search"
+                            value=tools.search
+                            autocomplete="off"
+                            aria-describedby="driver-search-hint"
+                            class=INPUT
+                        />
+                    </Field>
+                    <div>
+                        <button type="submit" class=button_class(ButtonVariant::Secondary)>
+                            {t!("administration.printers.add.search_submit")}
+                        </button>
+                    </div>
+                </form>
+                {failed}
+                <form
+                    method="post"
+                    action=format!("{}/add", DeviceKind::Printer.path())
+                    class="grid gap-4 sm:grid-cols-2"
+                >
+                    <Field
+                        label=t!("administration.printers.add.name")
+                        input_id="new-printer-name"
+                        hint=t!("administration.printers.add.name_hint")
+                    >
+                        <input
+                            id="new-printer-name"
+                            name="name"
+                            type="text"
+                            value=draft.name
+                            required
+                            maxlength="127"
+                            pattern="[A-Za-z0-9_.\\-]+"
+                            autocomplete="off"
+                            autocapitalize="none"
+                            spellcheck="false"
+                            aria-describedby="new-printer-name-hint"
+                            class=INPUT
+                        />
+                    </Field>
+                    <Field
+                        label=t!("administration.printers.add.address")
+                        input_id="new-printer-address"
+                        hint=t!("administration.printers.add.address_hint")
+                    >
+                        <input
+                            id="new-printer-address"
+                            name="address"
+                            type="text"
+                            value=draft.address
+                            required
+                            autocomplete="off"
+                            autocapitalize="none"
+                            spellcheck="false"
+                            placeholder="ipp://192.168.1.20/ipp/print"
+                            aria-describedby="new-printer-address-hint"
+                            class=INPUT
+                        />
+                    </Field>
+                    <Field
+                        label=t!("administration.printers.add.driver")
+                        input_id="new-printer-driver"
+                        hint=t!("administration.printers.add.driver_hint")
+                    >
+                        <select
+                            id="new-printer-driver"
+                            name="driver"
+                            aria-describedby="new-printer-driver-hint"
+                            class=INPUT
+                        >
+                            <option value="everywhere" selected=draft.driver == "everywhere">
+                                {t!("administration.printers.add.everywhere")}
+                            </option>
+                            {kept}
+                            {options}
+                        </select>
+                    </Field>
+                    <Field
+                        label=t!("administration.printers.add.description")
+                        input_id="new-printer-description"
+                    >
+                        <input
+                            id="new-printer-description"
+                            name="description"
+                            type="text"
+                            value=draft.description
+                            autocomplete="off"
+                            class=INPUT
+                        />
+                    </Field>
+                    <Field
+                        label=t!("administration.printers.add.location")
+                        input_id="new-printer-location"
+                    >
+                        <input
+                            id="new-printer-location"
+                            name="location"
+                            type="text"
+                            value=draft.location
+                            autocomplete="off"
+                            class=INPUT
+                        />
+                    </Field>
+                    <div class="sm:col-span-2">
+                        <button type="submit" class=button_class(ButtonVariant::Primary)>
+                            {t!("administration.printers.add.submit")}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </Card>
+    }
+}
+
+/// A button alone in a form that posts the printer's name to one of the printer actions.
+fn action_form(action: &'static str, printer: &str, label: &'static str) -> impl IntoView {
+    view! {
+        <form method="post" action=format!("{}/{action}", DeviceKind::Printer.path())>
+            <input type="hidden" name="printer" value=printer.to_owned() />
+            <button type="submit" class=small_button_class(ButtonVariant::Secondary)>
+                {label}
+            </button>
+        </form>
+    }
+}
+
+/// The actions on one printer: its texts, the default, pausing, accepting and removing.
+#[component]
+fn ManagePrinter(name: String, controls: PrinterControls) -> impl IntoView {
+    // Always there, so every row has the same controls; the default printer's is spent.
+    let default = view! {
+        <form method="post" action=format!("{}/default", DeviceKind::Printer.path())>
+            <input type="hidden" name="printer" value=name.clone() />
+            <button
+                type="submit"
+                disabled=controls.is_default
+                class=small_button_class(ButtonVariant::Secondary)
+            >
+                {if controls.is_default {
+                    t!("administration.printers.manage.is_default")
+                } else {
+                    t!("administration.printers.manage.make_default")
+                }}
+            </button>
+        </form>
+    };
+    let pause = if controls.paused {
+        action_form("resume", &name, t!("administration.printers.manage.resume")).into_any()
+    } else {
+        action_form("pause", &name, t!("administration.printers.manage.pause")).into_any()
+    };
+    let accept = if controls.accepting_jobs {
+        action_form("reject", &name, t!("administration.printers.manage.reject")).into_any()
+    } else {
+        action_form("accept", &name, t!("administration.printers.manage.accept")).into_any()
+    };
+    view! {
+        <div class="grid gap-4 border-t pt-4">
+            <h3 class="font-semibold">{t!("administration.printers.manage.title")}</h3>
+            <form
+                method="post"
+                action=format!("{}/describe", DeviceKind::Printer.path())
+                class="grid gap-3 sm:grid-cols-2"
+            >
+                <input type="hidden" name="printer" value=name.clone() />
+                <label class="grid gap-1.5 text-sm font-semibold">
+                    {t!("administration.printers.manage.description")}
+                    <input
+                        name="description"
+                        type="text"
+                        value=controls.description
+                        autocomplete="off"
+                        class=format!("{INPUT} font-normal")
+                    />
+                </label>
+                <label class="grid gap-1.5 text-sm font-semibold">
+                    {t!("administration.printers.manage.location")}
+                    <input
+                        name="location"
+                        type="text"
+                        value=controls.location
+                        autocomplete="off"
+                        class=format!("{INPUT} font-normal")
+                    />
+                </label>
+                <div class="sm:col-span-2">
+                    <button type="submit" class=small_button_class(ButtonVariant::Primary)>
+                        {t!("administration.printers.manage.save_texts")}
+                    </button>
+                </div>
+            </form>
+            <div class="flex flex-wrap items-center gap-2">{default} {pause} {accept}</div>
+            <form
+                method="post"
+                action=format!("{}/remove", DeviceKind::Printer.path())
+                class="grid gap-2"
+            >
+                <input type="hidden" name="printer" value=name.clone() />
+                <label class="flex min-h-8 items-center gap-2">
+                    <input
+                        type="checkbox"
+                        name="confirm"
+                        value="yes"
+                        required
+                        class="accent-brand size-4"
+                    />
+                    {tf!("administration.printers.manage.confirm", printer = name)}
+                </label>
+                <div>
+                    <button type="submit" class=small_button_class(ButtonVariant::Secondary)>
+                        {t!("administration.printers.manage.remove")}
+                    </button>
+                </div>
+            </form>
+        </div>
     }
 }

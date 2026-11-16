@@ -26,8 +26,9 @@ use recto_domain::{
 };
 use recto_entity::{groups, users as user_rows};
 use recto_printing::{
-    Capabilities, ColorMode, Job, JobState, Printer, PrinterState, Sides, StateReason, Supply,
-    testing::MockPrintService,
+    Capabilities, ColorMode, DriverInfo, Job, JobState, Printer, PrinterAdmin, PrinterState, Sides,
+    StateReason, Supply,
+    testing::{MockPrintService, MockPrinterAdmin},
 };
 use recto_scanning::{
     MockScannerService, ResultStore, ScanError, ScanMode, ScannerCapabilities, ScannerInfo,
@@ -92,7 +93,7 @@ impl Harness {
     }
 
     async fn branded(printers: Vec<Printer>, jobs: Vec<Job>, branding: Branding) -> Self {
-        Self::build(printers, jobs, branding, JobVisibility::All, None).await
+        Self::build(printers, jobs, branding, JobVisibility::All, None, None).await
     }
 
     /// With the scanners SANE finds, instead of the mock's own.
@@ -104,12 +105,35 @@ impl Harness {
             default_branding(),
             JobVisibility::All,
             scanners,
+            None,
+        )
+        .await
+    }
+
+    /// With printer administration on, over a mock that knows these drivers.
+    async fn managed(printers: Vec<Printer>, drivers: Vec<DriverInfo>) -> Self {
+        let admin = Arc::new(MockPrinterAdmin::new().with_drivers(drivers));
+        Self::build(
+            printers,
+            vec![],
+            default_branding(),
+            JobVisibility::All,
+            None,
+            Some(admin),
         )
         .await
     }
 
     async fn private(printers: Vec<Printer>, jobs: Vec<Job>) -> Self {
-        Self::build(printers, jobs, default_branding(), JobVisibility::Own, None).await
+        Self::build(
+            printers,
+            jobs,
+            default_branding(),
+            JobVisibility::Own,
+            None,
+            None,
+        )
+        .await
     }
 
     async fn build(
@@ -118,6 +142,7 @@ impl Harness {
         branding: Branding,
         job_visibility: JobVisibility,
         scanners: Option<Vec<ScannerInfo>>,
+        printer_admin: Option<Arc<dyn PrinterAdmin>>,
     ) -> Self {
         let database = recto_domain::testing::database().await;
         let dir = temporary_directory();
@@ -141,7 +166,7 @@ impl Harness {
         let site = dir.path().join("site");
         std::fs::create_dir_all(&site).unwrap();
         let state = AppState {
-            printer_admin: None,
+            printer_admin,
             print,
             scan: scan.clone(),
             results: Arc::new(ResultStore::new(
@@ -1213,4 +1238,91 @@ async fn the_sections_link_every_page() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn without_the_socket_the_page_is_unchanged() {
+    let harness = Harness::new(vec![printer("open", false)], vec![]).await;
+    let admin = administrator(&harness, "admin-subject", "admin").await;
+    let html = harness.page("/administration/printers", &admin).await;
+    assert!(html.contains(">open<"), "{html}");
+    assert!(!html.contains("Add a printer"), "{html}");
+    for action in ["add", "describe", "default", "pause", "resume", "remove"] {
+        assert!(
+            !html.contains(&format!("/administration/printers/{action}")),
+            "{action}: {html}"
+        );
+    }
+}
+
+fn stopped(name: &str) -> Printer {
+    Printer {
+        state: PrinterState::Stopped,
+        accepting_jobs: false,
+        ..printer(name, false)
+    }
+}
+
+#[tokio::test]
+async fn with_the_socket_printers_have_actions() {
+    let harness = Harness::managed(vec![printer("busy", true), stopped("idle")], vec![]).await;
+    let admin = administrator(&harness, "admin-subject", "admin").await;
+    let html = harness.page("/administration/printers", &admin).await;
+    assert!(html.contains("Add a printer"), "{html}");
+    assert!(
+        html.contains(r#"action="/administration/printers/add""#),
+        "{html}"
+    );
+    let busy = html.find(">busy<").expect("busy");
+    let idle = html.find(">idle<").expect("idle");
+    let (first, second) = (&html[busy..idle], &html[idle..]);
+    for part in [first, second] {
+        for action in ["describe", "default", "remove"] {
+            assert!(
+                part.contains(&format!(r#"action="/administration/printers/{action}""#)),
+                "{action}: {html}"
+            );
+        }
+    }
+    // By state: an idle queue can be paused and turned away from, a stopped one resumed.
+    assert!(first.contains("/administration/printers/pause"), "{html}");
+    assert!(!first.contains("/administration/printers/resume"), "{html}");
+    assert!(first.contains("/administration/printers/reject"), "{html}");
+    assert!(!first.contains("/administration/printers/accept"), "{html}");
+    assert!(second.contains("/administration/printers/resume"), "{html}");
+    assert!(!second.contains("/administration/printers/pause"), "{html}");
+    assert!(second.contains("/administration/printers/accept"), "{html}");
+    assert!(
+        !second.contains("/administration/printers/reject"),
+        "{html}"
+    );
+    // The removal form asks for a confirmation.
+    assert!(second.contains(r#"name="confirm""#), "{html}");
+    assert!(second.contains("required"), "{html}");
+}
+
+#[tokio::test]
+async fn searching_drivers_fills_the_add_form() {
+    let drivers = vec![
+        DriverInfo {
+            name: "drv:///hp/laserjet.ppd".into(),
+            make_and_model: "HP LaserJet 1020".into(),
+        },
+        DriverInfo {
+            name: "drv:///epson/xp.ppd".into(),
+            make_and_model: "Epson XP-200".into(),
+        },
+    ];
+    let harness = Harness::managed(vec![], drivers).await;
+    let admin = administrator(&harness, "admin-subject", "admin").await;
+    let html = harness
+        .page("/administration/printers?drivers=laserjet", &admin)
+        .await;
+    assert!(html.contains("HP LaserJet 1020"), "{html}");
+    assert!(html.contains(r#"value="drv:///hp/laserjet.ppd""#), "{html}");
+    assert!(!html.contains("Epson"), "{html}");
+    assert!(html.contains(r#"value="everywhere""#), "{html}");
+
+    let html = harness.page("/administration/printers", &admin).await;
+    assert!(!html.contains("HP LaserJet"), "{html}");
 }

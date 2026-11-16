@@ -22,7 +22,8 @@ use recto_app::{
         administration::{
             devices::{
                 DeviceAccess, DeviceKind as PageKind, DeviceRow, DevicesPageData, DevicesProblem,
-                GroupChoice, Notice as DeviceNotice,
+                DriverChoice, GroupChoice, NewPrinterDraft, Notice as DeviceNotice,
+                PrinterControls, PrinterTools,
             },
             groups::{GroupMember, GroupRow, GroupsPageData},
             users::{NewUserDraft, Notice, UserRow, UsersPageData, UsersProblem, UsersRefusal},
@@ -38,6 +39,7 @@ use recto_domain::{
     passwords::PasswordPolicy,
     users::{self, NewLocalUser, UserSummary},
 };
+use recto_printing::{AdminError, Driver, NewPrinter, PrinterAdmin, PrinterState};
 use serde::Deserialize;
 
 use super::render;
@@ -75,6 +77,7 @@ pub fn router(app: AppState, auth: &AuthState) -> Router {
         .route("/administration/groups", get(groups_page))
         .route(PRINTERS, get(printers_page))
         .route(SCANNERS, get(scanners_page))
+        .merge(printer_forms())
         .merge(device_forms(DeviceKind::Printer))
         .merge(device_forms(DeviceKind::Scanner))
         // The last layer runs first: anonymous visitors are sent to sign in before the check.
@@ -421,12 +424,39 @@ async fn scanners_page(State(state): State<AdministrationState>, parts: Parts) -
 /// rule stays manageable while the service is down or after its device is gone.
 async fn devices_view(
     state: &AdministrationState,
-    mut parts: Parts,
+    parts: Parts,
     kind: DeviceKind,
     status: StatusCode,
     refusal: Option<DevicesProblem>,
 ) -> Response {
-    let listed: Result<Vec<(String, Option<String>)>, String> = match kind {
+    devices_view_with(
+        state,
+        parts,
+        kind,
+        status,
+        refusal,
+        NewPrinterDraft::default(),
+    )
+    .await
+}
+
+/// A device the service lists: name, what tells it apart, and what its row can do.
+type ListedDevice = (String, Option<String>, Option<PrinterControls>);
+
+/// How many drivers the Add printer list shows: CUPS knows thousands, so a search narrows them.
+const DRIVER_LIMIT: u32 = 50;
+
+/// [`devices_view`], with what the Add printer form held when it was refused.
+async fn devices_view_with(
+    state: &AdministrationState,
+    mut parts: Parts,
+    kind: DeviceKind,
+    status: StatusCode,
+    refusal: Option<DevicesProblem>,
+    draft: NewPrinterDraft,
+) -> Response {
+    let managed = kind == DeviceKind::Printer && state.app.printer_admin.is_some();
+    let listed: Result<Vec<ListedDevice>, String> = match kind {
         DeviceKind::Printer => state
             .app
             .print
@@ -437,6 +467,13 @@ async fn devices_view(
                 printers
                     .into_iter()
                     .map(|printer| {
+                        let controls = managed.then(|| PrinterControls {
+                            description: printer.description.clone().unwrap_or_default(),
+                            location: printer.location.clone().unwrap_or_default(),
+                            is_default: printer.is_default,
+                            paused: printer.state == PrinterState::Stopped,
+                            accepting_jobs: printer.accepting_jobs,
+                        });
                         let detail = [
                             printer.description,
                             printer.location,
@@ -450,6 +487,7 @@ async fn devices_view(
                         (
                             printer.name,
                             Some(detail).filter(|detail| !detail.is_empty()),
+                            controls,
                         )
                     })
                     .collect()
@@ -468,6 +506,7 @@ async fn devices_view(
                         (
                             scanner.id,
                             Some(detail.trim().to_owned()).filter(|d| !d.is_empty()),
+                            None,
                         )
                     })
                     .collect()
@@ -483,9 +522,10 @@ async fn devices_view(
     let groups = groups::list(&state.app.database).await;
     let (devices, groups) = match (rules, groups) {
         (Ok(mut rules), Ok(groups)) => {
-            let to_row = |name: String, detail, rule: Option<Access>, listed| DeviceRow {
+            let to_row = |name: String, detail, controls, rule: Option<Access>, listed| DeviceRow {
                 name,
                 detail,
+                controls,
                 access: match rule {
                     None | Some(Access::Everyone) => DeviceAccess::Everyone,
                     Some(Access::Groups(ids)) => DeviceAccess::Groups(ids),
@@ -494,9 +534,9 @@ async fn devices_view(
             };
             let mut rows: Vec<DeviceRow> = listed
                 .into_iter()
-                .map(|(name, detail)| {
+                .map(|(name, detail, controls)| {
                     let rule = rules.remove(&name);
-                    to_row(name, detail, rule, true)
+                    to_row(name, detail, controls, rule, true)
                 })
                 .collect();
             let mut missing: Vec<_> = rules.into_iter().collect();
@@ -504,7 +544,7 @@ async fn devices_view(
             rows.extend(
                 missing
                     .into_iter()
-                    .map(|(name, rule)| to_row(name, None, Some(rule), false)),
+                    .map(|(name, rule)| to_row(name, None, None, Some(rule), false)),
             );
             let choices = groups
                 .into_iter()
@@ -530,6 +570,10 @@ async fn devices_view(
     } else {
         status
     };
+    let tools = match (managed, state.app.printer_admin.as_deref()) {
+        (true, Some(admin)) => Some(printer_tools(admin, &parts, draft).await),
+        _ => None,
+    };
     if refusal.is_some() {
         parts.uri = Uri::from_static(page_kind(kind).path());
     }
@@ -538,6 +582,7 @@ async fn devices_view(
         devices,
         groups,
         listing_failed,
+        tools,
         refusal,
     };
     render(&state.app, state.methods, parts, status, move || {
@@ -657,6 +702,346 @@ async fn forget(
                 Some(DevicesProblem::Unavailable),
             )
             .await
+        }
+    }
+}
+
+/// The Add printer section: the drivers matching `?drivers=`, if it was asked.
+async fn printer_tools(
+    admin: &dyn PrinterAdmin,
+    parts: &Parts,
+    draft: NewPrinterDraft,
+) -> PrinterTools {
+    let search = parts
+        .uri
+        .query()
+        .and_then(|query| {
+            url::form_urlencoded::parse(query.as_bytes())
+                .find(|(key, _)| key == "drivers")
+                .map(|(_, value)| value.trim().to_owned())
+        })
+        .unwrap_or_default();
+    let mut tools = PrinterTools {
+        draft,
+        ..PrinterTools::default()
+    };
+    if !search.is_empty() {
+        match admin.drivers(&search, DRIVER_LIMIT).await {
+            Ok(drivers) => {
+                tools.drivers = drivers
+                    .into_iter()
+                    .map(|driver| DriverChoice {
+                        name: driver.name,
+                        make_and_model: driver.make_and_model,
+                    })
+                    .collect();
+            }
+            Err(error) => {
+                tracing::warn!(%error, "printer administration failed");
+                tools.search_failed = true;
+            }
+        }
+    }
+    tools.search = search;
+    tools
+}
+
+/// The schemes an address may have: what CUPS has a backend for and a person would type.
+const DEVICE_SCHEMES: [&str; 8] = [
+    "ipp", "ipps", "http", "https", "socket", "lpd", "dnssd", "usb",
+];
+
+/// A queue name CUPS accepts: it ends up in a URI and in file names.
+fn valid_printer_name(name: &str) -> bool {
+    (1..=127).contains(&name.len())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+}
+
+/// An address of a printer: a known scheme and a host, or for `usb` and `dnssd`, which name
+/// the device in the host or the path, either.
+fn valid_device_uri(address: &str) -> bool {
+    if address.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return false;
+    }
+    let Ok(uri) = url::Url::parse(address) else {
+        return false;
+    };
+    if !DEVICE_SCHEMES.contains(&uri.scheme()) {
+        return false;
+    }
+    let host = uri.host_str().is_some_and(|host| !host.is_empty());
+    match uri.scheme() {
+        "usb" | "dnssd" => host || !uri.path().trim_matches('/').is_empty(),
+        _ => host,
+    }
+}
+
+/// What a printer form asks of CUPS.
+#[derive(Clone, Copy)]
+enum PrinterAction {
+    Add,
+    Describe,
+    Default,
+    Pause,
+    Resume,
+    Accept,
+    Reject,
+    Remove,
+}
+
+impl PrinterAction {
+    /// Logs what an administrator did to a printer. One call per message keeps each a literal,
+    /// as the log reference lists them.
+    fn log(self, by: &str, printer: &str) {
+        match self {
+            PrinterAction::Add => tracing::info!(by, printer, "printer added"),
+            PrinterAction::Describe => tracing::info!(by, printer, "printer described"),
+            PrinterAction::Default => tracing::info!(by, printer, "default printer set"),
+            PrinterAction::Pause => tracing::info!(by, printer, "printer paused"),
+            PrinterAction::Resume => tracing::info!(by, printer, "printer resumed"),
+            PrinterAction::Accept => tracing::info!(by, printer, "printer accepting jobs"),
+            PrinterAction::Reject => tracing::info!(by, printer, "printer rejecting jobs"),
+            PrinterAction::Remove => tracing::info!(by, printer, "printer removed"),
+        }
+    }
+}
+
+/// `POST /administration/printers/{add,describe,default,pause,resume,accept,reject,remove}`.
+/// Without the CUPS socket they are not there.
+fn printer_forms() -> Router<AdministrationState> {
+    let mut router = Router::new();
+    for (name, action) in [
+        ("add", PrinterAction::Add),
+        ("describe", PrinterAction::Describe),
+        ("default", PrinterAction::Default),
+        ("pause", PrinterAction::Pause),
+        ("resume", PrinterAction::Resume),
+        ("accept", PrinterAction::Accept),
+        ("reject", PrinterAction::Reject),
+        ("remove", PrinterAction::Remove),
+    ] {
+        router = router.route(
+            &format!("{PRINTERS}/{name}"),
+            post(move |state, actor, parts, body| administer(state, actor, parts, action, body)),
+        );
+    }
+    router
+}
+
+/// A refused printer form: the status, the problem and what to put back in the Add form.
+struct Refusal {
+    status: StatusCode,
+    problem: DevicesProblem,
+    draft: NewPrinterDraft,
+}
+
+impl Refusal {
+    fn new(status: StatusCode, problem: DevicesProblem) -> Box<Self> {
+        Box::new(Self {
+            status,
+            problem,
+            draft: NewPrinterDraft::default(),
+        })
+    }
+
+    fn from_cups(error: AdminError) -> Box<Self> {
+        tracing::warn!(%error, "printer administration failed");
+        match error {
+            AdminError::Refused => Self::new(StatusCode::BAD_GATEWAY, DevicesProblem::CupsRefused),
+            AdminError::Unreachable(message) => Self::new(
+                StatusCode::BAD_GATEWAY,
+                DevicesProblem::Unreachable(message),
+            ),
+            AdminError::Rejected(message) => {
+                Self::new(StatusCode::BAD_REQUEST, DevicesProblem::Rejected(message))
+            }
+            AdminError::Unavailable(_) => Self::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                DevicesProblem::CupsUnavailable,
+            ),
+        }
+    }
+}
+
+/// Text of a form, trimmed.
+fn text_field(body: &[u8], name: &str) -> String {
+    field(body, name).unwrap_or_default().trim().to_owned()
+}
+
+fn some_text(text: String) -> Option<String> {
+    Some(text).filter(|text| !text.is_empty())
+}
+
+/// Asks CUPS for what the form says. Returns what to tell and log, and the printer.
+async fn perform(
+    state: &AdministrationState,
+    admin: &dyn PrinterAdmin,
+    action: PrinterAction,
+    body: &[u8],
+) -> Result<(DeviceNotice, String), Box<Refusal>> {
+    if let PrinterAction::Add = action {
+        let draft = NewPrinterDraft {
+            name: text_field(body, "name"),
+            address: text_field(body, "address"),
+            driver: Some(text_field(body, "driver"))
+                .filter(|driver| !driver.is_empty())
+                .unwrap_or_else(|| "everywhere".into()),
+            description: text_field(body, "description"),
+            location: text_field(body, "location"),
+        };
+        let refuse = |problem, draft: NewPrinterDraft| {
+            Box::new(Refusal {
+                status: StatusCode::BAD_REQUEST,
+                problem,
+                draft,
+            })
+        };
+        if !valid_printer_name(&draft.name) {
+            return Err(refuse(DevicesProblem::InvalidName, draft));
+        }
+        if !valid_device_uri(&draft.address) {
+            return Err(refuse(DevicesProblem::InvalidAddress, draft));
+        }
+        let printer = NewPrinter {
+            name: draft.name.clone(),
+            device_uri: draft.address.clone(),
+            driver: if draft.driver == "everywhere" {
+                Driver::Everywhere
+            } else {
+                Driver::Ppd(draft.driver.clone())
+            },
+            description: some_text(draft.description.clone()),
+            location: some_text(draft.location.clone()),
+        };
+        return match admin.add(printer).await {
+            Ok(()) => Ok((DeviceNotice::Added, draft.name)),
+            Err(error) => Err(Box::new(Refusal {
+                draft,
+                ..*Refusal::from_cups(error)
+            })),
+        };
+    }
+
+    let printer = text_field(body, "printer");
+    if printer.is_empty() {
+        return Err(Refusal::new(
+            StatusCode::BAD_REQUEST,
+            DevicesProblem::NoDevice,
+        ));
+    }
+    let name = printer.as_str();
+    let done = match action {
+        PrinterAction::Add => unreachable!("handled above"),
+        PrinterAction::Describe => admin
+            .describe(
+                name,
+                Some(text_field(body, "description")),
+                Some(text_field(body, "location")),
+            )
+            .await
+            .map(|()| DeviceNotice::Described),
+        PrinterAction::Default => admin
+            .set_default(name)
+            .await
+            .map(|()| DeviceNotice::Default),
+        PrinterAction::Pause => admin.pause(name).await.map(|()| DeviceNotice::Paused),
+        PrinterAction::Resume => admin.resume(name).await.map(|()| DeviceNotice::Resumed),
+        PrinterAction::Accept => admin.accept(name).await.map(|()| DeviceNotice::Accepting),
+        PrinterAction::Reject => admin.reject(name).await.map(|()| DeviceNotice::Rejecting),
+        PrinterAction::Remove => {
+            if field(body, "confirm").as_deref() != Some("yes") {
+                return Err(Refusal::new(
+                    StatusCode::BAD_REQUEST,
+                    DevicesProblem::NeedsConfirmation,
+                ));
+            }
+            let removed = admin.delete(name).await;
+            if removed.is_ok() {
+                // An explicit removal is the administrator deleting the settings too. A rule
+                // that stays shows as a missing printer, which can be forgotten by hand.
+                if let Err(error) =
+                    access::forget(&state.app.database, DeviceKind::Printer, name).await
+                {
+                    tracing::error!(%error, "forgetting the device access failed");
+                }
+            }
+            removed.map(|()| DeviceNotice::Removed)
+        }
+    };
+    done.map(|notice| (notice, printer))
+        .map_err(Refusal::from_cups)
+}
+
+async fn administer(
+    State(state): State<AdministrationState>,
+    Extension(actor): Extension<User>,
+    parts: Parts,
+    action: PrinterAction,
+    body: Bytes,
+) -> Response {
+    let Some(admin) = state.app.printer_admin.clone() else {
+        return not_found(&state, parts).await;
+    };
+    match perform(&state, &*admin, action, &body).await {
+        Ok((notice, printer)) => {
+            action.log(&actor.username, &printer);
+            devices_done(DeviceKind::Printer, notice)
+        }
+        Err(refusal) => {
+            let refusal = *refusal;
+            devices_view_with(
+                &state,
+                parts,
+                DeviceKind::Printer,
+                refusal.status,
+                Some(refusal.problem),
+                refusal.draft,
+            )
+            .await
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_are_plain_and_bounded() {
+        for name in ["office", "Lab_2.floor-1", &"a".repeat(127)] {
+            assert!(valid_printer_name(name), "{name}");
+        }
+        for name in ["", "my printer", "a/b", "a#b", "é", &"a".repeat(128)] {
+            assert!(!valid_printer_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn addresses_need_a_known_scheme_and_a_place() {
+        for address in [
+            "ipp://192.168.1.20/ipp/print",
+            "ipps://printer.local:631/ipp/print",
+            "http://10.0.0.5:631/printers/x",
+            "socket://192.168.1.21:9100",
+            "lpd://192.168.1.22/queue",
+            "usb://HP/LaserJet%201020?serial=123",
+            "dnssd://Office._ipp._tcp.local/?uuid=1",
+        ] {
+            assert!(valid_device_uri(address), "{address}");
+        }
+        for address in [
+            "",
+            "192.168.1.20",
+            "file:///etc/passwd",
+            "cups-pdf:/",
+            "ipp:///ipp/print",
+            "ipp://host/a b",
+            "ipp://host/\nx",
+            "usb:",
+        ] {
+            assert!(!valid_device_uri(address), "{address:?}");
         }
     }
 }
