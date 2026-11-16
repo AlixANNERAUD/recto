@@ -1,7 +1,8 @@
 # Pages and endpoints
 
-Every address except `/health`, the sign-in addresses and the interface's static files requires a
-signed-in user. A page requested without a session redirects to `/sign-in?next=<path>`, which
+Every address requires a signed-in user except `/health`, the sign-in addresses (`/sign-in`,
+`/auth/*`, `/no-access`), `POST /theme`, `/brand/*`, `/manifest.webmanifest`, `/sw.js`,
+`/pwa.js`, `/offline` and the interface's static files. A page requested without a session redirects to `/sign-in?next=<path>`, which
 brings the person back after signing in; forms, downloads and server functions answer `401`
 instead. A single sign-on user without the required claim, or disabled, is sent to `/no-access`.
 

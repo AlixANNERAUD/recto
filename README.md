@@ -65,6 +65,8 @@ Authentik and others), or both.
   **administrators** who also reset passwords and disable users from the web page.
 - **Single sign-on** with any OpenID Connect provider, optionally limited to a role or group, with
   administrators and groups read from the provider's claims.
+- **Your brand**: set the name, accent color, logo and icon; each person picks light, dark or
+  the device's theme.
 - **One small container**, configured with environment variables only, running as non-root with a
   read-only file system, for amd64 and arm64. Accounts and sessions live in a **SQLite** file on a
   volume, or in **PostgreSQL**; `recto backup` copies SQLite while it runs.

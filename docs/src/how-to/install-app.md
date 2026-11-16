@@ -28,7 +28,8 @@ a reverse proxy with a certificate first (see [Run behind a reverse proxy](rever
 ## What works offline
 
 Only a page saying you are offline, with a link to try again. Printing and scanning need your
-server, so recto shows no pages from memory.
+server, so recto shows no pages from memory. Behind a reverse proxy, when recto itself is down,
+the proxy's error page shows rather than the offline page.
 
 ## Updates
 

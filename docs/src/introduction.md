@@ -30,6 +30,9 @@ with no drivers to install on each device.
   Connect provider (Zitadel, Keycloak, Authentik and others), optionally only those with a given
   role or group. Administrators create the local accounts, reset passwords and disable users from
   the **Administration** page.
+- **Brands** itself: the operator sets the name, accent color, logo and icon.
+- **Follows your theme**: light, dark or the device's setting, with a switch in every page.
+- **Installs as an app** on phones and computers, with an offline page.
 
 It runs as one container next to a CUPS server, configured with environment variables only. Its
 users and sessions live in a SQLite file on a volume, or in PostgreSQL.

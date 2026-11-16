@@ -123,7 +123,8 @@ again lets them sign in; it does not bring their sessions back.
 
 A sign-in starts a session, stored in the database, so restarts and upgrades do not sign anyone
 out. The `recto_session` cookie holds only the session's random identifier. It is `HttpOnly`,
-`SameSite=Lax`, and `Secure` when `RECTO_PUBLIC_URL` starts with `https://`.
+`SameSite=Lax`, and `Secure` when `RECTO_PUBLIC_URL` starts with `https://`. The only other
+cookie is `recto_theme`, which holds the chosen theme and nothing else.
 
 A session ends:
 

@@ -58,7 +58,9 @@ The files must be readable by user 65532, which recto runs as: `chmod a+r brand/
 
 Without an icon, recto draws its own in your color.
 
-recto reads the files once, at startup: after replacing one, restart recto.
+recto reads the files once, at startup: after replacing one, restart recto. When only a mounted
+file changed, `docker compose up -d` does not recreate the container, so run
+`docker compose restart recto`.
 
 ## 3. Restart
 
@@ -72,7 +74,7 @@ recto checks the settings when it starts and stops with a message naming the set
 wrong, rather than showing a broken page. The most common is a color that is too light:
 
 ```text
-recto: RECTO_BRAND_COLOR #ffff00 gives white button text a contrast of 1.07:1; it needs 4.5:1. Choose a darker colour.
+recto: RECTO_BRAND_COLOR #ffff00 gives white button text a contrast of 1.07:1; it needs 4.5:1. Choose a darker color.
 ```
 
 Buttons have white text on the color, and text needs a contrast of at least 4.5:1 with its

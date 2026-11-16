@@ -104,8 +104,9 @@ checked it is a `#rrggbb` value, and the name is escaped like any other text.
 ## The service worker
 
 The service worker of the installed app caches only the interface's scripts and styles
-(`/pkg/`), the brand images (`/brand/`) and the offline page. It never stores pages, scans,
-print or account responses: for everything else it leaves the request to the browser, as if no
+(`/pkg/`, fetched from the server first and kept only as a fallback), the brand images
+(`/brand/`) and the offline page, which it fetches without cookies so it holds no user's data. It
+never stores pages, scans, print or account responses: for everything else it leaves the request to the browser, as if no
 worker existed. The manifest and the worker are public because browsers fetch them without
 cookies, and they hold nothing private: a name, a color, icons and a few lines of script.
 

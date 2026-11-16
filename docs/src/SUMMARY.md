@@ -9,6 +9,7 @@
 # How-to guides
 
 - [Install recto](how-to/install.md)
+- [Install recto as an app](how-to/install-app.md)
 - [Manage users and administrators](how-to/manage-users.md)
 - [Set up single sign-on](how-to/sign-in.md)
 - [Let only some people in](how-to/restrict-access.md)
@@ -22,7 +23,6 @@
 - [Back up and restore](how-to/back-up.md)
 - [Upgrade](how-to/upgrade.md)
 - [Troubleshoot](how-to/troubleshoot.md)
-- [Install recto as an app](how-to/install-app.md)
 - [Develop and contribute](how-to/develop.md)
 
 # Reference
