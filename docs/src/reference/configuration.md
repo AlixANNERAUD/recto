@@ -73,6 +73,7 @@ More variables of `.env` are read by Compose itself, not by recto:
 | --- | --- | --- |
 | `RECTO_IMAGE` | `ghcr.io/alixanneraud/recto:latest` | The image to run. |
 | `RECTO_PORT` | `8080` | The port published on the host. |
+| `RECTO_UID` | `65532` | The uid and gid recto runs as, which must be able to write to the scan folder. The `cups` service gives its `recto` account the same uid, so printer management keeps working. See [Save scans into Paperless-ngx](../how-to/paperless.md#2-let-recto-write-there). |
 | `RECTO_POSTGRES_PASSWORD` | required by `examples/compose-postgres.yml` | The password of its PostgreSQL database. |
 | `COMPOSE_FILE` | `compose.yml` and `compose.override.yml` | The Compose files to use, separated by `:`, such as `compose.yml:examples/compose-postgres.yml`. Once it is set, `compose.override.yml` is only read if listed. |
 

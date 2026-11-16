@@ -22,13 +22,16 @@ If Paperless-ngx runs in the same Compose project, mount the same host folder in
 
 recto runs as user 65532. The consume folder usually belongs to the user Paperless-ngx runs as
 (`USERMAP_UID` and `USERMAP_GID` in its configuration, 1000 by default). Run recto as that user,
-on the `recto` service:
+in `.env`:
 
-```yaml
-    user: "1000:1000"
+```sh
+RECTO_UID=1000
 ```
 
-Then recreate recto: `docker compose up -d recto`.
+`compose.yml` runs recto with that uid and gid, and gives the `recto` account of the `cups`
+service the same uid, which CUPS needs for printer management.
+
+Then recreate both services: `docker compose up -d`.
 
 The other way round, `sudo chown 65532:65532` on the folder, also works if Paperless-ngx can still
 read and delete the files.

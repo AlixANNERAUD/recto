@@ -22,8 +22,9 @@ The **Save to folder** button writes into `./consume`, mounted at `/consume`. re
 mkdir -p consume && sudo chown 65532:65532 consume
 ```
 
-To save into a folder owned by someone else, such as the consume folder of Paperless-ngx, see
-[Save scans into Paperless-ngx](paperless.md). To have no Save button at all, remove
+To save into a folder owned by someone else, such as the consume folder of Paperless-ngx, set
+`RECTO_UID` to its owner's uid in `.env`, as [Save scans into Paperless-ngx](paperless.md)
+shows. To have no Save button at all, remove
 `RECTO_SCAN_OUTPUT_DIR` and the `./consume` volume from `compose.yml`.
 
 ## Configure

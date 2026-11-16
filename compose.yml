@@ -15,9 +15,10 @@
 # $RECTO_PUBLIC_URL/auth/callback. Every RECTO_* variable of docs/src/reference/configuration.md
 # works under `environment`.
 #
-# recto runs as uid 65532, so the folder behind "Save" must be writable by it (the chown above).
-# To save into an existing folder owned by someone else, such as Paperless's consume folder, set
-# `user: "<uid>:<gid>"` on the recto service to that owner instead.
+# recto runs as uid and gid RECTO_UID (65532 by default), so the folder behind "Save" must be
+# writable by it (the chown above). To save into an existing folder owned by someone else, such as
+# Paperless's consume folder, set RECTO_UID to that owner's uid instead: the cups service gives its
+# `recto` account the same uid, which CUPS needs to recognize recto.
 #
 # Printers: administrators add and manage them on recto's Printers page. recto talks to CUPS's
 # local socket, shared through the cups-socket volume (see examples/cups/cups-files.conf). The
@@ -29,6 +30,8 @@ services:
     image: ${RECTO_IMAGE:-ghcr.io/alixanneraud/recto:latest}
     build: .
     restart: unless-stopped
+    # The same uid as the `recto` account of the cups service's entrypoint.
+    user: "${RECTO_UID:-65532}:${RECTO_UID:-65532}"
     depends_on:
       - cups
     ports:
@@ -41,9 +44,9 @@ services:
       RECTO_OIDC_CLIENT_ID: ${RECTO_OIDC_CLIENT_ID:-}
       RECTO_CUPS_URL: http://cups:631
       # CUPS's local socket, for the Printers page to add and manage printers. CUPS knows recto by
-      # the `recto` account of the cups service's entrypoint, which must carry recto's uid.
+      # the `recto` account of the cups service's entrypoint, which carries RECTO_UID.
       RECTO_CUPS_ADMIN_SOCKET: /run/cups/cups.sock
-      # Where "Save" on the scan page writes; it must be writable by uid 65532 (chown 65532 consume).
+      # Where "Save" on the scan page writes; it must be writable by RECTO_UID (chown 65532 consume).
       RECTO_SCAN_OUTPUT_DIR: /consume
       RECTO_LOG_FORMAT: ${RECTO_LOG_FORMAT:-json}
       # The database defaults to SQLite in the recto-data volume (sqlite:///data/recto.db). For
@@ -90,16 +93,18 @@ services:
     image: olbat/cupsd:latest@sha256:3a9d7c319f4153c87e16db4edb6ef6c317aa7e71f8abe65c3419cc9aca851194
     restart: unless-stopped
     # The image has no `recto` account, which cups-files.conf makes an administrator over the local
-    # socket: CUPS matches the peer's uid with the passwd entry of the name recto sends. The uid is
-    # recto's (65532, or the one of `user:` on the recto service: change it here as well). The
-    # image has no entrypoint of its own, its command is `cupsd -f`. Check this again when the
-    # image digest changes.
+    # socket: CUPS matches the peer's uid with the passwd entry of the name recto sends, so the
+    # account carries recto's uid, RECTO_UID, which Compose substitutes below. Its group keeps
+    # 65532 whatever RECTO_UID is: every account whose main group has the number of the `recto`
+    # group is an administrator, and the image's `print` account, whose password is known, has
+    # group 1000. The image has no entrypoint of its own, its command is `cupsd -f`. Check this
+    # again when the image digest changes.
     entrypoint:
       - /bin/sh
       - -c
       - |
         grep -q '^recto:' /etc/group || echo 'recto:x:65532:' >> /etc/group
-        grep -q '^recto:' /etc/passwd || echo 'recto:x:65532:65532:recto:/nonexistent:/usr/sbin/nologin' >> /etc/passwd
+        grep -q '^recto:' /etc/passwd || echo 'recto:x:${RECTO_UID:-65532}:65532:recto:/nonexistent:/usr/sbin/nologin' >> /etc/passwd
         exec /usr/sbin/cupsd -f
     volumes:
       # The named volume keeps the printers added with lpadmin (printers.conf lives in /etc/cups);
