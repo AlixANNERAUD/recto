@@ -246,6 +246,19 @@ fn refused(error: Error) -> (StatusCode, UsersProblem) {
         }
         Error::Invalid(Problem::OwnAccount) => UsersProblem::OwnAccount,
         Error::Invalid(Problem::AdministratorFromClaim) => UsersProblem::AdministratorFromClaim,
+        // The user forms never meet the problems of quota rules.
+        Error::Invalid(
+            problem @ (Problem::RuleNameEmpty
+            | Problem::RuleLimitNegative
+            | Problem::RollingDaysInvalid { .. }
+            | Problem::SubjectNotFound
+            | Problem::PrinterNameEmpty
+            | Problem::GrantNotPositive
+            | Problem::HolderMismatch),
+        ) => {
+            tracing::error!(%problem, "changing a user failed");
+            return (StatusCode::SERVICE_UNAVAILABLE, UsersProblem::Unavailable);
+        }
         Error::NotFound => return (StatusCode::NOT_FOUND, UsersProblem::UserNotFound),
         error @ (Error::Database(_) | Error::Disabled | Error::InvalidCredentials) => {
             tracing::error!(%error, "changing a user failed");

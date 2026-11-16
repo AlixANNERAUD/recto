@@ -4,9 +4,9 @@
 use std::collections::HashMap;
 
 use recto_entity::{group_memberships, groups, users};
-use sea_orm::{ConnectionTrait, EntityTrait, QueryOrder};
+use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, QueryOrder};
 
-use crate::error::Result;
+use crate::{Error, database::begin_write, error::Result};
 
 /// Every group by name, with its members by username. Groups without members are listed too:
 /// they are never deleted automatically.
@@ -40,6 +40,19 @@ pub async fn list(
             (group, members)
         })
         .collect())
+}
+
+/// Deletes a group, with its quota rules (its members' and its pool's): their subject is gone.
+/// Its memberships and device access go with it through the database's cascades.
+pub async fn delete(database: &DatabaseConnection, id: i64) -> Result<()> {
+    let transaction = begin_write(database).await?;
+    crate::quotas::delete_rules_of_group(&transaction, id).await?;
+    let deleted = groups::Entity::delete_by_id(id).exec(&transaction).await?;
+    if deleted.rows_affected == 0 {
+        return Err(Error::NotFound);
+    }
+    transaction.commit().await?;
+    Ok(())
 }
 
 #[cfg(test)]

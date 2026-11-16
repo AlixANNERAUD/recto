@@ -54,6 +54,24 @@ pub enum Problem {
     /// would apply it again, so changing it by hand would only mislead. The command line can.
     #[error("administration of this user comes from the identity provider")]
     AdministratorFromClaim,
+    /// A quota rule needs a name.
+    #[error("the rule needs a name")]
+    RuleNameEmpty,
+    #[error("the limit cannot be negative")]
+    RuleLimitNegative,
+    #[error("a rolling period lasts 1 to {maximum} days")]
+    RollingDaysInvalid { maximum: u16 },
+    /// The group or user a rule or an adjustment names does not exist.
+    #[error("the group or user does not exist")]
+    SubjectNotFound,
+    /// A rule's list of printers has an empty name.
+    #[error("a printer name is empty")]
+    PrinterNameEmpty,
+    #[error("the extra allowance must be more than 0")]
+    GrantNotPositive,
+    /// An adjustment is for the user of a personal rule, or for the group of a pool rule.
+    #[error("the adjustment does not fit the rule")]
+    HolderMismatch,
 }
 
 /// The result of a domain operation.

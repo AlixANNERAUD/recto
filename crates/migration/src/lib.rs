@@ -16,6 +16,7 @@ mod m20261116_000001_print_jobs;
 mod m20261116_000002_device_access;
 mod m20261117_000001_ledger;
 mod m20261117_000002_prices;
+mod m20261117_000003_quotas;
 
 /// Every migration of recto, in the order they apply; used by `recto_domain::database::migrate`.
 pub struct Migrator;
@@ -29,6 +30,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261116_000002_device_access::Migration),
             Box::new(m20261117_000001_ledger::Migration),
             Box::new(m20261117_000002_prices::Migration),
+            Box::new(m20261117_000003_quotas::Migration),
         ]
     }
 }

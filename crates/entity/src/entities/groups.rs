@@ -19,6 +19,8 @@ pub enum Relation {
     DeviceAccessGroups,
     #[sea_orm(has_many = "super::group_memberships::Entity")]
     GroupMemberships,
+    #[sea_orm(has_many = "super::quota_adjustments::Entity")]
+    QuotaAdjustments,
 }
 
 impl Related<super::device_access_groups::Entity> for Entity {
@@ -30,6 +32,12 @@ impl Related<super::device_access_groups::Entity> for Entity {
 impl Related<super::group_memberships::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::GroupMemberships.def()
+    }
+}
+
+impl Related<super::quota_adjustments::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::QuotaAdjustments.def()
     }
 }
 

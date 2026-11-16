@@ -16,6 +16,8 @@ recto-migration.workspace = true
 sea-orm.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
+# The calendar periods of quotas follow RECTO_TIMEZONE.
+chrono-tz.workspace = true
 password-auth.workspace = true
 # Password hashing runs on the blocking thread pool.
 tokio.workspace = true
