@@ -51,6 +51,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 # Only the codecs recto writes; scanned pages are never decoded from untrusted files.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 tempfile = "3"
+# Page counts of the PDFs sent to print (crates/printing/src/count.rs); only the parser is used, none of the optional features.
+lopdf = { version = "0.47.0", default-features = false }
+# IANA zones of RECTO_TIMEZONE, which the quota periods are calendar periods in.
+chrono-tz = { version = "0.10.4", default-features = false }
 rpassword = "7.5"
 serde_json = "1"
 openidconnect = { version = "4.1.0", default-features = false, features = ["reqwest", "rustls-tls"] }

@@ -18,7 +18,7 @@ use recto::{
     branding::{BrandFile, Branding, default_branding},
     serve::{AuthState, router},
 };
-use recto_app::state::{AppState, JobVisibility};
+use recto_app::state::{AppState, Currency, JobVisibility};
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::{
     access::{self, Access, DeviceKind},
@@ -174,6 +174,8 @@ impl Harness {
             database: database.clone(),
             branding: Arc::new(setup.branding),
             job_visibility: setup.job_visibility,
+            currency: Currency::new("EUR"),
+            timezone: chrono_tz::UTC,
         };
         let public_url = Url::parse(setup.public_url).unwrap();
         let openid = setup.issuer.map(|issuer| {
@@ -568,10 +570,70 @@ async fn a_submitted_job_is_recorded() {
 }
 
 #[tokio::test]
-async fn a_job_cups_refuses_is_not_recorded() {
+async fn printing_records_the_counts() {
     let harness = Harness::new().await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
-    harness.print.set_unavailable("connection refused");
+    let pdf = recto_printing::testing::sample_pdf(2);
+    let response = print(
+        &harness,
+        &cookie,
+        &[
+            ("printer", "office"),
+            ("copies", "3"),
+            ("sides", "two-sided-long-edge"),
+            ("color_mode", "color"),
+        ],
+        Some(("report.pdf", &pdf)),
+    )
+    .await;
+    assert_redirect(&response, "/jobs?submitted=8");
+
+    let rows = print_jobs::Entity::find()
+        .all(&harness.database)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row.username, "alice");
+    assert_eq!(row.document_format.as_deref(), Some("application/pdf"));
+    assert_eq!(row.document_pages, Some(2));
+    assert_eq!(row.copies, 3);
+    assert_eq!(row.sides.as_deref(), Some("two-sided-long-edge"));
+    assert_eq!(row.color_mode.as_deref(), Some("color"));
+    assert_eq!(row.pages, Some(6));
+    assert_eq!(row.sheets, Some(3));
+    assert_eq!(row.color_pages, Some(6));
+    assert_eq!(row.mono_pages, Some(0));
+    assert_eq!(row.cost, 0);
+    assert_eq!(row.cups_job_id, Some(8));
+    assert!(!row.refunded);
+}
+
+#[tokio::test]
+async fn page_ranges_limit_the_counts() {
+    let harness = Harness::new().await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let pdf = recto_printing::testing::sample_pdf(10);
+    print(
+        &harness,
+        &cookie,
+        &[("printer", "office"), ("page_ranges", "1-3, 8-20")],
+        Some(("report.pdf", &pdf)),
+    )
+    .await;
+    let row = print_jobs::Entity::find()
+        .one(&harness.database)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.document_pages, Some(10));
+    assert_eq!(row.pages, Some(6));
+}
+
+#[tokio::test]
+async fn an_unreadable_pdf_is_recorded_with_unknown_counts() {
+    let harness = Harness::new().await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
     let response = print(
         &harness,
         &cookie,
@@ -579,12 +641,60 @@ async fn a_job_cups_refuses_is_not_recorded() {
         Some(("report.pdf", PDF)),
     )
     .await;
-    assert_redirect(&response, "/?error=unavailable");
-    let count = print_jobs::Entity::find()
-        .count(&harness.database)
+    assert_redirect(&response, "/jobs?submitted=8");
+    let row = print_jobs::Entity::find()
+        .one(&harness.database)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.document_pages, None);
+    assert_eq!(row.pages, None);
+    assert_eq!(row.sheets, None);
+}
+
+#[tokio::test]
+async fn an_image_counts_one_page() {
+    let harness = Harness::new().await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    print(
+        &harness,
+        &cookie,
+        &[("printer", "office"), ("copies", "2")],
+        Some(("photo.png", PNG)),
+    )
+    .await;
+    let row = print_jobs::Entity::find()
+        .one(&harness.database)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.document_format.as_deref(), Some("image/png"));
+    assert_eq!(row.document_pages, Some(1));
+    assert_eq!(row.pages, Some(2));
+}
+
+#[tokio::test]
+async fn a_refused_job_is_refunded() {
+    let harness = Harness::new().await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    harness
+        .print
+        .refuse_submissions("client-error-not-possible");
+    let response = print(
+        &harness,
+        &cookie,
+        &[("printer", "office")],
+        Some(("report.pdf", PDF)),
+    )
+    .await;
+    assert_redirect(&response, "/?error=refused");
+    let rows = print_jobs::Entity::find()
+        .all(&harness.database)
         .await
         .unwrap();
-    assert_eq!(count, 0);
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].refunded && rows[0].finished);
+    assert_eq!(rows[0].cups_job_id, None);
 }
 
 #[tokio::test]
@@ -2840,17 +2950,14 @@ async fn private_jobs() -> (Harness, String) {
     harness.sign_in("bob-subject", "bob").await;
     for (name, id) in [("alice", 1), ("bob", 2)] {
         let user = harness.user_id(name).await;
-        jobs::record(
+        recto_domain::testing::recorded_job(
             &harness.database,
-            jobs::NewJob {
-                user_id: user,
-                printer: "office".into(),
-                cups_job_id: id,
-                document_name: format!("document-{id}.pdf"),
-            },
+            user,
+            "office",
+            id,
+            &format!("document-{id}.pdf"),
         )
-        .await
-        .unwrap();
+        .await;
     }
     (harness, cookie)
 }

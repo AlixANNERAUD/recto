@@ -16,11 +16,11 @@ use recto::{
     branding::{BrandOptions, Branding, default_branding},
     serve::{AuthState, router},
 };
-use recto_app::state::{AppState, JobVisibility};
+use recto_app::state::{AppState, Currency, JobVisibility};
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::{
     access::{self, Access, DeviceKind},
-    jobs::{self, NewJob},
+    jobs,
     testing::{TempDir, temporary_directory},
     users::{self, Identity},
 };
@@ -182,6 +182,8 @@ impl Harness {
             database: database.clone(),
             branding: Arc::new(branding),
             job_visibility,
+            currency: Currency::new("EUR"),
+            timezone: chrono_tz::UTC,
         };
         let public_url = Url::parse(PUBLIC_URL).unwrap();
         let openid = OpenId::new(OpenIdSettings {
@@ -382,17 +384,14 @@ async fn record_job_of(harness: &Harness, username: &str, display_name: &str, cu
     sea_orm::ActiveModelTrait::update(active, &harness.database)
         .await
         .unwrap();
-    jobs::record(
+    recto_domain::testing::recorded_job(
         &harness.database,
-        NewJob {
-            user_id: user.id,
-            printer: "kitchen".into(),
-            cups_job_id,
-            document_name: format!("document-{cups_job_id}.pdf"),
-        },
+        user.id,
+        "kitchen",
+        cups_job_id,
+        &format!("document-{cups_job_id}.pdf"),
     )
-    .await
-    .unwrap();
+    .await;
 }
 
 fn now() -> i64 {

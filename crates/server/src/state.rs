@@ -3,7 +3,11 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use recto_app::{branding::Branding, pages::sign_in::SignInMethods, state::AppState};
+use recto_app::{
+    branding::Branding,
+    pages::sign_in::SignInMethods,
+    state::{AppState, Currency},
+};
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::passwords::{self, PasswordPolicy};
 use recto_printing::{Cups, CupsAdmin, PrinterAdmin};
@@ -179,6 +183,8 @@ pub async fn build(
         database: database.clone(),
         branding: Arc::new(branding),
         job_visibility: config.job_visibility,
+        currency: Currency::new(&config.currency),
+        timezone: config.timezone,
     };
     let openid = config
         .oidc_issuer

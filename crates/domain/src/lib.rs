@@ -10,6 +10,7 @@ pub mod database;
 pub mod error;
 pub mod groups;
 pub mod jobs;
+pub mod ledger;
 pub mod names;
 pub mod passwords;
 pub mod users;

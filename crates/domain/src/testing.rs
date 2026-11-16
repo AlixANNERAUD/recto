@@ -57,3 +57,37 @@ pub fn temporary_directory() -> TempDir {
     std::fs::create_dir_all(&base).expect("create target/test-tmp");
     TempDir::new_in(base).expect("create a temporary directory")
 }
+
+/// Enters a job in the ledger as if CUPS had accepted it under `cups_job_id`, with unknown
+/// counts. For the tests of what reads the records.
+pub async fn recorded_job(
+    database: &DatabaseConnection,
+    user_id: i64,
+    printer: &str,
+    cups_job_id: i32,
+    document_name: &str,
+) {
+    use crate::ledger::{self, NewEntry, Prices};
+
+    let id = ledger::insert(
+        database,
+        NewEntry {
+            user_id,
+            username: String::new(),
+            printer: printer.to_owned(),
+            document_name: document_name.to_owned(),
+            document_format: "application/pdf".to_owned(),
+            document_pages: None,
+            copies: 1,
+            sides: "one-sided".to_owned(),
+            color_mode: "monochrome".to_owned(),
+            counts: ledger::counts(None, 1, false, false, Prices::default()),
+        },
+        chrono::Utc::now(),
+    )
+    .await
+    .expect("insert the ledger entry");
+    ledger::attach(database, id, cups_job_id)
+        .await
+        .expect("attach the CUPS job id");
+}

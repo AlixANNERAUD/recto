@@ -16,11 +16,13 @@ use recto_app::{
 };
 use recto_domain::{
     access::{DeviceKind, Usable},
-    jobs::{self, NewJob},
+    jobs,
+    ledger::{self, NewEntry, Prices},
 };
 use recto_printing::{
     Capabilities, ColorMode, DocumentFormat, PageRanges, PrintError, PrintOptions, PrintRequest,
     Sides,
+    count::{pdf_pages, printed_pages},
 };
 
 /// Room for the form fields and multipart headers next to the largest accepted file, so a file
@@ -88,6 +90,46 @@ async fn submit_form(state: &AppState, user: &User, multipart: Multipart) -> Res
         return Err(Refusal::NotAccepting);
     }
     let options = options(&form.options, &printer.capabilities, format)?;
+    let document_pages = match format {
+        DocumentFormat::Pdf => {
+            // Parsing a large document is CPU work: keep it off the async threads.
+            let bytes = document.clone();
+            tokio::task::spawn_blocking(move || pdf_pages(&bytes))
+                .await
+                .unwrap_or(None)
+        }
+        DocumentFormat::Jpeg | DocumentFormat::Png => Some(1),
+    };
+    let printed = document_pages.map(|pages| printed_pages(pages, options.page_ranges.as_ref()));
+    let counts = ledger::counts(
+        printed,
+        options.copies,
+        options.sides != Sides::OneSided,
+        options.color_mode == ColorMode::Color,
+        // Prices arrive with the printer settings.
+        Prices::default(),
+    );
+    let entry = NewEntry {
+        user_id: user.id,
+        username: user.username.clone(),
+        printer: printer.name.clone(),
+        document_name: job_name(&file_name),
+        document_format: format.mime().to_owned(),
+        document_pages,
+        copies: options.copies,
+        sides: options.sides.keyword().to_owned(),
+        color_mode: options.color_mode.keyword().to_owned(),
+        counts,
+    };
+    // Written before CUPS is asked, so a job cannot print without being counted. Without rules
+    // yet, a ledger that cannot be written must not stop printing.
+    let entry_id = match ledger::insert(&state.database, entry, chrono::Utc::now()).await {
+        Ok(id) => Some(id),
+        Err(error) => {
+            tracing::error!(%error, "writing the ledger entry failed");
+            None
+        }
+    };
     let request = PrintRequest {
         printer: printer.name,
         document,
@@ -96,21 +138,22 @@ async fn submit_form(state: &AppState, user: &User, multipart: Multipart) -> Res
         user: user.username.clone(),
         options,
     };
-    let printer = request.printer.clone();
-    let document_name = request.job_name.clone();
-    let id = state.print.submit(request).await.map_err(refusal)?;
-    // The job is printing already: failing to record it must not tell the user it failed.
-    let recorded = jobs::record(
-        &state.database,
-        NewJob {
-            user_id: user.id,
-            printer,
-            cups_job_id: id,
-            document_name,
-        },
-    )
-    .await;
-    if let Err(error) = recorded {
+    let id = match state.print.submit(request).await {
+        Ok(id) => id,
+        Err(error) => {
+            // Nothing printed, so the job must not count.
+            if let Some(entry_id) = entry_id
+                && let Err(error) = ledger::refund(&state.database, entry_id).await
+            {
+                tracing::error!(%error, "refunding the ledger entry failed");
+            }
+            return Err(refusal(error));
+        }
+    };
+    // The job is printing already: failing to link it must not tell the user it failed.
+    if let Some(entry_id) = entry_id
+        && let Err(error) = ledger::attach(&state.database, entry_id, id).await
+    {
         tracing::error!(%error, job = id, "recording the job failed");
     }
     Ok(id)

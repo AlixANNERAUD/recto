@@ -14,6 +14,7 @@ pub use sea_orm_migration::prelude::*;
 mod m20261115_000001_accounts;
 mod m20261116_000001_print_jobs;
 mod m20261116_000002_device_access;
+mod m20261117_000001_ledger;
 
 /// Every migration of recto, in the order they apply; used by `recto_domain::database::migrate`.
 pub struct Migrator;
@@ -25,6 +26,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261115_000001_accounts::Migration),
             Box::new(m20261116_000001_print_jobs::Migration),
             Box::new(m20261116_000002_device_access::Migration),
+            Box::new(m20261117_000001_ledger::Migration),
         ]
     }
 }

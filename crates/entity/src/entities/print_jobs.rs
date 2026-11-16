@@ -14,6 +14,21 @@ pub struct Model {
     pub document_name: String,
     pub submitted_at: DateTimeWithTimeZone,
     pub state: String,
+    pub username: String,
+    pub document_format: Option<String>,
+    pub document_pages: Option<i64>,
+    pub copies: i64,
+    pub sides: Option<String>,
+    pub color_mode: Option<String>,
+    pub pages: Option<i64>,
+    pub sheets: Option<i64>,
+    pub color_pages: Option<i64>,
+    pub mono_pages: Option<i64>,
+    pub cost: i64,
+    pub refunded: bool,
+    pub finished: bool,
+    pub seen_processing: bool,
+    pub impressions_completed: Option<i64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

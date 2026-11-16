@@ -1,14 +1,13 @@
-//! Records of the print jobs recto submitted. CUPS only knows the name recto printed in, so the
-//! records are how the job list tells the real users apart.
+//! Reading the records of the print jobs recto submitted, which [`crate::ledger`] writes. CUPS
+//! only knows the name recto printed in, so the records are how the job list tells the real users
+//! apart.
 //!
 //! A CUPS job id is not unique forever (CUPS can restart its numbering), so a record only
 //! matches a CUPS job when their times agree as well: see [`matching`].
 
 use chrono::{DateTime, Duration, Utc};
 use recto_entity::{print_jobs, users};
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
-};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 
 use crate::error::Result;
 
@@ -16,15 +15,6 @@ use crate::error::Result;
 /// same job. CUPS stamps the job when it receives it, so the real gap is a few seconds; the rest
 /// absorbs clock differences between recto and CUPS.
 pub const MATCH_WINDOW: Duration = Duration::minutes(5);
-
-/// A job to record, right after CUPS accepted it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NewJob {
-    pub user_id: i64,
-    pub printer: String,
-    pub cups_job_id: i32,
-    pub document_name: String,
-}
 
 /// A recorded job with the user who submitted it. Only records that have a CUPS job id are
 /// read back: one without never matches a CUPS job.
@@ -38,22 +28,6 @@ pub struct RecordedJob {
     pub cups_job_id: i32,
     pub submitted_at: DateTime<Utc>,
     pub state: String,
-}
-
-/// Records a job submitted now, in the `pending` state.
-pub async fn record(database: &impl ConnectionTrait, job: NewJob) -> Result<()> {
-    print_jobs::ActiveModel {
-        user_id: Set(job.user_id),
-        printer: Set(job.printer),
-        cups_job_id: Set(Some(i64::from(job.cups_job_id))),
-        document_name: Set(job.document_name),
-        submitted_at: Set(Utc::now().fixed_offset()),
-        state: Set("pending".to_owned()),
-        ..Default::default()
-    }
-    .insert(database)
-    .await?;
-    Ok(())
 }
 
 /// The records of these CUPS job ids, with their users.
@@ -133,13 +107,8 @@ mod tests {
         sign_in_with_identity(database, &identity).await.unwrap()
     }
 
-    fn new_job(user_id: i64, cups_job_id: i32) -> NewJob {
-        NewJob {
-            user_id,
-            printer: "office".to_owned(),
-            cups_job_id,
-            document_name: "report.pdf".to_owned(),
-        }
+    async fn record(database: &DatabaseConnection, user_id: i64, cups_job_id: i32) {
+        crate::testing::recorded_job(database, user_id, "office", cups_job_id, "report.pdf").await;
     }
 
     fn at(text: &str) -> DateTime<Utc> {
@@ -163,7 +132,7 @@ mod tests {
     async fn a_recorded_job_comes_back_with_its_user() {
         let database = crate::testing::database().await;
         let alice = user(&database, "alice").await;
-        record(&database, new_job(alice.id, 7)).await.unwrap();
+        record(&database, alice.id, 7).await;
 
         let found = for_cups_ids(&database, &[7, 8]).await.unwrap();
         assert_eq!(found.len(), 1);
@@ -198,7 +167,7 @@ mod tests {
     async fn states_are_updated() {
         let database = crate::testing::database().await;
         let alice = user(&database, "alice").await;
-        record(&database, new_job(alice.id, 7)).await.unwrap();
+        record(&database, alice.id, 7).await;
         let id = for_cups_ids(&database, &[7]).await.unwrap()[0].id;
 
         update_states(&database, &[(id, "completed")])
@@ -225,16 +194,22 @@ mod tests {
     async fn a_record_without_a_cups_id_matches_nothing() {
         let database = crate::testing::database().await;
         let alice = user(&database, "alice").await;
-        print_jobs::ActiveModel {
-            user_id: Set(alice.id),
-            printer: Set("office".to_owned()),
-            cups_job_id: Set(None),
-            document_name: Set("report.pdf".to_owned()),
-            submitted_at: Set(Utc::now().fixed_offset()),
-            state: Set("pending".to_owned()),
-            ..Default::default()
-        }
-        .insert(&database)
+        crate::ledger::insert(
+            &database,
+            crate::ledger::NewEntry {
+                user_id: alice.id,
+                username: "alice".to_owned(),
+                printer: "office".to_owned(),
+                document_name: "report.pdf".to_owned(),
+                document_format: "application/pdf".to_owned(),
+                document_pages: None,
+                copies: 1,
+                sides: "one-sided".to_owned(),
+                color_mode: "monochrome".to_owned(),
+                counts: crate::ledger::counts(None, 1, false, false, Default::default()),
+            },
+            Utc::now(),
+        )
         .await
         .unwrap();
         assert!(for_cups_ids(&database, &[0, 1]).await.unwrap().is_empty());
@@ -244,7 +219,7 @@ mod tests {
     async fn a_user_with_recorded_jobs_cannot_be_deleted() {
         let database = crate::testing::database().await;
         let alice = user(&database, "alice").await;
-        record(&database, new_job(alice.id, 7)).await.unwrap();
+        record(&database, alice.id, 7).await;
 
         let deleted = users::Entity::delete_by_id(alice.id).exec(&database).await;
         assert!(deleted.is_err());

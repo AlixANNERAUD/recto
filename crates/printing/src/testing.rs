@@ -12,6 +12,38 @@ use crate::{
     Printer, PrinterAdmin,
 };
 
+/// A valid PDF of `pages` empty pages, for tests that count them.
+pub fn sample_pdf(pages: u32) -> Vec<u8> {
+    use lopdf::{Document, Object, dictionary};
+
+    let mut document = Document::with_version("1.5");
+    let pages_id = document.new_object_id();
+    let kids: Vec<Object> = (0..pages)
+        .map(|_| {
+            document
+                .add_object(dictionary! {
+                    "Type" => "Page",
+                    "Parent" => pages_id,
+                    "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+                })
+                .into()
+        })
+        .collect();
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Count" => i64::from(pages),
+            "Kids" => kids,
+        }),
+    );
+    let catalog = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    document.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    document.save_to(&mut bytes).expect("write the sample PDF");
+    bytes
+}
+
 /// A fixed in-memory print service that records what it is asked to do.
 #[derive(Default)]
 pub struct MockPrintService {
@@ -20,6 +52,7 @@ pub struct MockPrintService {
     submitted: Mutex<Vec<PrintRequest>>,
     canceled: Mutex<Vec<(i32, String)>>,
     unavailable: Mutex<Option<String>>,
+    refusal: Mutex<Option<String>>,
 }
 
 /// A panicking test elsewhere must not hide the state from the assertions of this one.
@@ -51,6 +84,12 @@ impl MockPrintService {
 
     pub fn set_available(&self) {
         *lock(&self.unavailable) = None;
+    }
+
+    /// Makes `submit` (only) fail with `PrintError::Refused(reason)`, as CUPS does when it
+    /// answers a job with an error.
+    pub fn refuse_submissions(&self, reason: &str) {
+        *lock(&self.refusal) = Some(reason.to_owned());
     }
 
     pub fn submitted(&self) -> Vec<PrintRequest> {
@@ -89,6 +128,9 @@ impl PrintService for MockPrintService {
 
     async fn submit(&self, request: PrintRequest) -> Result<i32, PrintError> {
         self.check_available()?;
+        if let Some(reason) = lock(&self.refusal).clone() {
+            return Err(PrintError::Refused(reason));
+        }
         if !lock(&self.printers)
             .iter()
             .any(|p| p.name == request.printer)

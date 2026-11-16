@@ -24,6 +24,52 @@ pub enum JobVisibility {
     Own,
 }
 
+/// The currency prices and costs are shown in. Amounts are stored in minor units (cents); this
+/// only decides how they read, and never converts anything.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Currency {
+    /// The ISO 4217 code, in capitals.
+    pub code: String,
+    /// Digits after the decimal point: the currency's minor unit exponent.
+    pub decimals: u32,
+}
+
+/// Currencies without a minor unit (ISO 4217 exponent 0); every other one has two decimals.
+const ZERO_DECIMAL: [&str; 16] = [
+    "BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW", "PYG", "RWF", "UGX", "VND", "VUV",
+    "XAF", "XOF", "XPF",
+];
+
+impl Currency {
+    /// The currency of an ISO code, in any case.
+    pub fn new(code: &str) -> Self {
+        let code = code.to_ascii_uppercase();
+        let decimals = if ZERO_DECIMAL.contains(&code.as_str()) {
+            0
+        } else {
+            2
+        };
+        Self { code, decimals }
+    }
+
+    /// An amount in minor units as `12.34 EUR`.
+    pub fn format(&self, minor: i64) -> String {
+        let sign = if minor < 0 { "-" } else { "" };
+        let minor = minor.unsigned_abs();
+        if self.decimals == 0 {
+            return format!("{sign}{minor} {}", self.code);
+        }
+        let unit = 10u64.pow(self.decimals);
+        format!(
+            "{sign}{}.{:0width$} {}",
+            minor / unit,
+            minor % unit,
+            self.code,
+            width = self.decimals as usize
+        )
+    }
+}
+
 /// The services behind the interface. Trait objects, so tests swap in mocks.
 #[derive(Clone)]
 pub struct AppState {
@@ -46,6 +92,10 @@ pub struct AppState {
     /// Whose jobs a user who is not an administrator sees and may cancel
     /// (`RECTO_JOB_VISIBILITY`).
     pub job_visibility: JobVisibility,
+    /// How costs read (`RECTO_CURRENCY`).
+    pub currency: Currency,
+    /// The zone calendar periods of quotas follow (`RECTO_TIMEZONE`).
+    pub timezone: chrono_tz::Tz,
 }
 
 /// The signed-in user of a request, read from the accounts database on every request, so that
@@ -103,4 +153,18 @@ pub fn require_user() -> Result<User, ServerFnError> {
     Err(ServerFnError::new(crate::messages::sign_in_required(
         crate::i18n::locale(),
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn amounts_read_in_the_currency_minor_unit() {
+        let euro = Currency::new("eur");
+        assert_eq!(euro.format(1234), "12.34 EUR");
+        assert_eq!(euro.format(5), "0.05 EUR");
+        assert_eq!(euro.format(-250), "-2.50 EUR");
+        assert_eq!(Currency::new("JPY").format(1234), "1234 JPY");
+    }
 }

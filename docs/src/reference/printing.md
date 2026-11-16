@@ -27,6 +27,26 @@ The Print page offers an option only when the chosen printer supports it, as CUP
 Each job is sent with the file name as `job-name` and the signed-in user's username as
 `requesting-user-name`, so CUPS logs and quotas see the person, not recto.
 
+## What recto counts
+
+Recto writes every job it sends in a ledger, before it asks CUPS to print, so that a job cannot
+print without being counted. The ledger keeps the username as it was at that time, the document
+type, the printer, the copies, the sides and the color mode, and these counts:
+
+| Count | Value |
+| --- | --- |
+| Pages | The pages of the document that the page ranges select, times the copies. An image is one page. |
+| Sheets | The selected pages, halved and rounded up when printing two-sided, times the copies. |
+| Color pages | All the pages when the color mode is color, otherwise none. |
+| Black and white pages | The other pages. |
+
+The pages of a PDF come from reading the file. When recto cannot read a PDF, it still prints it
+and records the counts as unknown, which is not the same as zero. A page range that goes past the
+end of the document selects only the pages that exist.
+
+When CUPS refuses a job, the job is marked as refunded and stops counting. Costs are zero for
+now: prices are not set yet.
+
 ## Printer states
 
 | Shown | Meaning |

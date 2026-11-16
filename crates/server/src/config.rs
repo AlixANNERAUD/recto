@@ -103,6 +103,22 @@ pub struct Config {
         value_parser = parse_job_visibility
     )]
     pub job_visibility: JobVisibility,
+    /// The ISO 4217 code costs are shown in; display only.
+    #[arg(
+        long,
+        env = "RECTO_CURRENCY",
+        default_value = "EUR",
+        value_parser = parse_currency
+    )]
+    pub currency: String,
+    /// The IANA time zone whose calendar the quota periods follow.
+    #[arg(
+        long,
+        env = "RECTO_TIMEZONE",
+        default_value = "UTC",
+        value_parser = parse_timezone
+    )]
+    pub timezone: chrono_tz::Tz,
     #[arg(long, env = "RECTO_LOG_FORMAT", value_enum, default_value = "json")]
     pub log_format: LogFormat,
     /// The name, colors, logo and icons; checked when the server starts (`branding::load`).
@@ -222,6 +238,23 @@ fn parse_job_visibility(value: &str) -> Result<JobVisibility, String> {
             "RECTO_JOB_VISIBILITY must be all or own, not {value}"
         )),
     }
+}
+
+fn parse_currency(value: &str) -> Result<String, String> {
+    let code = value.trim();
+    if code.len() == 3 && code.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+        Ok(code.to_ascii_uppercase())
+    } else {
+        Err(format!(
+            "RECTO_CURRENCY must be an ISO 4217 code of three letters, such as EUR, not {value}"
+        ))
+    }
+}
+
+fn parse_timezone(value: &str) -> Result<chrono_tz::Tz, String> {
+    value.trim().parse().map_err(|_| {
+        format!("RECTO_TIMEZONE must be an IANA time zone name, such as Europe/Paris, not {value}")
+    })
 }
 
 /// CUPS clients commonly write the server as `ipp://` or `ipps://`; IPP runs over HTTP, so the
@@ -365,6 +398,20 @@ mod tests {
             error.to_string().contains("RECTO_JOB_VISIBILITY"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn currency_and_timezone_are_checked() {
+        let config = parse(&[]).unwrap();
+        assert_eq!(config.currency, "EUR");
+        assert_eq!(config.timezone, chrono_tz::UTC);
+        let paris = parse(&["--timezone", "Europe/Paris", "--currency", "usd"]).unwrap();
+        assert_eq!(paris.timezone, chrono_tz::Europe::Paris);
+        assert_eq!(paris.currency, "USD");
+        let error = parse(&["--timezone", "Mars/Base"]).unwrap_err();
+        assert!(error.to_string().contains("RECTO_TIMEZONE"), "{error}");
+        let error = parse(&["--currency", "EURO"]).unwrap_err();
+        assert!(error.to_string().contains("RECTO_CURRENCY"), "{error}");
     }
 
     #[test]
