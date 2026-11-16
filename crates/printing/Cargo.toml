@@ -34,5 +34,5 @@ percent-encoding = { workspace = true, optional = true }
 # the service-gated ones without extra flags. Dev-dependencies never reach the wasm32 build.
 recto-printing = { path = ".", features = ["service", "testing"] }
 tokio = { workspace = true, features = ["net", "io-util"] }
-recto-domain = { workspace = true, features = ["testing"] }
+tempfile.workspace = true
 wiremock.workspace = true

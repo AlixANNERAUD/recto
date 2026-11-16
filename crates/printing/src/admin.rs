@@ -380,13 +380,20 @@ mod tests {
     use ipp::reader::IppReader;
     use ipp::request::IppRequestResponse;
     use ipp::value::IppValue;
-    use recto_domain::testing::temporary_directory;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
     use crate::testing::{attribute, ipp_response};
+
+    /// A new directory under `target/test-tmp` of the workspace, never the system temporary
+    /// directory, removed when dropped. The path stays short enough for a Unix socket.
+    fn temporary_directory() -> tempfile::TempDir {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+        std::fs::create_dir_all(&base).expect("create target/test-tmp");
+        tempfile::TempDir::new_in(base).expect("create a temporary directory")
+    }
 
     fn ok() -> Vec<u8> {
         ipp_response(StatusCode::SuccessfulOk, vec![])

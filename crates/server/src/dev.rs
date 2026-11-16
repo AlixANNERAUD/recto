@@ -17,8 +17,9 @@ use axum::{
 use recto_app::state::{AppState, User};
 use recto_domain::users::{self, Identity};
 use recto_printing::{
-    Capabilities, ColorMode, Job, JobState, Printer, PrinterState, Sides, StateReason, Supply,
-    testing::MockPrintService,
+    Capabilities, ColorMode, DriverInfo, Job, JobState, Printer, PrinterState, Sides, StateReason,
+    Supply,
+    testing::{MockPrintService, MockPrinterAdmin},
 };
 use recto_scanning::MockScannerService;
 use sea_orm::DatabaseConnection;
@@ -53,13 +54,15 @@ pub async fn sign_in(State(user): State<User>, mut request: Request, next: Next)
 
 /// Swaps the services for mocks and returns the development user. Scans take a moment, as real
 /// ones do, so the waiting states of the scan page can be seen; Save writes under `target/`
-/// unless a folder is configured.
+/// unless a folder is configured. Printer administration is always the mock, never a real
+/// socket, so the Printers page shows its forms; they change nothing.
 pub async fn apply(state: &mut AppState) -> recto_domain::Result<User> {
     state.print = Arc::new(
         MockPrintService::new()
             .with_printers(printers())
             .with_jobs(jobs()),
     );
+    state.printer_admin = Some(Arc::new(MockPrinterAdmin::new().with_drivers(drivers())));
     state.scan =
         Arc::new(MockScannerService::default().with_scan_delay(Duration::from_millis(800)));
     if state.output_dir.is_none() {
@@ -70,6 +73,34 @@ pub async fn apply(state: &mut AppState) -> recto_domain::Result<User> {
         state.output_dir = Some(dir);
     }
     development_user(&state.database).await
+}
+
+/// A few drivers for the Add form's search, such as `laserjet` or `epson`.
+fn drivers() -> Vec<DriverInfo> {
+    [
+        (
+            "drv:///hpcups.drv/hp-laserjet_1020.ppd",
+            "HP LaserJet 1020 hpcups",
+        ),
+        (
+            "drv:///hpcups.drv/hp-laserjet_p1102.ppd",
+            "HP LaserJet Professional P1102 hpcups",
+        ),
+        (
+            "gutenprint.5.3://escp2-xp200/expert",
+            "Epson Expression Home XP-200 - CUPS+Gutenprint",
+        ),
+        (
+            "foo2zjs:0/ppd/foo2zjs/HP-LaserJet_1018.ppd",
+            "HP LaserJet 1018 Foomatic/foo2zjs-z1",
+        ),
+    ]
+    .into_iter()
+    .map(|(name, make_and_model)| DriverInfo {
+        name: name.into(),
+        make_and_model: make_and_model.into(),
+    })
+    .collect()
 }
 
 fn supply(name: &str, level: Option<u8>, color: &str) -> Supply {
