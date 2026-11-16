@@ -78,7 +78,8 @@ impl PrintService for MockPrintService {
         self.check_available()?;
         lock(&self.printers)
             .iter()
-            .find(|printer| printer.name == name)
+            // CUPS finds a printer whatever the case of its name.
+            .find(|printer| printer.name.eq_ignore_ascii_case(name))
             .cloned()
             .ok_or_else(|| PrintError::PrinterNotFound(name.to_owned()))
     }

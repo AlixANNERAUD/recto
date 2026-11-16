@@ -79,6 +79,11 @@ async fn submit_form(state: &AppState, user: &User, multipart: Multipart) -> Res
         return Err(Refusal::PrinterNotFound);
     }
     let printer = state.print.printer(&printer_name).await.map_err(refusal)?;
+    // CUPS ignores the case of printer names, so "LAB" reaches the printer "lab": its rule is
+    // checked again under the name CUPS answered with.
+    if !usable.allows(&printer.name) {
+        return Err(Refusal::PrinterNotFound);
+    }
     if !printer.accepting_jobs {
         return Err(Refusal::NotAccepting);
     }

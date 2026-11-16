@@ -2986,6 +2986,30 @@ async fn printing_to_a_restricted_printer_is_refused() {
 }
 
 #[tokio::test]
+async fn printing_to_a_restricted_printer_in_another_case_is_refused() {
+    // CUPS finds printers whatever the case of their name, so "LAB" reaches "lab".
+    let harness = with_a_restricted_printer().await;
+    let plain = harness.sign_in("alice-subject", "alice").await;
+    for name in ["LAB", "Lab"] {
+        let response = print(&harness, &plain, &[("printer", name)], Some(("a.pdf", PDF))).await;
+        assert_redirect(&response, "/?error=printer_not_found");
+    }
+    assert!(harness.print.submitted().is_empty());
+
+    // A member printing to "LAB" reaches "lab" under its own name.
+    let member = harness.sign_in("sam-subject", "sam").await;
+    let response = print(
+        &harness,
+        &member,
+        &[("printer", "LAB")],
+        Some(("a.pdf", PDF)),
+    )
+    .await;
+    assert!(location(&response).starts_with("/jobs?submitted="));
+    assert_eq!(harness.print.submitted()[0].printer, "lab");
+}
+
+#[tokio::test]
 async fn scanning_on_a_restricted_scanner_is_refused() {
     let harness = with_a_restricted_printer().await;
     restrict_to_staff(&harness, DeviceKind::Scanner, "mock:0").await;
