@@ -3632,6 +3632,17 @@ async fn printer_actions_reach_cups() {
         .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(harness.admin.calls().len(), 6);
+
+    // A name CUPS would not accept never reaches it.
+    let response = harness
+        .send(form(
+            "/administration/printers/pause",
+            Some(&admin),
+            &[("printer", "../office")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(harness.admin.calls().len(), 6);
 }
 
 #[tokio::test]

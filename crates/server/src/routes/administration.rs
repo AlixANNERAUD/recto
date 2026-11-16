@@ -771,6 +771,10 @@ fn valid_device_uri(address: &str) -> bool {
     if !DEVICE_SCHEMES.contains(&uri.scheme()) {
         return false;
     }
+    // CUPS would store credentials in printers.conf, readable by anyone who can read it.
+    if !uri.username().is_empty() || uri.password().is_some() {
+        return false;
+    }
     let host = uri.host_str().is_some_and(|host| !host.is_empty());
     match uri.scheme() {
         "usb" | "dnssd" => host || !uri.path().trim_matches('/').is_empty(),
@@ -931,6 +935,12 @@ async fn perform(
             DevicesProblem::NoDevice,
         ));
     }
+    if !valid_printer_name(&printer) {
+        return Err(Refusal::new(
+            StatusCode::BAD_REQUEST,
+            DevicesProblem::InvalidName,
+        ));
+    }
     let name = printer.as_str();
     let done = match action {
         PrinterAction::Add => unreachable!("handled above"),
@@ -1040,6 +1050,9 @@ mod tests {
             "ipp://host/a b",
             "ipp://host/\nx",
             "usb:",
+            "ipp://user:pass@host/ipp/print",
+            "ipp://user@host/ipp/print",
+            "ipp://:pass@host/ipp/print",
         ] {
             assert!(!valid_device_uri(address), "{address:?}");
         }
