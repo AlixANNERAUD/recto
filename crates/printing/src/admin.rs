@@ -360,7 +360,9 @@ fn check(response: &IppRequestResponse) -> Result<(), AdminError> {
         .attributes()
         .groups_of(DelimiterTag::OperationAttributes)
         .find_map(|group| string(group, "status-message"))
-        .unwrap_or_else(|| format!("{status:?}"));
+        // CUPS sends no message for some errors: the standard text of the status reads better
+        // than its name.
+        .unwrap_or_else(|| status.to_string());
     Err(match status {
         // What CUPS answers when it cannot talk to the printer at the address.
         StatusCode::ServerErrorDeviceError => AdminError::Unreachable(message),
@@ -636,6 +638,28 @@ mod tests {
             admin.pause("office").await,
             Err(AdminError::Unavailable(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn an_answer_without_a_message_is_still_readable() {
+        let bare = |status| {
+            IppRequestResponse::new_response(IppVersion::v1_1(), status, 1)
+                .unwrap()
+                .to_bytes()
+                .to_vec()
+        };
+        let (_server, admin) = server_with_ipp(bare(StatusCode::ServerErrorDeviceError)).await;
+        let Err(AdminError::Unreachable(text)) = admin.pause("office").await else {
+            panic!("an unreachable printer");
+        };
+        assert!(!text.contains("ServerError"), "{text}");
+        assert!(!text.is_empty());
+
+        let (_server, admin) = server_with_ipp(bare(StatusCode::ClientErrorNotPossible)).await;
+        let Err(AdminError::Rejected(text)) = admin.pause("office").await else {
+            panic!("a rejection");
+        };
+        assert_eq!(text, "Not possible");
     }
 
     fn ppd(name: &str, make_and_model: &str) -> (DelimiterTag, Vec<IppAttribute>) {
