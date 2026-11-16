@@ -3,7 +3,8 @@
 
 /* Design tokens after Fluent 2: calm neutral surfaces and one accent, the Fluent brand blue.
    Text colors keep at least 4.5:1 contrast with the surfaces they sit on, and input borders
-   3:1, in both themes. The theme follows the system; there is no switch to remember. */
+   3:1, in both themes. The theme follows the system unless the person picks one (`data-theme` on
+   the root element, set by the server from a cookie). */
 :root {
   color-scheme: light dark;
   --background: #f5f5f5;
@@ -29,8 +30,13 @@
   --ring: #0f6cbd;
 }
 
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+/* The dark tokens appear twice, once in the media query and once for the attribute, on purpose. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --background: #1f1f1f;
     --foreground: #ffffff;
     --card: #292929;
@@ -51,6 +57,29 @@
     --success-subtle: #0f2e0f;
     --ring: #479ef5;
   }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #1f1f1f;
+  --foreground: #ffffff;
+  --card: #292929;
+  --muted: #333333;
+  --muted-foreground: #adadad;
+  --border: #3d3d3d;
+  --input: #8a8a8a;
+  --primary: #115ea3;
+  --primary-hover: #0f6cbd;
+  --primary-foreground: #ffffff;
+  --brand: #479ef5;
+  --brand-subtle: #082338;
+  --danger: #f1707b;
+  --danger-subtle: #3b1a1d;
+  --warning: #f2c661;
+  --warning-subtle: #3a2b0c;
+  --success: #54b054;
+  --success-subtle: #0f2e0f;
+  --ring: #479ef5;
 }
 
 @theme inline {

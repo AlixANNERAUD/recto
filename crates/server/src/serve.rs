@@ -35,7 +35,7 @@ use crate::session_store::DatabaseSessionStore;
 pub use crate::state::AuthState;
 use crate::{
     config::Config,
-    routes::{administration, auth, password, print, scan},
+    routes::{administration, auth, password, print, pwa, scan},
     session, state,
 };
 
@@ -103,6 +103,7 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         .route("/health", get(|| async { "ok" }))
         .merge(auth::router().with_state(auth.clone()))
         .merge(password)
+        .merge(pwa::router(auth.secure_cookies))
         .merge(administration)
         .merge(interface)
         .layer(middleware::from_fn_with_state(

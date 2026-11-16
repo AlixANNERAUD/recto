@@ -10,6 +10,7 @@ use leptos_router::hooks::use_location;
 use crate::{
     components::icons::{Icon, IconKind},
     t, tf,
+    theme::ThemeSwitch,
 };
 
 /// Where the Administration item leads; the Users and Groups pages link to each other.
@@ -191,7 +192,10 @@ pub fn Layout(
                     </span>
                     {t!("app.name")}
                 </a>
-                <div class="ml-auto flex items-center gap-2">{user}</div>
+                <div class="ml-auto flex items-center gap-2">
+                    <ThemeSwitch />
+                    {user}
+                </div>
             </div>
             // On phones the navigation stays in the sticky header, one tap away on every page.
             <nav aria-label=t!("nav.label") class="border-t px-2 py-1 md:hidden">
@@ -225,12 +229,15 @@ pub fn Bare(#[prop(into)] title: String, children: Children) -> impl IntoView {
     view! {
         <Title text=document_title />
         <main class="mx-auto grid min-h-screen max-w-md content-center gap-4 p-4">
-            <p class="flex items-center gap-2 font-semibold">
-                <span aria-hidden="true" class="bg-primary text-primary-foreground grid size-7 place-items-center rounded-md">
-                    <Icon kind=IconKind::Printer class="size-4" />
-                </span>
-                {t!("app.name")}
-            </p>
+            <div class="flex items-center justify-between gap-2">
+                <p class="flex items-center gap-2 font-semibold">
+                    <span aria-hidden="true" class="bg-primary text-primary-foreground grid size-7 place-items-center rounded-md">
+                        <Icon kind=IconKind::Printer class="size-4" />
+                    </span>
+                    {t!("app.name")}
+                </p>
+                <ThemeSwitch />
+            </div>
             <section class="bg-card grid gap-4 rounded-lg border p-6 shadow-[0_1px_2px_rgba(0,0,0,0.08)]">
                 <h1 class="text-xl font-semibold">{title}</h1>
                 {children()}

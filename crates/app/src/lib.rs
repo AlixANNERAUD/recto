@@ -33,6 +33,7 @@ pub mod pages;
 pub mod refusal;
 #[cfg(feature = "ssr")]
 pub mod state;
+pub mod theme;
 
 use leptos::prelude::*;
 use leptos_meta::{MetaTags, provide_meta_context};
@@ -91,13 +92,14 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
     #[cfg(feature = "ssr")]
     send_content_security_policy();
     let language = i18n::tag(i18n::locale());
+    let theme = theme::current();
     view! {
         <!DOCTYPE html>
-        <html lang=language>
+        <html lang=language data-theme=theme.attribute()>
             <head>
                 <meta charset="utf-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1" />
-                <meta name="color-scheme" content="light dark" />
+                <meta name="color-scheme" content=theme.color_scheme() />
                 <link rel="stylesheet" id="leptos" href="/pkg/recto.css" />
                 <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
                 <AutoReload options=options.clone() />

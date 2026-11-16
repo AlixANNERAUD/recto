@@ -46,6 +46,12 @@ administrator. The account page and its form answer `404` to users without a pas
 The Scan page and the live parts of the other pages call server functions under `/api/`. They
 are internal to the interface and may change between versions.
 
+## Theme
+
+| Method and path | Does |
+| --- | --- |
+| `POST /theme` | Public. Takes the form fields `theme` (`system`, `light` or `dark`) and `next` (a path on recto, else `/`). Stores the choice in the `recto_theme` cookie (one year, `HttpOnly`, `SameSite=Lax`, and `Secure` when the public URL is HTTPS), then redirects to `next`. `system` removes the cookie. Answers `400` for another value. |
+
 ## Sign-in
 
 | Method and path | Does |

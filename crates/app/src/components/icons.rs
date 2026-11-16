@@ -16,6 +16,10 @@ pub enum IconKind {
     Account,
     /// A shield with a check: administration.
     Administration,
+    /// The theme switch: follow the device, light, dark.
+    Desktop,
+    Sun,
+    Moon,
 }
 
 impl IconKind {
@@ -49,6 +53,12 @@ impl IconKind {
                 "M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z",
                 "M9 12l2 2 4-4",
             ],
+            IconKind::Desktop => &["M3 5h18v11H3z", "M8 20h8M12 16v4"],
+            IconKind::Sun => &[
+                "M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+                "M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4",
+            ],
+            IconKind::Moon => &["M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"],
         }
     }
 }

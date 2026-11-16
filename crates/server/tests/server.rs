@@ -2484,3 +2484,115 @@ async fn administration_forms_refuse_cross_site_posts() {
             .is_none()
     );
 }
+
+/// Every `Set-Cookie` value of a response.
+fn set_cookies(response: &Response<Body>) -> Vec<String> {
+    response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .collect()
+}
+
+#[tokio::test]
+async fn the_theme_form_sets_a_cookie_and_returns() {
+    let harness = Harness::new().await;
+    let response = harness
+        .send(form(
+            "/theme",
+            None,
+            &[("theme", "dark"), ("next", "/jobs")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&response), "/jobs");
+    let cookies = set_cookies(&response);
+    let cookie = cookies
+        .iter()
+        .find(|value| value.starts_with("recto_theme=dark"))
+        .unwrap_or_else(|| panic!("a theme cookie in {cookies:?}"));
+    for attribute in ["Path=/", "Max-Age=31536000", "SameSite=Lax", "HttpOnly"] {
+        assert!(
+            cookie.contains(attribute),
+            "{attribute} missing in {cookie}"
+        );
+    }
+    assert!(!cookie.contains("Secure"), "{cookie}");
+}
+
+#[tokio::test]
+async fn the_theme_cookie_is_secure_behind_https() {
+    let harness = Harness::with(Setup {
+        public_url: "https://recto.test/",
+        ..Setup::default()
+    })
+    .await;
+    let mut request = form("/theme", None, &[("theme", "light")]);
+    request
+        .headers_mut()
+        .insert(header::ORIGIN, "https://recto.test".parse().unwrap());
+    let response = harness.send(request).await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let cookies = set_cookies(&response);
+    assert!(
+        cookies
+            .iter()
+            .any(|value| value.starts_with("recto_theme=light") && value.contains("Secure")),
+        "{cookies:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_system_theme_clears_the_cookie() {
+    let harness = Harness::new().await;
+    let response = harness
+        .send(form("/theme", None, &[("theme", "system")]))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&response), "/");
+    let cookies = set_cookies(&response);
+    assert!(
+        cookies
+            .iter()
+            .any(|value| value.starts_with("recto_theme=;") && value.contains("Max-Age=0")),
+        "{cookies:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_theme_form_only_returns_to_local_paths() {
+    let harness = Harness::new().await;
+    let response = harness
+        .send(form(
+            "/theme",
+            None,
+            &[("theme", "light"), ("next", "//evil.example")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&response), "/");
+}
+
+#[tokio::test]
+async fn an_unknown_theme_is_refused() {
+    let harness = Harness::new().await;
+    let response = harness
+        .send(form("/theme", None, &[("theme", "purple")]))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(set_cookies(&response).is_empty());
+}
+
+#[tokio::test]
+async fn the_theme_form_refuses_cross_site_posts() {
+    let harness = Harness::new().await;
+    let mut request = form("/theme", None, &[("theme", "dark")]);
+    request
+        .headers_mut()
+        .insert("sec-fetch-site", "cross-site".parse().unwrap());
+    let response = harness.send(request).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(set_cookies(&response).is_empty());
+}

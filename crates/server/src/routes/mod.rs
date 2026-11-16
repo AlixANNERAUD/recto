@@ -4,6 +4,7 @@ pub mod administration;
 pub mod auth;
 pub mod password;
 pub mod print;
+pub mod pwa;
 pub mod scan;
 
 use axum::{

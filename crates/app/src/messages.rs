@@ -23,6 +23,10 @@ pub fn cross_site_refused(locale: Locale, origin: &str) -> String {
     )
 }
 
+pub fn unknown_theme(locale: Locale) -> &'static str {
+    t!("theme.unknown", locale = locale)
+}
+
 pub fn scan_result_not_found(locale: Locale) -> &'static str {
     t!("scan.errors.result_not_found", locale = locale)
 }

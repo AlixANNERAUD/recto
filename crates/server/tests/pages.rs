@@ -559,3 +559,66 @@ async fn preview_reads_one_page_from_the_chosen_source() {
     );
     assert_eq!(harness.scan.scan_requests().len(), 1);
 }
+
+/// The HTML of a page for a signed-in user, sent with an extra cookie.
+async fn page_with_theme(harness: &Harness, uri: &str, session: &str, theme: &str) -> String {
+    let request = Request::get(uri)
+        .header(header::ACCEPT, "text/html")
+        .header(header::COOKIE, format!("{session}; recto_theme={theme}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = harness.send(request).await;
+    assert_eq!(response.status(), StatusCode::OK, "{uri}");
+    text(response).await
+}
+
+#[tokio::test]
+async fn a_chosen_theme_is_rendered_by_the_server() {
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let html = page_with_theme(&harness, "/jobs", &cookie, "dark").await;
+    assert!(html.contains(r#"data-theme="dark""#), "{html}");
+    assert!(html.contains(r#"<meta name="color-scheme" content="dark""#));
+    assert!(
+        html.contains(r#"aria-label="Dark""#) && {
+            let at = html.find(r#"aria-label="Dark""#).unwrap();
+            let button = &html[html[..at].rfind("<button").unwrap()..];
+            button[..button.find('>').unwrap()].contains(r#"aria-pressed="true""#)
+        },
+        "the Dark button is pressed"
+    );
+}
+
+#[tokio::test]
+async fn a_junk_theme_cookie_renders_the_system_theme() {
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let html = page_with_theme(&harness, "/jobs", &cookie, "purple").await;
+    assert!(!html.contains("data-theme"), "{html}");
+    assert!(html.contains(r#"<meta name="color-scheme" content="light dark""#));
+}
+
+#[tokio::test]
+async fn the_sign_in_page_has_the_switch() {
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
+    // Without any password the page sends visitors straight to single sign-on.
+    users::create_local(
+        &harness.database,
+        users::NewLocalUser {
+            username: "alice".into(),
+            display_name: String::new(),
+            email: None,
+            password: "correct horse battery".into(),
+            is_administrator: false,
+        },
+        &recto_domain::passwords::PasswordPolicy { minimum_length: 12 },
+    )
+    .await
+    .unwrap();
+    let request = Request::get("/sign-in")
+        .header(header::ACCEPT, "text/html")
+        .body(Body::empty())
+        .unwrap();
+    let html = text(harness.send(request).await).await;
+    assert!(html.contains(r#"action="/theme""#), "{html}");
+}

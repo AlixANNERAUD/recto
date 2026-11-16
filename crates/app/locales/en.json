@@ -3,6 +3,13 @@
     "name": "recto",
     "page_title": "{page} · recto"
   },
+  "theme": {
+    "label": "Theme",
+    "system": "Follow the device",
+    "light": "Light",
+    "dark": "Dark",
+    "unknown": "Unknown theme."
+  },
   "nav": {
     "label": "Main",
     "skip": "Skip to content",
