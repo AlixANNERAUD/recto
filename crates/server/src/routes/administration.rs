@@ -908,6 +908,30 @@ async fn perform(
         if !valid_device_uri(&draft.address) {
             return Err(refuse(DevicesProblem::InvalidAddress, draft));
         }
+        // CUPS-Add-Modify-Printer would silently replace a queue of that name, whatever its
+        // case, with its jobs and settings.
+        match state.app.print.printers().await {
+            Ok(printers) => {
+                if printers
+                    .iter()
+                    .any(|printer| printer.name.eq_ignore_ascii_case(&draft.name))
+                {
+                    return Err(Box::new(Refusal {
+                        status: StatusCode::CONFLICT,
+                        problem: DevicesProblem::NameTaken,
+                        draft,
+                    }));
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "the printing service failed");
+                return Err(Box::new(Refusal {
+                    status: StatusCode::SERVICE_UNAVAILABLE,
+                    problem: DevicesProblem::CupsUnavailable,
+                    draft,
+                }));
+            }
+        }
         let printer = NewPrinter {
             name: draft.name.clone(),
             device_uri: draft.address.clone(),

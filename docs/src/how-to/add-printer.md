@@ -25,6 +25,7 @@ users have passwords.
 
 1. Open **Administration > Printers**.
 2. Under **Add a printer**, give a short **Name**: letters, digits, dots, underscores and hyphens.
+   A name already in use, whatever its case, is refused, since CUPS would replace that printer.
 3. Give the **Address** of the printer, such as `ipp://192.168.1.60/ipp/print`. The schemes are
    `ipp`, `ipps`, `http`, `https`, `socket`, `lpd`, `dnssd` and `usb`. Give the printer a fixed
    address in your router, since CUPS keeps this one. An address with a user name or password

@@ -145,6 +145,8 @@ pub enum DevicesProblem {
     InvalidName,
     /// The printer address is not one recto sends to CUPS.
     InvalidAddress,
+    /// A printer of that name, whatever its case, is already in CUPS.
+    NameTaken,
     /// The removal was not confirmed.
     NeedsConfirmation,
     /// CUPS does not let recto administer it.
@@ -166,6 +168,7 @@ impl DevicesProblem {
             DevicesProblem::Unavailable => t!("administration.devices.errors.unavailable"),
             DevicesProblem::InvalidName => t!("administration.printers.errors.invalid_name"),
             DevicesProblem::InvalidAddress => t!("administration.printers.errors.invalid_address"),
+            DevicesProblem::NameTaken => t!("administration.printers.errors.name_taken"),
             DevicesProblem::NeedsConfirmation => {
                 t!("administration.printers.errors.needs_confirmation")
             }

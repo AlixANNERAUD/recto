@@ -3526,6 +3526,42 @@ async fn bad_names_and_addresses_are_refused() {
 }
 
 #[tokio::test]
+async fn adding_never_replaces_a_printer() {
+    let (harness, admin) = managed_harness().await;
+    // CUPS finds queues whatever the case, so `Office` would replace `office`.
+    let response = harness
+        .send(form(
+            "/administration/printers/add",
+            Some(&admin),
+            &add_form("Office", "ipp://192.168.1.20/ipp/print"),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let html = text(response).await;
+    assert!(
+        html.contains("A printer with this name already exists."),
+        "{html}"
+    );
+    // What was typed is kept.
+    assert!(html.contains("ipp://192.168.1.20/ipp/print"), "{html}");
+    assert!(harness.admin.calls().is_empty());
+
+    // Without the list, recto cannot tell, so it does not add.
+    harness.print.set_unavailable("stopped");
+    let response = harness
+        .send(form(
+            "/administration/printers/add",
+            Some(&admin),
+            &add_form("lab", "ipp://192.168.1.20/ipp/print"),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let html = text(response).await;
+    assert!(html.contains("CUPS did not answer. Try again"), "{html}");
+    assert!(harness.admin.calls().is_empty());
+}
+
+#[tokio::test]
 async fn an_unreachable_printer_is_reported() {
     let (harness, admin) = managed_harness().await;
     harness
