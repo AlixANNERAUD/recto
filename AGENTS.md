@@ -34,6 +34,8 @@ Everything goes through [mise](https://mise.jdx.dev), which pins the toolchain.
 | `mise run dev` | Development server on http://127.0.0.1:3000 with mocked printers and scanners and a signed-in dev user (debug builds only) |
 | `mise run build` | Release binary and site |
 | `mise run docs` | The user guide (mdBook, `docs/`) into `docs/book` |
+| `mise run sbom` | The CycloneDX SBOM of the server into `crates/server/sbom.json` |
+| `mise run coverage` | The test suite with coverage, into `lcov.info` |
 
 Builds are heavy: run one cargo command at a time.
 
