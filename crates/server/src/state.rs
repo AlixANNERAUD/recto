@@ -3,7 +3,7 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use recto_app::{pages::sign_in::SignInMethods, state::AppState};
+use recto_app::{branding::Branding, pages::sign_in::SignInMethods, state::AppState};
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::passwords::{self, PasswordPolicy};
 use recto_printing::Cups;
@@ -142,6 +142,7 @@ pub async fn build(
     config: &Config,
     leptos_options: leptos::config::LeptosOptions,
     database: DatabaseConnection,
+    branding: Branding,
 ) -> (AppState, AuthState) {
     let dir = results_dir().unwrap_or_else(|error| {
         // Scanning reports the storage error when it is used; printing must not suffer.
@@ -158,6 +159,7 @@ pub async fn build(
         max_upload_size: config.max_upload_size,
         leptos_options,
         database: database.clone(),
+        branding: Arc::new(branding),
     };
     let openid = config
         .oidc_issuer

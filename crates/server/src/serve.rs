@@ -34,6 +34,7 @@ use crate::session_store::DatabaseSessionStore;
 
 pub use crate::state::AuthState;
 use crate::{
+    branding,
     config::Config,
     routes::{administration, auth, password, print, pwa, scan},
     session, state,
@@ -78,6 +79,8 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         Some(excluded.into_iter().map(str::to_owned).collect()),
     );
     let shell_options = state.leptos_options.clone();
+    let branding = Arc::clone(&state.branding);
+    let name: Arc<str> = branding.name.as_str().into();
     let body_limit = state.max_upload_size.saturating_add(print::FORM_SLACK);
     let methods = auth.sign_in_methods();
     let context = move || provide_context(methods);
@@ -103,7 +106,7 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         .route("/health", get(|| async { "ok" }))
         .merge(auth::router().with_state(auth.clone()))
         .merge(password)
-        .merge(pwa::router(auth.secure_cookies))
+        .merge(pwa::router(branding, auth.secure_cookies))
         .merge(administration)
         .merge(interface)
         .layer(middleware::from_fn_with_state(
@@ -112,7 +115,7 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         ))
         .layer(session::layer(auth.sessions.clone(), auth.secure_cookies))
         .layer(middleware::from_fn_with_state(
-            AllowedOrigin::new(&auth.public_url),
+            (AllowedOrigin::new(&auth.public_url), name),
             refuse_cross_site,
         ))
         .layer(middleware::from_fn(security_headers))
@@ -143,7 +146,7 @@ async fn security_headers(request: Request, next: Next) -> Response {
 
 /// Rejects cross-site state-changing requests with 403 (see [`csrf::allowed`]).
 async fn refuse_cross_site(
-    State(origin): State<AllowedOrigin>,
+    State((origin, name)): State<(AllowedOrigin, Arc<str>)>,
     request: Request,
     next: Next,
 ) -> Response {
@@ -156,20 +159,23 @@ async fn refuse_cross_site(
         "cross-site request refused"
     );
     let locale = recto_app::i18n::from_headers(request.headers());
-    let message = recto_app::messages::cross_site_refused(locale, origin.as_str());
+    let message = recto_app::messages::cross_site_refused(locale, &name, origin.as_str());
     (StatusCode::FORBIDDEN, message).into_response()
 }
 
-/// Opens and migrates the database, then serves until ctrl-c or SIGTERM; requests in flight
-/// finish. A database that cannot be opened stops recto before anything else starts.
+/// Loads the branding, opens and migrates the database, then serves until ctrl-c or SIGTERM;
+/// requests in flight finish. Branding that is not valid or a database that cannot be opened
+/// stops recto before anything else starts.
 pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let address = config.listen_address;
+    let branding = branding::load(&config.brand)?;
     let database = state::open_database(&config.database_url).await?;
     #[cfg_attr(
         not(all(feature = "dev-mocks", debug_assertions)),
         expect(unused_mut, reason = "only the development mocks change the state")
     )]
-    let (mut state, auth) = state::build(&config, leptos_options(&config), database).await;
+    let (mut state, auth) =
+        state::build(&config, leptos_options(&config), database, branding).await;
     #[cfg(all(feature = "dev-mocks", debug_assertions))]
     let dev_user = if crate::dev::requested(std::env::var("RECTO_DEV_MOCKS").ok().as_deref()) {
         let user = crate::dev::apply(&mut state).await?;

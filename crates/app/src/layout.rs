@@ -1,5 +1,5 @@
-//! The frame around every signed-in page: a header with the app name, the user (a link to the
-//! Account page for users with a password) and Sign out, and the navigation. On phones the
+//! The frame around every signed-in page: a header with the app's logo and name, the user (a link
+//! to the Account page for users with a password) and Sign out, and the navigation. On phones the
 //! navigation is a row of icons under the header; from the `md` breakpoint it becomes a rail on
 //! the side, as in Fluent's navigation drawer.
 
@@ -8,6 +8,7 @@ use leptos_meta::Title;
 use leptos_router::hooks::use_location;
 
 use crate::{
+    branding::{app_name, has_logo},
     components::icons::{Icon, IconKind},
     t, tf,
     theme::ThemeSwitch,
@@ -95,6 +96,21 @@ const NAV_ITEM: &str = "relative flex flex-col items-center gap-0.5 rounded-md p
 const NAV_CURRENT: &str = "text-brand bg-brand-subtle hover:bg-brand-subtle";
 const NAV_INDICATOR: &str = "absolute bg-brand rounded-full bottom-0 left-1/4 right-1/4 h-[3px] md:left-0 md:right-auto md:top-1/4 md:bottom-1/4 md:h-auto md:w-[3px]";
 
+/// The operator's logo, else the printer glyph on the accent. Decoration: the name follows it.
+#[component]
+fn Mark() -> impl IntoView {
+    if has_logo() {
+        view! { <img src="/brand/logo" alt="" class="h-7 w-auto max-w-32 shrink-0" /> }.into_any()
+    } else {
+        view! {
+            <span aria-hidden="true" class="bg-primary text-primary-foreground grid size-7 shrink-0 place-items-center rounded-md">
+                <Icon kind=IconKind::Printer class="size-4" />
+            </span>
+        }
+        .into_any()
+    }
+}
+
 /// `title` is the page's heading, and its document title unless `document_title` is given, for
 /// pages that share a heading.
 #[component]
@@ -174,7 +190,8 @@ pub fn Layout(
     });
     let document_title = tf!(
         "app.page_title",
-        page = document_title.unwrap_or_else(|| title.clone())
+        page = document_title.unwrap_or_else(|| title.clone()),
+        name = app_name()
     );
     view! {
         <Title text=document_title />
@@ -186,11 +203,10 @@ pub fn Layout(
         </a>
         <header class="bg-card sticky top-0 z-20 border-b">
             <div class="flex h-12 items-center gap-3 px-4">
-                <a href="/" class="flex items-center gap-2 font-semibold">
-                    <span aria-hidden="true" class="bg-primary text-primary-foreground grid size-7 place-items-center rounded-md">
-                        <Icon kind=IconKind::Printer class="size-4" />
-                    </span>
-                    {t!("app.name")}
+                // A long brand name gives way to the user's controls.
+                <a href="/" class="flex min-w-0 items-center gap-2 font-semibold">
+                    <Mark />
+                    <span class="truncate">{app_name()}</span>
                 </a>
                 <div class="ml-auto flex items-center gap-2">
                     <ThemeSwitch />
@@ -221,20 +237,18 @@ pub fn Layout(
     .into_any()
 }
 
-/// The frame of the pages shown without a signed-in user (sign-in errors, no access): the app
-/// name and one centered card.
+/// The frame of the pages shown without a signed-in user (sign-in errors, no access): the app's
+/// logo and name and one centered card.
 #[component]
 pub fn Bare(#[prop(into)] title: String, children: Children) -> impl IntoView {
-    let document_title = tf!("app.page_title", page = title.clone());
+    let document_title = tf!("app.page_title", page = title.clone(), name = app_name());
     view! {
         <Title text=document_title />
         <main class="mx-auto grid min-h-screen max-w-md content-center gap-4 p-4">
             <div class="flex items-center justify-between gap-2">
-                <p class="flex items-center gap-2 font-semibold">
-                    <span aria-hidden="true" class="bg-primary text-primary-foreground grid size-7 place-items-center rounded-md">
-                        <Icon kind=IconKind::Printer class="size-4" />
-                    </span>
-                    {t!("app.name")}
+                <p class="flex min-w-0 items-center gap-2 font-semibold">
+                    <Mark />
+                    <span class="truncate">{app_name()}</span>
                 </p>
                 <ThemeSwitch />
             </div>

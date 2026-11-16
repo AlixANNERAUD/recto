@@ -9,7 +9,7 @@
 //! build.
 //!
 //! ```ignore
-//! let label = t!("app.name");
+//! let label = t!("nav.print");
 //! let notice = tf!("notices.sent", name = file_name);
 //! let pages = tp!("print.pages", page_count);
 //! ```

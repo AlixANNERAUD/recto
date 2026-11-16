@@ -15,11 +15,16 @@ pub fn sign_in_required(locale: Locale) -> &'static str {
 }
 
 /// Why a form or action was refused as cross-site. Most often recto was opened at another
-/// address than its public URL (`origin`), such as its LAN address.
-pub fn cross_site_refused(locale: Locale, origin: &str) -> String {
+/// address than its public URL (`origin`), such as its LAN address. `name` is the app's name.
+pub fn cross_site_refused(locale: Locale, name: &str, origin: &str) -> String {
     format!(
         "{}",
-        t!("auth.cross_site_refused", origin = origin, locale = locale)
+        t!(
+            "auth.cross_site_refused",
+            name = name,
+            origin = origin,
+            locale = locale
+        )
     )
 }
 
@@ -35,8 +40,9 @@ pub fn save_disabled(locale: Locale) -> &'static str {
     t!("scan.errors.save_disabled", locale = locale)
 }
 
-/// What went wrong while scanning or storing a scan, readable by the user.
-pub fn scan_error(error: &ScanError, locale: Locale) -> String {
+/// What went wrong while scanning or storing a scan, readable by the user. `name` is the app's
+/// name.
+pub fn scan_error(error: &ScanError, name: &str, locale: Locale) -> String {
     match error {
         ScanError::Busy => t!("scan.errors.busy", locale = locale).to_owned(),
         ScanError::NotFound(_) => t!("scan.errors.not_found", locale = locale).to_owned(),
@@ -51,7 +57,10 @@ pub fn scan_error(error: &ScanError, locale: Locale) -> String {
             "{}",
             t!("scan.errors.device", reason = reason, locale = locale)
         ),
-        ScanError::TooLarge => t!("scan.errors.too_large", locale = locale).to_owned(),
+        ScanError::TooLarge => format!(
+            "{}",
+            t!("scan.errors.too_large", name = name, locale = locale)
+        ),
         ScanError::Interrupted => t!("scan.errors.interrupted", locale = locale).to_owned(),
         ScanError::Encoding(reason) => format!(
             "{}",
@@ -80,7 +89,7 @@ mod tests {
             reason: "permission denied".into(),
         };
         assert_eq!(
-            scan_error(&error, crate::i18n::default_locale()),
+            scan_error(&error, "recto", crate::i18n::default_locale()),
             "Cannot write to /scans: permission denied"
         );
     }
@@ -89,12 +98,15 @@ mod tests {
     fn interruptions_and_refusals_are_translated() {
         let locale = crate::i18n::default_locale();
         assert_eq!(
-            scan_error(&ScanError::Interrupted, locale),
+            scan_error(&ScanError::Interrupted, "recto", locale),
             "The scan stopped unexpectedly. Try again."
         );
         assert!(
-            cross_site_refused(locale, "https://recto.example.org")
-                .contains("Open recto at https://recto.example.org")
+            cross_site_refused(locale, "Maison", "https://recto.example.org")
+                .contains("Open Maison at https://recto.example.org")
+        );
+        assert!(
+            scan_error(&ScanError::TooLarge, "Maison", locale).contains("too large for Maison")
         );
     }
 }

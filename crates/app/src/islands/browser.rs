@@ -12,7 +12,7 @@ mod imp {
     use wasm_bindgen::{JsCast, JsValue, closure::Closure};
     use wasm_bindgen_futures::JsFuture;
 
-    use crate::t;
+    use crate::{branding::app_name, t, tf};
 
     pub fn check_file(event: &ev::Event, max_size: usize) -> Option<(bool, bool)> {
         let input = event
@@ -76,7 +76,7 @@ mod imp {
     }
 
     pub async fn save_scan(id: Uuid) -> Result<String, String> {
-        let failed = || t!("common.network_error").to_string();
+        let failed = || tf!("common.network_error", name = app_name());
         let init = web_sys::RequestInit::new();
         init.set_method("POST");
         // A same-origin fetch sends the session cookie, and the browser adds the `Origin` and

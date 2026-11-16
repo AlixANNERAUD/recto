@@ -12,9 +12,12 @@ use axum::{
     http::{HeaderMap, Request, Response, StatusCode, header},
 };
 use leptos::config::LeptosOptions;
-use recto::serve::{AuthState, router};
 use recto::session::SignInMethod;
 use recto::session_store::DatabaseSessionStore;
+use recto::{
+    branding::{BrandFile, Branding, default_branding},
+    serve::{AuthState, router},
+};
 use recto_app::state::AppState;
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::{
@@ -43,6 +46,8 @@ const ORIGIN: &str = "http://recto.test";
 const UNREACHABLE_ISSUER: &str = "http://127.0.0.1:9/";
 const PDF: &[u8] = b"%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n";
 const PNG: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
+/// A file of the site root, which the fallback serves to anyone.
+const STYLESHEET: &str = "body{}";
 
 fn office() -> Printer {
     Printer {
@@ -74,6 +79,7 @@ struct Setup {
     database: Option<DatabaseConnection>,
     local_accounts: bool,
     trust_forwarded_headers: bool,
+    branding: Branding,
 }
 
 impl Default for Setup {
@@ -87,6 +93,7 @@ impl Default for Setup {
             database: None,
             local_accounts: true,
             trust_forwarded_headers: false,
+            branding: default_branding(),
         }
     }
 }
@@ -129,8 +136,8 @@ impl Harness {
             setup.result_ttl,
         ));
         let site = dir.path().join("site");
-        std::fs::create_dir_all(&site).unwrap();
-        std::fs::write(site.join("favicon.svg"), "<svg/>").unwrap();
+        std::fs::create_dir_all(site.join("pkg")).unwrap();
+        std::fs::write(site.join("pkg/recto.css"), STYLESHEET).unwrap();
         let state = AppState {
             print: print.clone(),
             scan: Arc::new(MockScannerService::default()),
@@ -142,6 +149,7 @@ impl Harness {
                 .site_root(site.to_string_lossy().into_owned())
                 .build(),
             database: database.clone(),
+            branding: Arc::new(setup.branding),
         };
         let public_url = Url::parse(setup.public_url).unwrap();
         let openid = setup.issuer.map(|issuer| {
@@ -1106,7 +1114,7 @@ async fn responses_carry_security_headers() {
     // Everything else cannot be framed or sniffed either.
     for request in [
         get("/health"),
-        get("/favicon.svg"),
+        get("/pkg/recto.css"),
         page("/auth/signed-out", None),
     ] {
         let response = harness.send(request).await;
@@ -1171,9 +1179,9 @@ async fn fallback_never_renders_the_interface_for_anonymous_visitors() {
     assert!(!text(response).await.contains("<html"));
 
     // Assets stay public.
-    let response = harness.send(get("/favicon.svg")).await;
+    let response = harness.send(get("/pkg/recto.css")).await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(text(response).await, "<svg/>");
+    assert_eq!(text(response).await, STYLESHEET);
 
     // A signed-in user gets the interface's not-found page.
     let cookie = harness.sign_in("alice-subject", "alice").await;
@@ -2595,4 +2603,83 @@ async fn the_theme_form_refuses_cross_site_posts() {
     let response = harness.send(request).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert!(set_cookies(&response).is_empty());
+}
+
+#[tokio::test]
+async fn brand_icons_are_public() {
+    let harness = Harness::new().await;
+    for path in [
+        "/brand/icon-192.png",
+        "/brand/icon-512.png",
+        "/brand/icon-maskable-512.png",
+        "/brand/apple-touch-icon.png",
+    ] {
+        let response = harness.send(get(path)).await;
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let headers = response.headers();
+        assert_eq!(headers[header::CONTENT_TYPE], "image/png", "{path}");
+        assert_eq!(
+            headers[header::CACHE_CONTROL],
+            "public, max-age=3600",
+            "{path}"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(body.starts_with(&PNG[..8]), "{path}");
+    }
+}
+
+#[tokio::test]
+async fn without_a_logo_there_is_none() {
+    let harness = Harness::new().await;
+    let response = harness.send(get("/brand/logo")).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn an_svg_logo_is_sandboxed() {
+    const SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>"#;
+    let harness = Harness::with(Setup {
+        branding: Branding {
+            logo: Some(BrandFile {
+                bytes: axum::body::Bytes::from_static(SVG.as_bytes()),
+                content_type: "image/svg+xml",
+            }),
+            ..default_branding()
+        },
+        ..Setup::default()
+    })
+    .await;
+    let response = harness.send(get("/brand/logo")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    assert_eq!(headers[header::CONTENT_TYPE], "image/svg+xml");
+    assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=3600");
+    let policy = headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+    for directive in ["sandbox", "default-src 'none'", "frame-ancestors 'none'"] {
+        assert!(policy.contains(directive), "{policy}");
+    }
+    assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    assert_eq!(text(response).await, SVG);
+}
+
+#[tokio::test]
+async fn a_cross_site_refusal_names_the_brand() {
+    let harness = Harness::with(Setup {
+        branding: Branding {
+            name: "Maison".into(),
+            ..default_branding()
+        },
+        ..Setup::default()
+    })
+    .await;
+    let request = Request::post("/theme")
+        .header(header::ORIGIN, "http://evil.test")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("theme=dark"))
+        .unwrap();
+    let response = harness.send(request).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(text(response).await.contains("Open Maison at"));
 }

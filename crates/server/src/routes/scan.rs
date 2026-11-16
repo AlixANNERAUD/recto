@@ -75,7 +75,7 @@ pub async fn save(
         }
         Err(error) => {
             tracing::warn!(%error, "saving a scan failed");
-            let message = messages::scan_error(&error, locale);
+            let message = messages::scan_error(&error, &state.branding.name, locale);
             failure(StatusCode::INTERNAL_SERVER_ERROR, message).into_response()
         }
     }

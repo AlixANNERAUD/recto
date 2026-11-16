@@ -3840,6 +3840,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "image",
  "leptos",
  "leptos_axum",
  "recto-app",

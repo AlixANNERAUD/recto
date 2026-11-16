@@ -1,7 +1,6 @@
 {
   "app": {
-    "name": "recto",
-    "page_title": "{page} · recto"
+    "page_title": "{page} · {name}"
   },
   "theme": {
     "label": "Theme",
@@ -24,7 +23,7 @@
     "account_of": "Account of {name}"
   },
   "common": {
-    "network_error": "Could not reach recto. Check your connection and try again."
+    "network_error": "Could not reach {name}. Check your connection and try again."
   },
   "time": {
     "just_now": "just now",
@@ -51,7 +50,7 @@
     "session_ended": "You were signed out, so this list no longer updates.",
     "signed_out_notice": "You were signed out. Reload the page to sign in again.",
     "sign_in_again": "Sign in again",
-    "cross_site_refused": "This request did not come from recto's own pages, so it was refused. Open recto at {origin} and try again.",
+    "cross_site_refused": "This request did not come from {name}'s own pages, so it was refused. Open {name} at {origin} and try again.",
     "sign_in": "Sign in",
     "sign_out": "Sign out",
     "errors": {
@@ -62,8 +61,8 @@
       "retry": "Try again"
     },
     "no_access": {
-      "heading": "No access to recto",
-      "body": "You are signed in, but your account does not have the role needed to use recto. Ask whoever runs it for access, or sign out and use another account."
+      "heading": "No access to {name}",
+      "body": "You are signed in, but your account does not have the role needed to use {name}. Ask whoever runs it for access, or sign out and use another account."
     },
     "signed_out": {
       "heading": "You are signed out",
@@ -346,9 +345,9 @@
       "cover_open": "The scanner cover is open.",
       "unsupported": "The scanner does not support this: {what}",
       "device": "Scanner error: {reason}",
-      "too_large": "This scan would be too large for recto. Lower the resolution or select a smaller area.",
+      "too_large": "This scan would be too large for {name}. Lower the resolution or select a smaller area.",
       "interrupted": "The scan stopped unexpectedly. Try again.",
-      "connection_lost": "The connection to recto was cut before the scan finished. The scan may still be finishing, but its result is lost: scan again in a moment. If recto is behind a reverse proxy, raise the proxy's read timeout.",
+      "connection_lost": "The connection to {name} was cut before the scan finished. The scan may still be finishing, but its result is lost: scan again in a moment. If {name} is behind a reverse proxy, raise the proxy's read timeout.",
       "encoding": "The scan could not be encoded: {reason}",
       "result_not_found": "This scan does not exist or has expired.",
       "save_disabled": "Saving to a folder is not set up.",

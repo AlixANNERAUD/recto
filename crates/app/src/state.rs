@@ -12,6 +12,8 @@ use recto_printing::PrintService;
 use recto_scanning::{ResultStore, ScannerService};
 use sea_orm::DatabaseConnection;
 
+use crate::branding::Branding;
+
 /// The services behind the interface. Trait objects, so tests swap in mocks.
 #[derive(Clone)]
 pub struct AppState {
@@ -27,6 +29,8 @@ pub struct AppState {
     pub leptos_options: LeptosOptions,
     /// The accounts database, which the server opens and migrates (crate `recto-domain`).
     pub database: DatabaseConnection,
+    /// The name, colors, logo and icons the operator chose.
+    pub branding: Arc<Branding>,
 }
 
 /// The signed-in user of a request, read from the accounts database on every request, so that

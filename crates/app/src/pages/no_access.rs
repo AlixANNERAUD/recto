@@ -3,13 +3,13 @@
 use leptos::prelude::*;
 
 use super::auth::SignOutButton;
-use crate::{layout::Bare, t};
+use crate::{branding::app_name, layout::Bare, tf};
 
 #[component]
 pub fn NoAccessPage() -> impl IntoView {
     view! {
-        <Bare title=t!("auth.no_access.heading")>
-            <p>{t!("auth.no_access.body")}</p>
+        <Bare title=tf!("auth.no_access.heading", name = app_name())>
+            <p>{tf!("auth.no_access.body", name = app_name())}</p>
             <SignOutButton />
         </Bare>
     }

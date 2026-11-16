@@ -10,9 +10,12 @@ use axum::{
     http::{Request, Response, StatusCode, header},
 };
 use leptos::config::LeptosOptions;
-use recto::serve::{AuthState, router};
 use recto::session::SignInMethod;
 use recto::session_store::DatabaseSessionStore;
+use recto::{
+    branding::{BrandOptions, Branding, default_branding},
+    serve::{AuthState, router},
+};
 use recto_app::state::AppState;
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::{
@@ -80,6 +83,10 @@ struct Harness {
 
 impl Harness {
     async fn new(printers: Vec<Printer>, jobs: Vec<Job>) -> Self {
+        Self::branded(printers, jobs, default_branding()).await
+    }
+
+    async fn branded(printers: Vec<Printer>, jobs: Vec<Job>, branding: Branding) -> Self {
         let database = recto_domain::testing::database().await;
         let dir = temporary_directory();
         let print = Arc::new(
@@ -104,6 +111,7 @@ impl Harness {
                 .site_root(site.to_string_lossy().into_owned())
                 .build(),
             database: database.clone(),
+            branding: Arc::new(branding),
         };
         let public_url = Url::parse(PUBLIC_URL).unwrap();
         let openid = OpenId::new(OpenIdSettings {
@@ -621,4 +629,122 @@ async fn the_sign_in_page_has_the_switch() {
         .unwrap();
     let html = text(harness.send(request).await).await;
     assert!(html.contains(r#"action="/theme""#), "{html}");
+}
+
+/// The branding of `options` over the defaults.
+fn branding(change: impl FnOnce(&mut BrandOptions)) -> Branding {
+    let mut options = BrandOptions::default();
+    change(&mut options);
+    recto::branding::load(&options).unwrap()
+}
+
+/// The sign-in page for an anonymous visitor. A local account must exist, or the page sends
+/// visitors to single sign-on.
+async fn sign_in_page(harness: &Harness) -> String {
+    users::create_local(
+        &harness.database,
+        users::NewLocalUser {
+            username: "bob".into(),
+            display_name: String::new(),
+            email: None,
+            password: "correct horse battery".into(),
+            is_administrator: false,
+        },
+        &recto_domain::passwords::PasswordPolicy { minimum_length: 12 },
+    )
+    .await
+    .unwrap();
+    let request = Request::get("/sign-in")
+        .header(header::ACCEPT, "text/html")
+        .body(Body::empty())
+        .unwrap();
+    let response = harness.send(request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    text(response).await
+}
+
+#[tokio::test]
+async fn the_brand_name_is_in_the_header_and_titles() {
+    let harness = Harness::branded(
+        vec![kitchen()],
+        vec![],
+        branding(|o| {
+            o.brand_name = "Maison".into();
+            o.brand_short_name = Some("Mai".into());
+        }),
+    )
+    .await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let html = harness.page("/printers", &cookie).await;
+    let header = &html[html.find("<header").unwrap()..html.find("</header>").unwrap()];
+    assert!(header.contains("Maison"), "{header}");
+    assert!(html.contains("<title>Printers · Maison</title>"), "{html}");
+    assert!(html.contains(r#"<meta name="application-name" content="Maison""#));
+    assert!(html.contains(r#"<meta name="apple-mobile-web-app-title" content="Mai""#));
+    assert!(!html.contains("· recto"), "{html}");
+    // Without a logo, the glyph stays.
+    assert!(!html.contains(r#"src="/brand/logo""#), "{html}");
+    assert!(html.contains(r#"<link rel="icon" href="/brand/icon-192.png""#));
+    assert!(html.contains(r#"<link rel="apple-touch-icon" href="/brand/apple-touch-icon.png""#));
+}
+
+#[tokio::test]
+async fn a_logo_replaces_the_glyph() {
+    let logo = recto::branding::BrandFile {
+        bytes: axum::body::Bytes::from_static(b"<svg/>"),
+        content_type: "image/svg+xml",
+    };
+    let harness = Harness::branded(
+        vec![kitchen()],
+        vec![],
+        Branding {
+            logo: Some(logo),
+            ..default_branding()
+        },
+    )
+    .await;
+    let image = r#"<img src="/brand/logo" alt="""#;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let html = harness.page("/printers", &cookie).await;
+    let header = &html[html.find("<header").unwrap()..html.find("</header>").unwrap()];
+    assert!(header.contains(image), "{header}");
+    assert!(sign_in_page(&harness).await.contains(image));
+}
+
+#[tokio::test]
+async fn an_accent_is_inlined_and_the_default_is_not() {
+    let harness = Harness::branded(
+        vec![kitchen()],
+        vec![],
+        branding(|o| o.brand_color = "#8A2BE2".into()),
+    )
+    .await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let html = harness.page("/printers", &cookie).await;
+    let head = &html[..html.find("</head>").unwrap()];
+    let style = head.find("<style>").expect("an inline style");
+    assert!(head.find("/pkg/recto.css").unwrap() < style, "{head}");
+    assert!(head[style..].contains("--primary:#8a2be2;"), "{head}");
+    assert!(head.contains(r#":root[data-theme="dark"]{"#), "{head}");
+    assert!(head.contains(r##"<meta name="theme-color" content="#8a2be2""##));
+
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let html = harness.page("/printers", &cookie).await;
+    assert!(!html.contains("<style"), "{html}");
+    assert!(html.contains(r##"<meta name="theme-color" content="#0f6cbd""##));
+}
+
+#[tokio::test]
+async fn the_sign_in_page_carries_the_brand() {
+    let harness = Harness::branded(
+        vec![kitchen()],
+        vec![],
+        branding(|o| o.brand_name = "Maison".into()),
+    )
+    .await;
+    let html = sign_in_page(&harness).await;
+    assert!(html.contains("<title>Sign in · Maison</title>"), "{html}");
+    let main = &html[html.find("<main").unwrap()..];
+    assert!(main.contains("Maison"), "{main}");
 }

@@ -75,6 +75,26 @@ all = { level = "warn", priority = -1 }
 [profile.dev.package."*"]
 debug = false
 
+# The server draws, resizes and encodes its icons at startup, which every test of the router
+# repeats; unoptimized, the image code takes a second there.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.flate2]
+opt-level = 3
+
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
+[profile.dev.package.crc32fast]
+opt-level = 3
+
 # Leptos views are nested generic types; their full debug information made linking the test
 # binaries need several gigabytes. Line tables keep backtraces readable.
 [profile.dev.package.recto-app]

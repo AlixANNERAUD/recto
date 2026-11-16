@@ -173,7 +173,11 @@ mod server {
 
         pub fn scan_failure(&self, error: &ScanError) -> ServerFnError {
             tracing::warn!(%error, user = self.user.username, "scanning failed");
-            ServerFnError::new(messages::scan_error(error, self.locale))
+            ServerFnError::new(messages::scan_error(
+                error,
+                &self.state.branding.name,
+                self.locale,
+            ))
         }
 
         /// Assembles the pages into the file and keeps it for the user. Both block, so they run

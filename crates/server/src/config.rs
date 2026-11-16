@@ -6,6 +6,8 @@ use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use recto_domain::passwords;
 use url::Url;
 
+use crate::branding::BrandOptions;
+
 /// Where the database is when `RECTO_DATABASE_URL` is not set: the container's data volume.
 pub const DEFAULT_DATABASE_URL: &str = "sqlite:///data/recto.db";
 
@@ -89,6 +91,9 @@ pub struct Config {
     pub site_root: PathBuf,
     #[arg(long, env = "RECTO_LOG_FORMAT", value_enum, default_value = "json")]
     pub log_format: LogFormat,
+    /// The name, colors, logo and icons; checked when the server starts (`branding::load`).
+    #[command(flatten)]
+    pub brand: BrandOptions,
 }
 
 impl Config {
@@ -104,17 +109,23 @@ impl Config {
             &mut config.oidc_administrator_claim,
             &mut config.oidc_administrator_value,
             &mut config.oidc_groups_claim,
+            &mut config.brand.brand_short_name,
         ] {
             if value.as_deref().is_some_and(|text| text.trim().is_empty()) {
                 *value = None;
             }
         }
-        if config
-            .scan_output_dir
-            .as_ref()
-            .is_some_and(|path| path.as_os_str().is_empty())
-        {
-            config.scan_output_dir = None;
+        for path in [
+            &mut config.scan_output_dir,
+            &mut config.brand.brand_logo,
+            &mut config.brand.brand_icon,
+        ] {
+            if path
+                .as_ref()
+                .is_some_and(|path| path.as_os_str().is_empty())
+            {
+                *path = None;
+            }
         }
         let invalid = |message: &str| {
             Err(clap::Error::raw(
@@ -203,7 +214,7 @@ fn parse_cups_url(value: &str) -> Result<Url, url::ParseError> {
 
 /// Accepts the empty string, which an unset-but-declared environment variable produces; it is
 /// turned into an absent value afterwards.
-fn parse_path(value: &str) -> Result<PathBuf, std::convert::Infallible> {
+pub(crate) fn parse_path(value: &str) -> Result<PathBuf, std::convert::Infallible> {
     Ok(PathBuf::from(value))
 }
 
@@ -511,10 +522,32 @@ mod tests {
             "  ",
             "--scan-output-dir",
             "",
+            "--brand-short-name",
+            " ",
+            "--brand-logo",
+            "",
+            "--brand-icon",
+            "",
         ])
         .unwrap();
         assert_eq!(config.oidc_required_claim, None);
         assert_eq!(config.oidc_required_value, None);
         assert_eq!(config.scan_output_dir, None);
+        assert_eq!(config.brand.brand_short_name, None);
+        assert_eq!(config.brand.brand_logo, None);
+        assert_eq!(config.brand.brand_icon, None);
+    }
+
+    #[test]
+    fn branding_defaults_to_recto() {
+        let config = parse(&[]).unwrap();
+        assert_eq!(config.brand.brand_name, "recto");
+        assert_eq!(config.brand.brand_color, "#0f6cbd");
+        let config = parse(&["--brand-name", "Maison", "--brand-logo", "/brand/logo.svg"]).unwrap();
+        assert_eq!(config.brand.brand_name, "Maison");
+        assert_eq!(
+            config.brand.brand_logo.as_deref(),
+            Some(std::path::Path::new("/brand/logo.svg"))
+        );
     }
 }

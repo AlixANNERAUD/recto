@@ -9,6 +9,7 @@ use recto_scanning::{
 
 use super::browser;
 use crate::{
+    branding::app_name,
     components::{
         Failure, error_text, failure,
         icons::{Icon, IconKind},
@@ -28,7 +29,7 @@ const SLOW_REQUEST_SECONDS: i64 = 20;
 fn scan_error_text(error: &ServerFnError, seconds: i64) -> String {
     match failure(error) {
         Failure::Connection if seconds >= SLOW_REQUEST_SECONDS => {
-            t!("scan.errors.connection_lost").to_string()
+            tf!("scan.errors.connection_lost", name = app_name())
         }
         _ => error_text(error),
     }
@@ -672,7 +673,10 @@ mod tests {
         let dropped = ServerFnError::Request("network error".into());
         assert!(scan_error_text(&dropped, 100).contains("read timeout"));
         // A quick failure is an ordinary network error, and recto's own refusals stay as they are.
-        assert_eq!(scan_error_text(&dropped, 1), t!("common.network_error"));
+        assert_eq!(
+            scan_error_text(&dropped, 1),
+            "Could not reach recto. Check your connection and try again."
+        );
         let busy = ServerFnError::new("The scanner is busy.");
         assert_eq!(scan_error_text(&busy, 90), "The scanner is busy.");
     }

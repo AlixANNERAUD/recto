@@ -6,7 +6,7 @@ pub mod ui;
 
 use leptos::prelude::*;
 
-use crate::{messages::SIGNED_OUT, t};
+use crate::{branding::app_name, messages::SIGNED_OUT, t, tf};
 
 /// How a server function call failed, as far as the browser can tell.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,7 +34,7 @@ pub fn error_text(error: &ServerFnError) -> String {
     match failure(error) {
         Failure::SignedOut => t!("auth.signed_out_notice").to_string(),
         Failure::Refused(message) => message,
-        Failure::Connection => t!("common.network_error").to_string(),
+        Failure::Connection => tf!("common.network_error", name = app_name()),
     }
 }
 

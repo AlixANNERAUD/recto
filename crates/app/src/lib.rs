@@ -22,6 +22,7 @@ embedded_i18n::i18n!(
     strict = true
 );
 
+pub mod branding;
 pub mod components;
 pub mod display;
 pub mod functions;
@@ -101,7 +102,7 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
                 <meta name="viewport" content="width=device-width, initial-scale=1" />
                 <meta name="color-scheme" content=theme.color_scheme() />
                 <link rel="stylesheet" id="leptos" href="/pkg/recto.css" />
-                <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+                {branding::head()}
                 <AutoReload options=options.clone() />
                 <HydrationScripts options islands=true />
                 <MetaTags />
