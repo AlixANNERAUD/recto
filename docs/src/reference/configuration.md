@@ -30,9 +30,17 @@ a default, such as `RECTO_LOCAL_ACCOUNTS`, must be left out rather than empty.
 | `RECTO_LISTEN_ADDRESS` | `0.0.0.0:8080` | The address and port recto listens on. |
 | `RECTO_SITE_ROOT` | `/app/site` | The folder of the built interface. The image sets it. |
 | `RECTO_LOG_FORMAT` | `json` | `json` for one JSON object per line, or `text`. |
+| `RECTO_BRAND_NAME` | `recto` | The name in the header, the page titles, messages and the installed app. 1 to 64 characters once spaces around it are removed. See [Brand recto](../how-to/brand.md). |
+| `RECTO_BRAND_SHORT_NAME` | the name | The installed app's label where space is short, such as under a home screen icon. 1 to 32 characters. |
+| `RECTO_BRAND_COLOR` | `#0f6cbd` | The accent color, `#rrggbb` in either case. White text on it needs a contrast of at least 4.5:1, or recto refuses to start. |
+| `RECTO_BRAND_LOGO` | none | A file shown before the name in the header and on the sign-in page instead of the printer glyph. PNG, JPEG or SVG, recognized by content, at most 1 MiB. |
+| `RECTO_BRAND_ICON` | none | A file the app icons are made from. A square PNG or JPEG, at least 512 by 512 pixels, at most 5 MiB. Without it, recto draws its icon in the accent color. |
 
 At least one way to sign in is needed: `RECTO_LOCAL_ACCOUNTS=false` without an OpenID Connect
 provider is refused at startup.
+
+The `RECTO_BRAND_*` settings and files are read once, at startup, before the database is opened.
+A value or file that breaks a rule above stops recto with a message naming the variable.
 
 `RUST_LOG` sets which log lines are written; see [Logs and health](logs.md).
 

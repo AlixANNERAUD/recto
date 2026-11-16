@@ -52,6 +52,19 @@ are internal to the interface and may change between versions.
 | --- | --- |
 | `POST /theme` | Public. Takes the form fields `theme` (`system`, `light` or `dark`) and `next` (a path on recto, else `/`). Stores the choice in the `recto_theme` cookie (one year, `HttpOnly`, `SameSite=Lax`, and `Secure` when the public URL is HTTPS), then redirects to `next`. `system` removes the cookie. Answers `400` for another value. |
 
+## Brand
+
+Public, so the sign-in page and the installed app can show them. Each answers with
+`Cache-Control: public, max-age=3600`. See [Brand recto](../how-to/brand.md).
+
+| Method and path | Does |
+| --- | --- |
+| `GET /brand/icon-192.png` | The app icon, 192 by 192 pixels, PNG. Also the browser tab's icon. |
+| `GET /brand/icon-512.png` | The app icon, 512 by 512 pixels, PNG. |
+| `GET /brand/icon-maskable-512.png` | The app icon for devices that crop it to their own shape, 512 by 512 pixels, PNG: the artwork keeps to the middle 80 % on a full background of the accent color. |
+| `GET /brand/apple-touch-icon.png` | The home screen icon of iPhones and iPads, 180 by 180 pixels, PNG. |
+| `GET /brand/logo` | The logo of `RECTO_BRAND_LOGO`, with the type read from its content. `404` without one. An SVG logo is sent with a Content Security Policy that sandboxes it. |
+
 ## Sign-in
 
 | Method and path | Does |

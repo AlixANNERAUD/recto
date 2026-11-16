@@ -16,6 +16,7 @@
 - [Use an existing CUPS server](how-to/existing-cups.md)
 - [Add a scanner](how-to/add-scanner.md)
 - [Save scans into Paperless-ngx](how-to/paperless.md)
+- [Brand recto](how-to/brand.md)
 - [Run behind a reverse proxy](how-to/reverse-proxy.md)
 - [Run on PostgreSQL](how-to/postgresql.md)
 - [Back up and restore](how-to/back-up.md)

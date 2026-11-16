@@ -54,9 +54,14 @@ option given on the command line wins over its variable.
 | `--listen-address <ADDRESS>` | `RECTO_LISTEN_ADDRESS` |
 | `--site-root <DIR>` | `RECTO_SITE_ROOT` |
 | `--log-format <json\|text>` | `RECTO_LOG_FORMAT` |
+| `--brand-name <NAME>` | `RECTO_BRAND_NAME` |
+| `--brand-short-name <NAME>` | `RECTO_BRAND_SHORT_NAME` |
+| `--brand-color <COLOR>` | `RECTO_BRAND_COLOR` |
+| `--brand-logo <FILE>` | `RECTO_BRAND_LOGO` |
+| `--brand-icon <FILE>` | `RECTO_BRAND_ICON` |
 
-Exit status: `0` after a clean shutdown, `1` when it cannot start (the database cannot be opened,
-for example) or stops on an error, `2` for invalid settings (with a message naming the setting).
+Exit status: `0` after a clean shutdown, `1` when it cannot start (a brand setting or file is refused,
+or the database cannot be opened) or stops on an error, `2` for invalid settings (with a message naming the setting).
 
 ## recto healthcheck
 

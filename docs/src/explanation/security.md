@@ -93,6 +93,14 @@ random nonce for each response, so injected markup cannot run script. Every resp
 being framed by another site (`frame-ancestors 'none'`), stops the browser from guessing content
 types (`X-Content-Type-Options: nosniff`), and sends no referrer to other sites.
 
+The operator's logo may be an SVG, which is a document that can hold scripts. Pages show it
+through `<img>`, and browsers never run scripts or load anything from an image shown that way.
+Opened at its own address, `/brand/logo`, it comes with
+`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox;
+frame-ancestors 'none'`, so it can draw itself and nothing else: no script, no request, no access
+to recto's cookies or pages. The brand color goes into the page's style only after recto has
+checked it is a `#rrggbb` value, and the name is escaped like any other text.
+
 ## Files
 
 Uploaded files are recognized by their content, not their name, and only PDF, JPEG and PNG are
