@@ -160,6 +160,18 @@ password. The configuration in `examples/cups/` turns that off:
 - Only the Compose subnet may print, and port 631 is not published, so printing goes through
   recto and its sign-in.
 
+Printer management changes this. When `RECTO_CUPS_ADMIN_SOCKET` names the CUPS socket, recto
+administers CUPS itself, so **a recto administrator is a CUPS administrator**: they can add and
+remove printers, and the address of a new printer makes CUPS connect to that address from its own
+container. Grant administration in recto with that in mind.
+
+recto proves who it is to CUPS with the `PeerCred` method. CUPS accepts it only on its local
+socket, from a process whose user is the `recto` account and whose group is a `SystemGroup`;
+over the network, CUPS refuses every administration request, so a stolen request or a mistaken
+`Listen` line gives nothing. The `cups` and `recto` containers share the socket through a volume,
+and only a process with the recto user inside the recto container can use it. recto checks every
+printer name and address before it sends them, and never logs a request body.
+
 `JobPrivateValues none` lets recto read every job's owner, which it needs to list and cancel
 jobs. Within the trusted group, that is the point; outside it, CUPS is unreachable.
 

@@ -18,7 +18,7 @@ instead. A single sign-on user without the required claim, or disabled, is sent 
 | `/administration` | Redirects to `/administration/users`. Administrators only. |
 | `/administration/users` | Users: create local accounts, set passwords, disable users, grant administration. Administrators only. |
 | `/administration/groups` | Groups: the groups from the identity provider and their members. Administrators only. |
-| `/administration/printers` | Printers: who may use each printer. Administrators only. |
+| `/administration/printers` | Printers: who may use each printer, and, with printer management on, adding printers and managing each one. `?drivers=<words>` fills the Add form's driver list with up to 50 matching drivers. Administrators only. |
 | `/administration/scanners` | Scanners: who may use each scanner. Administrators only. |
 | `/sign-in` | The password form, and the single sign-on button when a provider is set. It redirects to `/auth/login` instead when a provider is set and local accounts are off, or no account has a password. |
 | `/no-access` | Shown to single sign-on users without the required claim, or disabled. |
@@ -45,6 +45,15 @@ These work without JavaScript and accept only requests from recto's own pages (s
 | `POST /administration/users/{id}/password` | Sets a user's password. |
 | `POST /administration/printers/access` and `/administration/scanners/access` | Sets who may use a device. Fields: `device`, `access` (`everyone` or `groups`) and one `groups` field per group id; `groups` with none means administrators only. Redirects to the page with `?done=access`. Answers `400` with the page when `device` or `access` is missing or a group is unknown, and `503` when the database fails. |
 | `POST /administration/printers/forget` and `/administration/scanners/forget` | Drops the rule of a device that is gone. Field: `device`. Redirects with `?done=forgotten`. |
+| `POST /administration/printers/add` | Adds a printer to CUPS. Fields: `name` (1 to 127 of `A-Za-z0-9_.-`), `address` (a URL with the scheme `ipp`, `ipps`, `http`, `https`, `socket`, `lpd`, `dnssd` or `usb`), `driver` (`everywhere` or a driver name from the list), and optional `description` and `location`. Redirects with `?done=added`. |
+| `POST /administration/printers/describe` | Sets the description and location, an empty one clearing it. Fields: `printer`, `description`, `location`. Redirects with `?done=described`. |
+| `POST /administration/printers/default`, `/pause`, `/resume`, `/accept` and `/reject` | Makes the printer the default, pauses or resumes it, makes it accept or turn away jobs. Field: `printer`. Redirects with `?done=default`, `paused`, `resumed`, `accepting` or `rejecting`. |
+| `POST /administration/printers/remove` | Removes a printer from CUPS and forgets its access rule. Fields: `printer` and `confirm=yes`. Redirects with `?done=removed`. |
+
+The printer forms answer `404` when `RECTO_CUPS_ADMIN_SOCKET` is not set. A refused one renders
+the Printers page again with the reason: `400` for an invalid name or address, a missing printer
+or confirmation, or a change CUPS declined; `502` when CUPS refused recto or could not reach the
+printer; `503` when CUPS did not answer.
 
 The administration pages and their forms answer `404`, with the not-found page, to anyone but an
 administrator. The account page and its form answer `404` to users without a password.

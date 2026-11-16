@@ -30,6 +30,7 @@ only.
 | info | `document sent to the printer` | `user`, `job` |
 | info | `job canceled` | `user`, `job` |
 | info | `device access changed`, `device access forgotten` | `by`, `device` |
+| info | `printer added`, `printer described`, `default printer set`, `printer paused`, `printer resumed`, `printer accepting jobs`, `printer rejecting jobs`, `printer removed` | `by`, `printer` |
 | info | `scan saved` | `user`, `path` |
 | info | `shutting down` | |
 | warn | `listing the scanners failed` | `error` |
@@ -42,6 +43,7 @@ only.
 | warn | `reading the user information failed` | `error` |
 | warn | `SANE could not start; scanning is off` | `error` |
 | warn | `listing the devices for the administration page failed` | `error` |
+| warn | `printer administration failed` | `error` |
 | error | `starting the session failed` | `error` |
 | error | `password sign-in failed`, `changing a password failed`, `changing a user failed` | `error` |
 | error | `recording the job failed` | `error`, `job` |
