@@ -1,6 +1,7 @@
-//! Routes that belong to the browser rather than to a page: the theme switch and the brand's
-//! icons and logo. They are open to anyone, so the sign-in page can offer the switch and show
-//! the brand too; the cross-site check still applies.
+//! Routes that belong to the browser rather than to a page: the theme switch, the brand's icons
+//! and logo, the web app manifest and the service worker. They are open to anyone, so the
+//! sign-in page can offer the switch and show the brand too, and browsers can fetch the manifest
+//! and worker without cookies; the cross-site check still applies.
 
 use std::sync::Arc;
 
@@ -33,6 +34,9 @@ const BRAND_CACHE: &str = "public, max-age=3600";
 const SVG_POLICY: &str = "default-src 'none'; style-src 'unsafe-inline'; sandbox; \
                           frame-ancestors 'none'";
 
+/// The service worker, with the version to fill in.
+const SERVICE_WORKER: &str = include_str!("sw.js");
+
 #[derive(Clone)]
 struct PwaState {
     /// Whether cookies get the `Secure` attribute, as the session cookie does.
@@ -40,7 +44,7 @@ struct PwaState {
     branding: Arc<Branding>,
 }
 
-/// `POST /theme` and `GET /brand/*`. `secure_cookies` is whether recto is served over HTTPS.
+/// `POST /theme`, `GET /brand/*`, `/manifest.webmanifest` and `/sw.js`. `secure_cookies` is whether recto is served over HTTPS.
 pub fn router(branding: Arc<Branding>, secure_cookies: bool) -> Router {
     let icon = |pick: fn(&Branding) -> &Bytes| {
         get(move |State(state): State<PwaState>| async move {
@@ -66,10 +70,64 @@ pub fn router(branding: Arc<Branding>, secure_cookies: bool) -> Router {
             icon(|branding| &branding.icons.apple_180),
         )
         .route("/brand/logo", get(logo))
+        .route("/manifest.webmanifest", get(web_manifest))
+        .route("/sw.js", get(worker))
         .with_state(PwaState {
             secure_cookies,
             branding,
         })
+}
+
+/// The web app manifest: what browsers read to install recto as an app.
+pub fn manifest(branding: &Branding) -> serde_json::Value {
+    let icon = |path: &str, size: &str, purpose: &str| {
+        serde_json::json!({
+            "src": path, "sizes": size, "type": "image/png", "purpose": purpose,
+        })
+    };
+    serde_json::json!({
+        "id": "/",
+        "name": branding.name,
+        "short_name": branding.short_name,
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "theme_color": branding.color,
+        "background_color": "#f5f5f5",
+        "icons": [
+            icon("/brand/icon-192.png", "192x192", "any"),
+            icon("/brand/icon-512.png", "512x512", "any"),
+            icon("/brand/icon-maskable-512.png", "512x512", "maskable"),
+        ],
+    })
+}
+
+/// The worker's source. Its cache is named after the version, so an upgrade drops the old one.
+pub fn service_worker() -> String {
+    SERVICE_WORKER.replace("__VERSION__", env!("CARGO_PKG_VERSION"))
+}
+
+async fn web_manifest(State(state): State<PwaState>) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "application/manifest+json"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        manifest(&state.branding).to_string(),
+    )
+        .into_response()
+}
+
+/// `no-cache` lets browsers check for a new worker on every load, which is how updates arrive.
+async fn worker() -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        service_worker(),
+    )
+        .into_response()
 }
 
 fn brand_file(bytes: Bytes, content_type: &'static str) -> Response {
@@ -136,4 +194,27 @@ async fn choose_theme(
         response.headers_mut().insert(header::SET_COOKIE, value);
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_worker_caches_only_static_files() {
+        let source = service_worker();
+        assert!(source.contains("\"/pkg/\"") && source.contains("\"/brand/\""));
+        for never in [
+            "/api/",
+            "/scan/",
+            "/print",
+            "/jobs",
+            "/account",
+            "/administration",
+            "/auth/",
+            "/sign-in",
+        ] {
+            assert!(!source.contains(never), "{never}");
+        }
+    }
 }

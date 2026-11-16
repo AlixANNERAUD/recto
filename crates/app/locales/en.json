@@ -45,6 +45,11 @@
     "heading": "Page not found",
     "home": "Go to the print page"
   },
+  "offline": {
+    "heading": "You are offline",
+    "body": "{name} needs a connection to your server to print and scan. Check your connection, then try again.",
+    "retry": "Try again"
+  },
   "auth": {
     "sign_in_required": "Sign in to continue.",
     "session_ended": "You were signed out, so this list no longer updates.",

@@ -5,6 +5,7 @@ pub mod administration;
 pub mod auth;
 pub mod jobs;
 pub mod no_access;
+pub mod offline;
 pub mod print;
 pub mod printers;
 pub mod scan;

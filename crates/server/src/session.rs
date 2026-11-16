@@ -198,10 +198,10 @@ pub async fn load_user(
     next.run(request).await
 }
 
-/// Paths that render for anyone: the sign-in page and form, and the pages explaining a failed
-/// or ended sign-in.
+/// Paths that render for anyone: the sign-in page and form, the pages explaining a failed or
+/// ended sign-in, and the offline page the service worker shows.
 fn is_public(path: &str) -> bool {
-    path == "/sign-in" || path == "/no-access" || path.starts_with("/auth/")
+    path == "/sign-in" || path == "/no-access" || path == "/offline" || path.starts_with("/auth/")
 }
 
 /// Middleware letting only signed-in users through, except to the public paths.

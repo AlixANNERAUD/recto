@@ -49,6 +49,7 @@ use pages::{
     auth::{SignInErrorPage, SignedOutPage},
     jobs::JobsPage,
     no_access::NoAccessPage,
+    offline::OfflinePage,
     print::PrintPage,
     printers::PrintersPage,
     scan::ScanPage,
@@ -103,6 +104,8 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
                 <meta name="color-scheme" content=theme.color_scheme() />
                 <link rel="stylesheet" id="leptos" href="/pkg/recto.css" />
                 {branding::head()}
+                <link rel="manifest" href="/manifest.webmanifest" />
+                <script src="/pwa.js" defer></script>
                 <AutoReload options=options.clone() />
                 <HydrationScripts options islands=true />
                 <MetaTags />
@@ -131,6 +134,7 @@ pub fn App() -> impl IntoView {
                 <Route path=path!("/administration/groups") view=GroupsPage />
                 <Route path=path!("/sign-in") view=SignInPage />
                 <Route path=path!("/no-access") view=NoAccessPage />
+                <Route path=path!("/offline") view=OfflinePage />
                 <Route path=path!("/auth/error") view=SignInErrorPage />
                 <Route path=path!("/auth/signed-out") view=SignedOutPage />
             </Routes>

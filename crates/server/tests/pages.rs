@@ -755,3 +755,29 @@ async fn the_sign_in_page_carries_the_brand() {
     let main = &html[html.find("<main").unwrap()..];
     assert!(main.contains("Maison"), "{main}");
 }
+
+#[tokio::test]
+async fn the_offline_page_is_public() {
+    let harness = Harness::new(vec![], vec![]).await;
+    let request = Request::get("/offline")
+        .header(header::ACCEPT, "text/html")
+        .body(Body::empty())
+        .unwrap();
+    let response = harness.send(request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    assert!(html.contains("You are offline"), "{html}");
+    assert!(html.contains(r#"href="/""#), "{html}");
+}
+
+#[tokio::test]
+async fn pages_link_the_manifest_and_worker() {
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let html = harness.page("/printers", &cookie).await;
+    assert!(
+        html.contains(r#"<link rel="manifest" href="/manifest.webmanifest""#),
+        "{html}"
+    );
+    assert!(html.contains(r#"src="/pwa.js""#), "{html}");
+}

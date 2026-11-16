@@ -2683,3 +2683,59 @@ async fn a_cross_site_refusal_names_the_brand() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert!(text(response).await.contains("Open Maison at"));
 }
+
+#[tokio::test]
+async fn the_manifest_is_public() {
+    let harness = Harness::with(Setup {
+        branding: Branding {
+            name: "Maison".into(),
+            color: "#aa3300".into(),
+            ..default_branding()
+        },
+        ..Setup::default()
+    })
+    .await;
+    let response = harness.send(get("/manifest.webmanifest")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "application/manifest+json"
+    );
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-cache");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(manifest["name"], "Maison");
+    assert_eq!(manifest["display"], "standalone");
+    assert_eq!(manifest["theme_color"], "#aa3300");
+    assert_eq!(manifest["start_url"], "/");
+    let icons = manifest["icons"].as_array().unwrap();
+    assert_eq!(icons.len(), 3);
+    assert_eq!(
+        icons
+            .iter()
+            .filter(|icon| icon["purpose"] == "maskable")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn the_service_worker_is_public_and_versioned() {
+    let harness = Harness::new().await;
+    let response = harness.send(get("/sw.js")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    assert_eq!(
+        headers[header::CONTENT_TYPE],
+        "text/javascript; charset=utf-8"
+    );
+    assert_eq!(headers[header::CACHE_CONTROL], "no-cache");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let source = String::from_utf8(body.to_vec()).unwrap();
+    assert!(source.contains(concat!("recto-", env!("CARGO_PKG_VERSION"))));
+    assert!(!source.contains("__VERSION__"));
+}
