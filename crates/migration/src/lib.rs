@@ -12,6 +12,7 @@
 pub use sea_orm_migration::prelude::*;
 
 mod m20261115_000001_accounts;
+mod m20261116_000001_print_jobs;
 
 /// Every migration of recto, in the order they apply; used by `recto_domain::database::migrate`.
 pub struct Migrator;
@@ -19,6 +20,9 @@ pub struct Migrator;
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(m20261115_000001_accounts::Migration)]
+        vec![
+            Box::new(m20261115_000001_accounts::Migration),
+            Box::new(m20261116_000001_print_jobs::Migration),
+        ]
     }
 }

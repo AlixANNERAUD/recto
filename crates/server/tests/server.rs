@@ -21,11 +21,12 @@ use recto::{
 use recto_app::state::AppState;
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::{
+    jobs,
     passwords::{self, PasswordPolicy},
     testing::{TempDir, temporary_directory},
     users::{self, Identity},
 };
-use recto_entity::sessions;
+use recto_entity::{print_jobs, sessions};
 use recto_printing::{
     Capabilities, ColorMode, DocumentFormat, Job, JobState, PageRanges, PrintOptions, Printer,
     PrinterState, Sides, testing::MockPrintService,
@@ -513,6 +514,52 @@ async fn print_submits_with_user_and_options() {
             page_ranges: Some(PageRanges(vec![(1, 3), (5, 5)])),
         }
     );
+}
+
+#[tokio::test]
+async fn a_submitted_job_is_recorded() {
+    let harness = Harness::new().await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let response = print(
+        &harness,
+        &cookie,
+        &[("printer", "office")],
+        Some(("report.pdf", PDF)),
+    )
+    .await;
+    assert_redirect(&response, "/jobs?submitted=8");
+
+    let records = jobs::for_cups_ids(&harness.database, &[8]).await.unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].username, "alice");
+    assert_eq!(records[0].printer, "office");
+    assert_eq!(records[0].state, "pending");
+    let rows = print_jobs::Entity::find()
+        .all(&harness.database)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].document_name, "report.pdf");
+}
+
+#[tokio::test]
+async fn a_job_cups_refuses_is_not_recorded() {
+    let harness = Harness::new().await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    harness.print.set_unavailable("connection refused");
+    let response = print(
+        &harness,
+        &cookie,
+        &[("printer", "office")],
+        Some(("report.pdf", PDF)),
+    )
+    .await;
+    assert_redirect(&response, "/?error=unavailable");
+    let count = print_jobs::Entity::find()
+        .count(&harness.database)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
 }
 
 #[tokio::test]

@@ -13,6 +13,7 @@ use recto_app::{
     refusal::Refusal,
     state::{AppState, User},
 };
+use recto_domain::jobs::{self, NewJob};
 use recto_printing::{
     Capabilities, ColorMode, DocumentFormat, PageRanges, PrintError, PrintOptions, PrintRequest,
     Sides,
@@ -70,7 +71,24 @@ async fn submit_form(state: &AppState, user: &User, multipart: Multipart) -> Res
         user: user.username.clone(),
         options,
     };
-    state.print.submit(request).await.map_err(refusal)
+    let printer = request.printer.clone();
+    let document_name = request.job_name.clone();
+    let id = state.print.submit(request).await.map_err(refusal)?;
+    // The job is printing already: failing to record it must not tell the user it failed.
+    let recorded = jobs::record(
+        &state.database,
+        NewJob {
+            user_id: user.id,
+            printer,
+            cups_job_id: id,
+            document_name,
+        },
+    )
+    .await;
+    if let Err(error) = recorded {
+        tracing::error!(%error, job = id, "recording the job failed");
+    }
+    Ok(id)
 }
 
 /// `POST /jobs/{id}/cancel`: answers `303 /jobs`, or `303 /jobs?error=<code>`. Anyone signed in

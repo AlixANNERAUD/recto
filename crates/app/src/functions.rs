@@ -36,7 +36,9 @@ pub async fn list_printers() -> Result<Vec<Printer>, ServerFnError> {
 pub async fn list_jobs() -> Result<Vec<Job>, ServerFnError> {
     let context = server::Context::new()?;
     let jobs = context.state.print.jobs().await;
-    jobs.map_err(|error| context.print_failure(&error))
+    let mut jobs = jobs.map_err(|error| context.print_failure(&error))?;
+    context.name_owners(&mut jobs).await;
+    Ok(jobs)
 }
 
 #[server(endpoint = "list_scanners")]
@@ -111,7 +113,8 @@ mod server {
 
     use embedded_i18n::Locale;
     use leptos::prelude::ServerFnError;
-    use recto_printing::PrintError;
+    use recto_domain::jobs;
+    use recto_printing::{Job, PrintError};
     use recto_scanning::{
         OutputFormat, ScanError, ScanSettings, ScannedPage, ScannerCapabilities, Selection,
     };
@@ -155,6 +158,34 @@ mod server {
                 _ => embedded_i18n::t!("print.errors.refused", locale = locale).to_owned(),
             };
             ServerFnError::new(message)
+        }
+
+        /// Names the jobs' owners from the records of the jobs recto submitted, and keeps the
+        /// records' states current. A database failure is logged and leaves CUPS's own owners:
+        /// the list still shows.
+        pub async fn name_owners(&self, jobs: &mut [Job]) {
+            let ids: Vec<i32> = jobs.iter().map(|job| job.id).collect();
+            let database = &self.state.database;
+            let records = match jobs::for_cups_ids(database, &ids).await {
+                Ok(records) => records,
+                Err(error) => {
+                    tracing::error!(%error, "reading the job records failed");
+                    return;
+                }
+            };
+            let mut changes = Vec::new();
+            for job in jobs.iter_mut() {
+                let Some(record) = jobs::matching(&records, job.id, job.created) else {
+                    continue;
+                };
+                job.owner = Some(record.display_name.clone());
+                if record.state != job.state.keyword() {
+                    changes.push((record.id, job.state.keyword()));
+                }
+            }
+            if let Err(error) = jobs::update_states(database, &changes).await {
+                tracing::error!(%error, "updating the job records failed");
+            }
         }
 
         /// Refuses a scanner the scanner list does not have. Ids come from the browser, and

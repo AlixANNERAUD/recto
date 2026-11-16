@@ -43,6 +43,8 @@ wasm-bindgen-futures = { workspace = true, optional = true }
 # Without their `service` feature these are the models only, which also build for the browser.
 recto-printing.workspace = true
 recto-scanning.workspace = true
+# The server functions read the database; the browser build must not pull it.
+recto-domain = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }
 
 [features]
@@ -63,6 +65,7 @@ ssr = [
     "dep:sea-orm",
     "dep:tracing",
     "dep:tokio",
+    "dep:recto-domain",
     "recto-printing/service",
     "recto-scanning/service",
 ]

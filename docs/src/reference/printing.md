@@ -60,4 +60,5 @@ seconds while the page is visible.
 | Printed | `completed` |
 
 Queued, held, printing and stopped jobs have a **Cancel** button. A job whose owner CUPS hides is
-shown as **another user**.
+shown as **another user**. Jobs sent through recto show the sender's display name, from the record
+recto keeps of each job it submits; other jobs show the owner CUPS reports.

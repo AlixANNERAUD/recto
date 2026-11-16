@@ -2,6 +2,7 @@
 
 pub use super::group_memberships::Entity as GroupMemberships;
 pub use super::groups::Entity as Groups;
+pub use super::print_jobs::Entity as PrintJobs;
 pub use super::sessions::Entity as Sessions;
 pub use super::user_identities::Entity as UserIdentities;
 pub use super::users::Entity as Users;

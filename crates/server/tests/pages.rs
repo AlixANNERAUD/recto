@@ -19,15 +19,17 @@ use recto::{
 use recto_app::state::AppState;
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::{
+    jobs::{self, NewJob},
     testing::{TempDir, temporary_directory},
     users::{self, Identity},
 };
+use recto_entity::users as user_rows;
 use recto_printing::{
     Capabilities, ColorMode, Job, JobState, Printer, PrinterState, Sides, StateReason, Supply,
     testing::MockPrintService,
 };
 use recto_scanning::{MockScannerService, ResultStore, ScanError};
-use sea_orm::DatabaseConnection;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use tower::ServiceExt;
 use tower_sessions::Session;
 use url::Url;
@@ -281,6 +283,74 @@ async fn jobs_page_shows_another_user_for_hidden_owner() {
 
     let html = harness.page("/jobs?error=job_not_found", &cookie).await;
     assert!(html.contains("That job no longer exists."), "{html}");
+}
+
+/// A signed-in user whose display name differs from the username, and the record of a job it
+/// submitted as CUPS job `cups_job_id`.
+async fn record_job_of(harness: &Harness, username: &str, display_name: &str, cups_job_id: i32) {
+    let user = user_rows::Entity::find()
+        .filter(user_rows::Column::Username.eq(username))
+        .one(&harness.database)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut active: user_rows::ActiveModel = user.clone().into();
+    active.display_name = sea_orm::ActiveValue::Set(display_name.to_owned());
+    sea_orm::ActiveModelTrait::update(active, &harness.database)
+        .await
+        .unwrap();
+    jobs::record(
+        &harness.database,
+        NewJob {
+            user_id: user.id,
+            printer: "kitchen".into(),
+            cups_job_id,
+            document_name: format!("document-{cups_job_id}.pdf"),
+        },
+    )
+    .await
+    .unwrap();
+}
+
+fn now() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
+#[tokio::test]
+async fn the_job_list_names_recto_users() {
+    let recorded = Job {
+        created: Some(now()),
+        ..job(7, Some("alice"), JobState::Processing)
+    };
+    let unrecorded = job(8, Some("bob"), JobState::Processing);
+    let harness = Harness::new(vec![kitchen()], vec![recorded, unrecorded]).await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    record_job_of(&harness, "alice", "Alice Martin", 7).await;
+
+    let html = harness.page("/jobs", &cookie).await;
+    assert!(html.contains("Alice Martin"), "{html}");
+    assert!(html.contains("bob"), "{html}");
+}
+
+#[tokio::test]
+async fn listing_jobs_keeps_recorded_states() {
+    let finished = Job {
+        created: Some(now()),
+        ..job(7, Some("alice"), JobState::Completed)
+    };
+    let harness = Harness::new(vec![kitchen()], vec![finished]).await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    record_job_of(&harness, "alice", "Alice Martin", 7).await;
+    assert_eq!(
+        jobs::for_cups_ids(&harness.database, &[7]).await.unwrap()[0].state,
+        "pending"
+    );
+
+    harness.page("/jobs", &cookie).await;
+    assert_eq!(
+        jobs::for_cups_ids(&harness.database, &[7]).await.unwrap()[0].state,
+        "completed"
+    );
 }
 
 #[tokio::test]

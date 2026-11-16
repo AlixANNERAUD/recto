@@ -157,6 +157,19 @@ impl JobState {
             _ => return None,
         })
     }
+
+    /// The IPP `job-state` keyword, as recto stores it.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            JobState::Pending => "pending",
+            JobState::Held => "pending-held",
+            JobState::Processing => "processing",
+            JobState::Stopped => "processing-stopped",
+            JobState::Canceled => "canceled",
+            JobState::Aborted => "aborted",
+            JobState::Completed => "completed",
+        }
+    }
 }
 
 #[cfg(test)]
