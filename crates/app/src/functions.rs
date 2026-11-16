@@ -180,10 +180,10 @@ mod server {
             ServerFnError::new(message)
         }
 
-        /// Names the jobs' owners from the records of the jobs recto submitted, keeps the
-        /// and drops the jobs the user may not see. A database
-        /// failure is logged and leaves CUPS's own owners, so the list still shows; but when
-        /// ownership decides what the user sees, no record means no jobs: it fails closed.
+        /// Names the jobs' owners from the records of the jobs recto submitted and drops the
+        /// jobs the user may not see. A database failure is logged and leaves CUPS's own owners,
+        /// so the list still shows; but when ownership decides what the user sees, no record
+        /// means no jobs: it fails closed.
         pub async fn name_owners_and_filter(
             &self,
             mut jobs: Vec<Job>,

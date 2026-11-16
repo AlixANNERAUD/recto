@@ -132,10 +132,14 @@ pub async fn insert(
     Ok(row.id)
 }
 
-/// Stores the id CUPS gave the job.
+/// Stores the id CUPS gave the job. It also takes back a refund by [`refund_unattached`]: an
+/// attach that comes after the sweep proves CUPS has the job, so it counts again and the poll
+/// follows it.
 pub async fn attach(database: &impl ConnectionTrait, id: i64, cups_job_id: i32) -> Result<()> {
     print_jobs::Entity::update_many()
         .col_expr(print_jobs::Column::CupsJobId, i64::from(cups_job_id).into())
+        .col_expr(print_jobs::Column::Refunded, false.into())
+        .col_expr(print_jobs::Column::Finished, false.into())
         .filter(print_jobs::Column::Id.eq(id))
         .exec(database)
         .await?;
@@ -153,8 +157,9 @@ pub async fn refund(database: &impl ConnectionTrait, id: i64) -> Result<()> {
     Ok(())
 }
 
-/// How long an entry may wait for its CUPS job id. A CUPS that timed out after receiving the job
-/// still answers within the request timeouts, so an entry older than this never reached CUPS.
+/// How long an entry may wait for its CUPS job id. Submission attaches the id as soon as CUPS
+/// answers, so an entry still without one after this long had its attach fail (a database
+/// error) or recto stopped between the insert and the attach; [`refund_unattached`] sweeps it.
 pub const ATTACH_GRACE: Duration = Duration::minutes(10);
 
 /// The entries CUPS may still be working on, as `(entry id, CUPS job id)`: attached, not final.
@@ -516,6 +521,12 @@ mod tests {
         assert!(!row(&database, recent).await.refunded);
         assert!(!row(&database, sent).await.refunded);
         assert_eq!(refund_unattached(&database, now).await.unwrap(), 0);
+
+        // CUPS had the job after all: a late attach makes it count again.
+        attach(&database, old, 8).await.unwrap();
+        let late = row(&database, old).await;
+        assert!(!late.refunded && !late.finished);
+        assert_eq!(late.cups_job_id, Some(8));
     }
 
     #[tokio::test]
