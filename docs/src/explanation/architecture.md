@@ -9,6 +9,7 @@ flowchart LR
     browser([Browser]) -- HTTPS --> proxy[Reverse proxy]
     proxy -- HTTP --> recto[recto]
     recto -- IPP over HTTP --> cups[CUPS] --> printers([Printers])
+    recto -. administration over the local socket, optional .-> cups
     recto -- libsane --> sane[SANE backends] --> scanners([Scanners])
     recto -- SQL --> database[(SQLite or PostgreSQL)]
     recto -. HTTPS, optional .-> provider[OpenID Connect provider]
@@ -27,7 +28,14 @@ page are the ones CUPS says the printer supports, so a printer without two-sided
 no Sides field.
 
 CUPS runs in its own container, with its spool and its printers in volumes. recto keeps nothing
-about printers: every page load asks CUPS.
+about printers but who may use them: every page load asks CUPS.
+
+Adding and managing printers is a separate client, on only when `RECTO_CUPS_ADMIN_SOCKET` names
+CUPS's local Unix socket. It sends the administration requests (`CUPS-Add-Modify-Printer`,
+`CUPS-Delete-Printer`, pausing, accepting, the default printer) over that socket, where CUPS
+recognizes recto by the uid of the process (`PeerCred`) instead of a password. CUPS refuses those
+requests over the network, so the socket is the only way in. [Security](security.md#cups) explains
+the setup.
 
 ## Scanning: libsane in a worker thread
 

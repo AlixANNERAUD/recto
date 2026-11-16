@@ -55,7 +55,8 @@ Authentik and others), or both.
 
 - **Print** PDF, JPEG and PNG on any CUPS printer, with copies, two-sided, color and page ranges.
   See each printer's state, supply levels and errors, and the print queue, where any job can be
-  cancelled. Printing works without JavaScript.
+  cancelled. Printing works without JavaScript. Administrators add and manage printers from the
+  web page.
 - **Scan** from network scanners (eSCL/AirScan and WSD, through sane-airscan), scanners shared by
   `saned`, and USB scanners. Choose resolution, colors, source and format (PDF, PNG, JPEG),
   preview the glass and drag to scan only part of it. Feeder batches become one PDF.
@@ -87,7 +88,9 @@ docker compose exec recto /app/recto create-administrator --username admin
 This starts recto on port 8080 and a locked-down CUPS server next to it, then creates an
 administrator with the password the command asks for; the administrator creates the other
 accounts from the web page. To sign in with your identity provider too,
-[set up single sign-on](https://alixanneraud.github.io/recto/how-to/sign-in.html). Add a printer:
+[set up single sign-on](https://alixanneraud.github.io/recto/how-to/sign-in.html). Sign in as
+the administrator and add a printer under **Administration > Printers** with its address, such as
+`ipp://192.168.1.60/ipp/print`, or from the command line:
 
 ```sh
 docker compose exec cups lpadmin -p office -E -v ipp://192.168.1.60/ipp/print -m everywhere

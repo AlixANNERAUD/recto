@@ -163,20 +163,25 @@ password. The configuration in `examples/cups/` turns that off:
   recto and its sign-in.
 
 That `recto` account is what lets recto manage printers. `compose.yml` creates it when the `cups`
-container starts, with recto's uid (65532), and shares the socket's directory between the two
-containers through the `cups-socket` volume, mounted read-only in recto. When
-`RECTO_CUPS_ADMIN_SOCKET` names the socket, recto administers CUPS itself, so **a recto administrator is a CUPS administrator**: they can add and
-remove printers, and the address of a new printer makes CUPS connect to that address from its own
-container. Grant administration in recto with that in mind.
+container starts, with recto's uid (`RECTO_UID`, 65532 by default), and shares the socket's
+directory between the two containers through the `cups-socket` volume, mounted read-only in
+recto. Its group is always 65532: CUPS makes an administrator of every account whose main group
+is the `recto` group, and the image's `print` account, with its known password, has group 1000. When `RECTO_CUPS_ADMIN_SOCKET` names the socket, recto administers CUPS itself, so **a
+recto administrator is a CUPS administrator**: they can add and remove printers, and the address
+of a new printer makes CUPS connect to that address from its own container. Grant administration
+in recto with that in mind.
 
 recto proves who it is to CUPS with the `PeerCred` method. CUPS accepts it only on its local
-socket, from a process whose user is the `recto` account and whose group is a `SystemGroup`;
-over the network, CUPS refuses every administration request, so a stolen request or a mistaken
-`Listen` line gives nothing. The `cups` and `recto` containers share the socket through a volume,
-and CUPS accepts a request only from a process whose uid is the one of its `recto` account, so
-another uid on the volume gets refused. recto checks every
-printer name and address before it sends them (an address with a user name or password is
-refused, since CUPS would store it in clear), and never logs a request body.
+socket, from a process whose uid is the one of its `recto` account and whose group is a
+`SystemGroup`, so another uid on the volume is refused. Over the network, CUPS refuses every
+administration request, so a stolen request or a mistaken `Listen` line gives nothing. recto
+checks every printer name and address before it sends them (an address with a user name or
+password is refused, since CUPS would store it in clear), and never logs a request body.
+
+**Share the socket only with recto.** CUPS knows recto by its uid alone, so any process running
+as that uid that can reach the socket administers CUPS. Distroless images that run as "nonroot"
+all use 65532, recto's default: do not mount the `cups-socket` volume, or the host's
+`/run/cups`, into another container, and keep other services on the host off that uid.
 
 `JobPrivateValues none` lets recto read every job's owner, which it needs to list and cancel
 jobs. Within the trusted group, that is the point; outside it, CUPS is unreachable.

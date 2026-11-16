@@ -7,7 +7,7 @@ OpenID Connect, written in Rust.
 
 | Crate | Role |
 | --- | --- |
-| `crates/printing` | Print models and the CUPS/IPP client |
+| `crates/printing` | Print models, the CUPS/IPP client and the CUPS administration client |
 | `crates/scanning` | Scan models and the SANE client |
 | `crates/authentication` | OpenID Connect sign-in, claims and the cross-site request check |
 | `crates/migration` | Database migrations (SeaORM schema builder, SQLite and PostgreSQL) |

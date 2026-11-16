@@ -8,6 +8,11 @@ them with `lpadmin`, as the rest of this guide shows.
 To use a CUPS server that already runs on your network instead, see
 [Use an existing CUPS server](existing-cups.md).
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/printers-admin-dark.png">
+  <img src="../images/printers-admin-light.png" alt="The Printers tab of the Administration page: the Add a printer form with a name, an address, IPP Everywhere as the driver, a description and a location, then the printers, the first with its Manage section open: who may use it, its description and location, Default printer, Pause, Turn jobs away and Remove printer.">
+</picture>
+
 ## Add a printer from recto
 
 Printer management is on when `RECTO_CUPS_ADMIN_SOCKET` names the CUPS socket. `compose.yml`
@@ -17,11 +22,12 @@ administrator over that socket. If **Administration > Printers** has no **Add a 
 it is off: see [Configuration](../reference/configuration.md) and
 [Security](../explanation/security.md#cups).
 
-If recto runs with another uid, with `user:` on the `recto` service, CUPS must know that uid: edit
-the two `65532` in the `entrypoint` of the `cups` service to match. With a CUPS of your own, you
-need the same three things: recto and CUPS share the socket, CUPS has a `recto` account with
-recto's uid, and `SystemGroup` lists `root` first, then that account. Never list a group whose
-users have passwords.
+recto and the `recto` account of the `cups` service both take their uid from `RECTO_UID` in `.env`
+(65532 by default), so they always match: change recto's uid there, not with `user:` on the
+`recto` service. With a CUPS of your own, you need the same three things: recto and CUPS share
+the socket, CUPS has a `recto` account with recto's uid, and `SystemGroup` lists `root` first,
+then that account (see [Use an existing CUPS server](existing-cups.md#printer-management)).
+Never list a group whose users have passwords.
 
 1. Open **Administration > Printers**.
 2. Under **Add a printer**, give a short **Name**: letters, digits, dots, underscores and hyphens.
@@ -43,10 +49,11 @@ users have passwords.
 CUPS cannot discover printers from inside the container, because Docker's bridge network does not
 carry the multicast that discovery uses: give the address yourself.
 
-Each printer's row has a **Change who may use it** section with the other actions: edit the
-description and location, make it the default printer (the first on the Print page), pause or
+Each printer's row has a **Manage** section with who may use it and the other actions: edit the
+description and location (up to 1023 characters each, on one line), make it the default printer (the first on the Print page), pause or
 resume it, make it accept or turn away new jobs, and remove it. Removing asks for a tick in a
-checkbox, cancels the printer's waiting jobs and forgets its access rule.
+checkbox, cancels the printer's waiting jobs and forgets its access rule. These actions also work
+on printers added with `lpadmin` under names the Add form would not take, such as `Büro`.
 
 A refusal that says CUPS refused the change means CUPS does not accept recto as an
 administrator: check that the `recto` account exists in the `cups` container (`docker compose
@@ -56,8 +63,8 @@ exec cups grep recto /etc/passwd`), that its uid is recto's, and the `SystemGrou
 ## Add a printer with the command line
 
 This works with or without printer management. The commands go through `docker compose exec
-cups`, because the web interface of CUPS is off and the only other administrator is root inside
-the container.
+cups`, because the web interface of CUPS is off and the administrators are root and `recto`, only
+over the socket inside the container.
 
 ### A network printer
 
@@ -113,7 +120,8 @@ The CUPS image includes the drivers of Gutenprint, HPLIP, Foomatic and others.
    ```
 
 4. Add it as above, from the page or with `lpadmin`, with that address and IPP Everywhere (for
-   IPP-over-USB printers) or a driver.
+   IPP-over-USB printers) or a driver. The page takes `usb://` addresses only: for an address
+   that starts with `hp:`, from HPLIP, use `lpadmin`.
 
 ## Choose the default printer
 

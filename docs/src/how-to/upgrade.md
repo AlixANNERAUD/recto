@@ -60,7 +60,13 @@ printers live in the `cups-config` volume and survive the upgrade. Do not run
 `docker compose down -v`: it deletes that volume, with your printers, and the `recto-data` volume,
 with recto's database.
 
-The `cups` and `recto` services share CUPS's socket through the `cups-socket` volume, and the
-`cups` service creates the `recto` account that printer management uses. After an upgrade that
-changes `compose.yml`, run `docker compose up -d`: it recreates both services, so they share the
-volume again. Printer management stays off until then.
+`compose.yml` and `examples/cups/cups-files.conf` go together: the file makes the `recto` account
+a CUPS administrator, and `compose.yml` creates that account and shares the socket through the
+`cups-socket` volume. The `docker compose up -d` above recreates both services with them, and
+printer management works from then on.
+
+If you run CUPS from your own Compose file but mount the repository's `cups-files.conf`, copy the
+`entrypoint` of the `cups` service and the `cups-socket` volume of both services into it. Without
+the entrypoint, the `recto` group that `SystemGroup root recto` names is missing and cupsd refuses
+to start. To keep printer management off instead, mount a `cups-files.conf` with
+`SystemGroup root`.
