@@ -88,7 +88,7 @@ pub fn load(options: &BrandOptions) -> Result<Branding, String> {
         let shown = (ratio * 100.0).floor() / 100.0;
         return Err(format!(
             "RECTO_BRAND_COLOR {} gives white button text a contrast of {shown:.2}:1; it needs \
-             4.5:1. Choose a darker colour.",
+             4.5:1. Choose a darker color.",
             options.brand_color
         ));
     }
@@ -419,7 +419,8 @@ fn draw(size: u32, color: [u8; 3], full: bool) -> RgbaImage {
     };
     RgbaImage::from_fn(size, size, |x, y| {
         let (x, y) = (f64::from(x), f64::from(y));
-        // Both shapes are convex: a pixel whose corners all get the same paint is that paint.
+        // Both shapes are axis-aligned rounded rectangles much larger than a pixel, so a pixel
+        // whose four corners get the same paint lies inside one region and has that paint.
         let corner = paint(x, y);
         if [(1.0, 0.0), (0.0, 1.0), (1.0, 1.0)]
             .into_iter()
@@ -484,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    fn colours_are_six_hex_digits() {
+    fn colors_are_six_hex_digits() {
         assert_eq!(parse_color("#0F6CBD"), Some([15, 108, 189]));
         for bad in [
             "0f6cbd", "#fff", "#0f6cbg", "blue", "", "#0f6cbd0", "#+f6cbd",
@@ -502,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn the_default_colour_keeps_the_stylesheet() {
+    fn the_default_color_keeps_the_stylesheet() {
         let branding = default_branding();
         assert_eq!(branding.style, None);
         assert_eq!(branding.color, DEFAULT_COLOR);

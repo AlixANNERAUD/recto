@@ -20,6 +20,7 @@ use leptos::prelude::provide_context;
 use leptos_axum::{LeptosRoutes, generate_route_list_with_exclusions};
 use recto_app::{
     App,
+    branding::Branding,
     pages::sign_in::SignInMethods,
     shell,
     state::{AppState, User},
@@ -59,9 +60,10 @@ pub fn leptos_options(config: &Config) -> LeptosOptions {
 ///
 /// Pages, forms, scan results and server functions need a signed-in user. Left open are
 /// `/health` (it touches neither CUPS nor the identity provider, so a container stays healthy
-/// while they are down), `/sign-in`, the `/auth/*` routes and pages, `/no-access`, and the
-/// assets the fallback serves (see `fallback`). The `/administration` pages and forms need an
-/// administrator.
+/// while they are down), the sign-in addresses (`/sign-in`, the `/auth/*` routes and pages,
+/// `/no-access`), `POST /theme`, `/brand/*`, `/manifest.webmanifest`, `/sw.js`, `/pwa.js`,
+/// `/offline`, and the static files the fallback serves (see `fallback`). The
+/// `/administration` pages and forms need an administrator.
 ///
 /// Must be called inside a Tokio runtime: the sign-in rate limit forgets old clients in the
 /// background.
@@ -80,7 +82,7 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
     );
     let shell_options = state.leptos_options.clone();
     let branding = Arc::clone(&state.branding);
-    let name: Arc<str> = branding.name.as_str().into();
+    let branding_for_refusal = Arc::clone(&branding);
     let body_limit = state.max_upload_size.saturating_add(print::FORM_SLACK);
     let methods = auth.sign_in_methods();
     let context = move || provide_context(methods);
@@ -115,7 +117,7 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         ))
         .layer(session::layer(auth.sessions.clone(), auth.secure_cookies))
         .layer(middleware::from_fn_with_state(
-            (AllowedOrigin::new(&auth.public_url), name),
+            (AllowedOrigin::new(&auth.public_url), branding_for_refusal),
             refuse_cross_site,
         ))
         .layer(middleware::from_fn(security_headers))
@@ -146,7 +148,7 @@ async fn security_headers(request: Request, next: Next) -> Response {
 
 /// Rejects cross-site state-changing requests with 403 (see [`csrf::allowed`]).
 async fn refuse_cross_site(
-    State((origin, name)): State<(AllowedOrigin, Arc<str>)>,
+    State((origin, branding)): State<(AllowedOrigin, Arc<Branding>)>,
     request: Request,
     next: Next,
 ) -> Response {
@@ -159,7 +161,7 @@ async fn refuse_cross_site(
         "cross-site request refused"
     );
     let locale = recto_app::i18n::from_headers(request.headers());
-    let message = recto_app::messages::cross_site_refused(locale, &name, origin.as_str());
+    let message = recto_app::messages::cross_site_refused(locale, &branding.name, origin.as_str());
     (StatusCode::FORBIDDEN, message).into_response()
 }
 

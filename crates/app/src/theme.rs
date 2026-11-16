@@ -42,11 +42,7 @@ impl Theme {
 
     /// The value of `<html data-theme>`; none for System, so the media query decides.
     pub fn attribute(self) -> Option<&'static str> {
-        match self {
-            Theme::System => None,
-            Theme::Light => Some("light"),
-            Theme::Dark => Some("dark"),
-        }
+        (self != Theme::System).then(|| self.as_str())
     }
 
     /// The value of the `color-scheme` meta tag, which tells the browser which colors to use
