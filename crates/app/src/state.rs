@@ -41,6 +41,8 @@ pub struct AppState {
     pub database: DatabaseConnection,
     /// The name, colors, logo and icons the operator chose.
     pub branding: Arc<Branding>,
+    /// Whose jobs a user who is not an administrator sees and may cancel
+    /// (`RECTO_JOB_VISIBILITY`).
     pub job_visibility: JobVisibility,
 }
 

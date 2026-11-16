@@ -3,9 +3,9 @@
 //! pages are rendered here rather than by the interface's router, so their data is loaded only
 //! once the user is known to administer recto.
 //!
-//! The forms are plain posts, so they work without JavaScript. An accepted one redirects to
-//! page it came from with a notice; a refused one renders the Users page again with the
-//! problem, keeping what was typed except a password.
+//! The forms are plain posts, so they work without JavaScript. An accepted one redirects to the
+//! page it came from with a notice; a refused one renders that page again with the problem,
+//! keeping what was typed except a password.
 
 use axum::{
     Extension, Form, Router,
@@ -75,30 +75,8 @@ pub fn router(app: AppState, auth: &AuthState) -> Router {
         .route("/administration/groups", get(groups_page))
         .route(PRINTERS, get(printers_page))
         .route(SCANNERS, get(scanners_page))
-        .route(
-            "/administration/printers/access",
-            post(|state, actor, parts, body| {
-                set_access(state, actor, parts, DeviceKind::Printer, body)
-            }),
-        )
-        .route(
-            "/administration/scanners/access",
-            post(|state, actor, parts, body| {
-                set_access(state, actor, parts, DeviceKind::Scanner, body)
-            }),
-        )
-        .route(
-            "/administration/printers/forget",
-            post(|state, actor, parts, body| {
-                forget(state, actor, parts, DeviceKind::Printer, body)
-            }),
-        )
-        .route(
-            "/administration/scanners/forget",
-            post(|state, actor, parts, body| {
-                forget(state, actor, parts, DeviceKind::Scanner, body)
-            }),
-        )
+        .merge(device_forms(DeviceKind::Printer))
+        .merge(device_forms(DeviceKind::Scanner))
         // The last layer runs first: anonymous visitors are sent to sign in before the check.
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -106,6 +84,20 @@ pub fn router(app: AppState, auth: &AuthState) -> Router {
         ))
         .route_layer(middleware::from_fn(session::require_user))
         .with_state(state)
+}
+
+/// `POST <page>/access` and `<page>/forget` for one kind of device.
+fn device_forms(kind: DeviceKind) -> Router<AdministrationState> {
+    let page = page_kind(kind).path();
+    Router::new()
+        .route(
+            &format!("{page}/access"),
+            post(move |state, actor, parts, body| set_access(state, actor, parts, kind, body)),
+        )
+        .route(
+            &format!("{page}/forget"),
+            post(move |state, actor, parts, body| forget(state, actor, parts, kind, body)),
+        )
 }
 
 /// Middleware letting only administrators through; anyone else gets the not-found page, before

@@ -208,8 +208,6 @@ pub fn check_password_minimum_length(length: usize) -> Result<(), String> {
     }
 }
 
-/// CUPS clients commonly write the server as `ipp://` or `ipps://`; IPP runs over HTTP, so the
-/// scheme is mapped to the one the HTTP client needs.
 // Not a `ValueEnum`: its error would not name the environment variable.
 fn parse_job_visibility(value: &str) -> Result<JobVisibility, String> {
     match value {
@@ -221,6 +219,8 @@ fn parse_job_visibility(value: &str) -> Result<JobVisibility, String> {
     }
 }
 
+/// CUPS clients commonly write the server as `ipp://` or `ipps://`; IPP runs over HTTP, so the
+/// scheme is mapped to the one the HTTP client needs.
 fn parse_cups_url(value: &str) -> Result<Url, url::ParseError> {
     let value = value.trim();
     let mapped = if let Some(rest) = value.strip_prefix("ipps://") {

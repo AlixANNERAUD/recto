@@ -992,9 +992,9 @@ fn scanner(id: &str) -> ScannerInfo {
     }
 }
 
-/// Printers "front-desk" and "darkroom", scanners "net:a" and "net:b"; "darkroom" and "net:b" are limited to
-/// the group "staff". Returns the harness and the cookies of a plain user, a staff member and
-/// an administrator in no group.
+/// Printers "front-desk" and "darkroom", scanners "net:a" and "net:b"; "darkroom" and "net:b"
+/// are limited to the group "staff". Returns the harness and the cookies of a plain user, a
+/// staff member and an administrator in no group.
 async fn with_restricted_devices() -> (Harness, String, String, String) {
     let harness = Harness::scanning(
         vec![printer("front-desk", true), printer("darkroom", false)],
