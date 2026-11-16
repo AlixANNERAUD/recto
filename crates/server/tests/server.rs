@@ -18,7 +18,7 @@ use recto::session_store::DatabaseSessionStore;
 use recto_app::state::AppState;
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::{
-    passwords::PasswordPolicy,
+    passwords::{self, PasswordPolicy},
     testing::{TempDir, temporary_directory},
     users::{self, Identity},
 };
@@ -269,6 +269,14 @@ fn from_peer(mut request: Request<Body>) -> Request<Body> {
             .extensions_mut()
             .insert(ConnectInfo(SocketAddr::from((PEER, 50_000))));
     }
+    request
+}
+
+/// The request, as sent from `address`.
+fn from_address(mut request: Request<Body>, address: [u8; 4]) -> Request<Body> {
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from((address, 50_000))));
     request
 }
 
@@ -1492,6 +1500,80 @@ async fn password_sign_in_is_rate_limited() {
     assert_eq!(limited(&statuses), 0, "{statuses:?}");
     let statuses = six_attempts(&harness, |_| "10.0.1.1".to_owned()).await;
     assert_eq!(limited(&statuses), 1, "{statuses:?}");
+
+    // An IPv6 client picks its address within a /64: the network shares one budget.
+    let statuses = six_attempts(&harness, |attempt| format!("2001:db8:0:1::{attempt}")).await;
+    assert_eq!(limited(&statuses), 1, "{statuses:?}");
+    let statuses = six_attempts(&harness, |attempt| format!("2001:db8:1:{attempt}::1")).await;
+    assert_eq!(limited(&statuses), 0, "{statuses:?}");
+}
+
+/// A password no account can have, refused without the cost of a hash: enough to spend the
+/// budget of attempts quickly.
+fn overlong_password() -> String {
+    "x".repeat(passwords::MAXIMUM_LENGTH + 1)
+}
+
+#[tokio::test]
+async fn the_right_password_waits_once_the_budget_is_spent() {
+    let harness = Harness::new().await;
+    harness.local_user("alice", ALICE_PASSWORD).await;
+    let overlong = overlong_password();
+    for _ in 0..5 {
+        let response = harness
+            .send(form(
+                "/sign-in",
+                None,
+                &[("login", "alice"), ("password", &overlong)],
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    let response = harness
+        .send(form(
+            "/sign-in",
+            None,
+            &[("login", "alice"), ("password", ALICE_PASSWORD)],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(session_cookie(response.headers()).is_none());
+    assert!(text(response).await.contains("Too many attempts"));
+}
+
+#[tokio::test]
+async fn password_changes_share_the_sign_in_budget() {
+    let harness = Harness::new().await;
+    harness.local_user("alice", ALICE_PASSWORD).await;
+    // One attempt of the budget.
+    let cookie = harness.sign_in_with_password("alice", ALICE_PASSWORD).await;
+    let change = |current: &str| {
+        form(
+            "/account/password",
+            Some(&cookie),
+            &[
+                ("current", current),
+                ("new", "another long password"),
+                ("confirm", "another long password"),
+            ],
+        )
+    };
+    let overlong = overlong_password();
+    for _ in 0..4 {
+        let response = harness.send(change(&overlong)).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    let response = harness.send(change(ALICE_PASSWORD)).await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let html = text(response).await;
+    assert!(html.contains("Too many attempts"), "{html}");
+    // Nothing changed: the session and the password are as they were.
+    let response = harness.send(page("/account", Some(&cookie))).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let user = harness.user("alice").await;
+    assert!(passwords::verify(ALICE_PASSWORD.to_owned(), user.password_hash.unwrap()).await);
 }
 
 #[tokio::test]
@@ -1597,11 +1679,15 @@ async fn changing_password_keeps_this_session_only() {
     assert!(html.contains("action=\"/account/password\""), "{html}");
     assert!(html.contains("At least 12 characters."), "{html}");
 
+    // From another address than the sign-ins: both forms share one budget of attempts.
     let change = |current: &str, new: &str, confirm: &str| {
-        form(
-            "/account/password",
-            Some(&this),
-            &[("current", current), ("new", new), ("confirm", confirm)],
+        from_address(
+            form(
+                "/account/password",
+                Some(&this),
+                &[("current", current), ("new", new), ("confirm", confirm)],
+            ),
+            [192, 0, 2, 2],
         )
     };
     for (request, message) in [

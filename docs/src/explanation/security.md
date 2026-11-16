@@ -44,13 +44,14 @@ A failed password sign-in answers the same, in the same time, whether the userna
 the password wrong, or the account disabled or without a password: a dummy hash is checked when
 there is no real one. Nobody can learn from the form which accounts exist.
 
-To slow down guessing online, password sign-in attempts are limited per client address: 5 at
-once, then one every 4 seconds, about 900 an hour. With passwords of 12 characters or more, that
-is far too slow to matter. The limit is kept in memory, and counts the address of the
-connection unless `RECTO_TRUST_FORWARDED_HEADERS` is on. Behind a proxy without it, all clients
-share the proxy's budget, so one person's typos make everyone wait; with it on and a proxy that
-does not replace `X-Forwarded-For`, a client can claim a new address at each attempt and escape
-the limit (see
+To slow down guessing online, password attempts are limited per client address: 5 at once, then
+one every 4 seconds, about 900 an hour. Sign-in and the current password of a password change
+share that budget. With passwords of 12 characters or more, that is far too slow to matter. An
+IPv6 client counts by its `/64` network, which it can otherwise roam freely. The limit is kept
+in memory, and counts the address of the connection unless `RECTO_TRUST_FORWARDED_HEADERS` is
+on. Behind a proxy without it, all clients share the proxy's budget, so one person's typos make
+everyone wait; with it on and a proxy that does not replace `X-Forwarded-For`, a client can claim
+a new address at each attempt and escape the limit (see
 [Run behind a reverse proxy](../how-to/reverse-proxy.md#count-sign-in-attempts-per-person)).
 
 Setting a user's password, or disabling them, ends all their sessions. Changing your own password
@@ -140,7 +141,7 @@ jobs. Within the trusted group, that is the point; outside it, CUPS is unreachab
 
 - **The network between the proxy and recto** is plain HTTP. Keep it on the same machine or a
   private network.
-- **Only password sign-in is rate limited.** Single sign-on relies on the provider's own limits,
+- **Only password attempts are rate limited.** Single sign-on relies on the provider's own limits,
   and the rest of recto requires a session. Put a limit in the reverse proxy if recto is reachable
   from the internet.
 - **There is no two-factor authentication for local accounts.** For that, use single sign-on with

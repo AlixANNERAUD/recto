@@ -90,6 +90,7 @@
       "mismatch": "The new passwords do not match.",
       "too_short": "The new password must be at least {minimum} characters long.",
       "too_long": "The new password must be at most {maximum} characters long.",
+      "too_many": "Too many attempts. Wait a few seconds, then try again.",
       "unavailable": "The password could not be changed. Try again in a moment."
     }
   },

@@ -31,6 +31,8 @@ pub enum PasswordRefusal {
     TooLong {
         maximum: usize,
     },
+    /// Too many password attempts from this address, sign-in included.
+    TooMany,
     /// The database failed.
     Unavailable,
 }
@@ -46,6 +48,7 @@ impl PasswordRefusal {
             PasswordRefusal::TooLong { maximum } => {
                 tf!("account.errors.too_long", maximum = maximum)
             }
+            PasswordRefusal::TooMany => t!("account.errors.too_many").to_owned(),
             PasswordRefusal::Unavailable => t!("account.errors.unavailable").to_owned(),
         }
     }

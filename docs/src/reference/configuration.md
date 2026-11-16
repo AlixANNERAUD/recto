@@ -92,7 +92,7 @@ These are not configurable:
 | --- | --- |
 | Session lifetime without a request | 12 hours |
 | Time to finish a sign-in at the provider | 10 minutes |
-| Password sign-in attempts per client address | 5 at once, then one every 4 seconds |
+| Password attempts per client address (IPv6: per `/64`) | 5 at once, then one every 4 seconds |
 | Longest password | 1,024 characters |
 | Connections to the database | at most 8 |
 | Lifetime of a scan result | 1 hour |

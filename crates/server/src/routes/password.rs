@@ -3,13 +3,15 @@
 //! its page rendered again around the problem (the login typed stays, a password never comes
 //! back); an accepted one with a redirect, so a reload does not post it twice.
 //!
-//! Password sign-in is rate limited per client address: a burst of 5 attempts, then one every
-//! 4 seconds. Behind a reverse proxy the peer address is the proxy's, so every user shares one
-//! budget unless `RECTO_TRUST_FORWARDED_HEADERS` is set; setting it without a proxy lets clients
-//! pick their own address and escape the limit.
+//! Password sign-in, and the check of the current password before a change, are rate limited
+//! per client address: a burst of 5 attempts, then one every 4 seconds, shared by both forms. An
+//! IPv6 client counts by its /64 network, which one household or machine usually gets whole.
+//! Behind a reverse proxy the peer address is the proxy's, so every user shares one budget unless
+//! `RECTO_TRUST_FORWARDED_HEADERS` is set; setting it without a proxy lets clients pick their own
+//! address and escape the limit.
 
 use std::{
-    net::IpAddr,
+    net::{IpAddr, Ipv6Addr},
     sync::{Arc, Weak},
     time::Duration,
 };
@@ -73,7 +75,7 @@ pub fn router(app: AppState, auth: &AuthState) -> Router {
         .with_state(state)
 }
 
-/// Password sign-in attempts per client address.
+/// Password attempts per client address (see [`Attempts::client`]).
 #[derive(Clone)]
 struct Attempts {
     /// Counts an attempt from an address; `false` when it is one too many.
@@ -100,7 +102,7 @@ impl Attempts {
     }
 
     /// The address attempts are counted by: the peer's, or with trusted forwarded headers the
-    /// one they name (else the peer's).
+    /// one they name (else the peer's), reduced by [`counted_address`].
     fn client(&self, parts: &Parts) -> IpAddr {
         let request = Request::from_parts(parts.clone(), ());
         let address = if self.trust_forwarded_headers {
@@ -108,12 +110,28 @@ impl Attempts {
         } else {
             PeerIpKeyExtractor.extract(&request)
         };
-        address.unwrap_or_else(|_| {
-            // The server always knows its peers; only a router served without connection
-            // information lands here, and then every client shares one budget.
-            tracing::warn!("the client address of a sign-in is unknown");
-            IpAddr::from([0, 0, 0, 0])
-        })
+        address.map_or_else(
+            |_| {
+                // The server always knows its peers; only a router served without connection
+                // information lands here, and then every client shares one budget.
+                tracing::warn!("the client address of a password attempt is unknown");
+                IpAddr::from([0, 0, 0, 0])
+            },
+            counted_address,
+        )
+    }
+}
+
+/// The address an attempt is counted by. An IPv6 client usually has a whole /64 to pick
+/// addresses from, so it counts by that network; an IPv4 address seen as IPv6 (`::ffff:a.b.c.d`,
+/// from a dual-stack socket) counts as itself.
+fn counted_address(address: IpAddr) -> IpAddr {
+    match address {
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => IpAddr::V6(Ipv6Addr::from(u128::from(v6) & !u128::from(u64::MAX))),
+        },
+        v4 => v4,
     }
 }
 
@@ -248,10 +266,6 @@ async fn signed_in(
     login: String,
     password: String,
 ) -> Result<String, SignInRefusal> {
-    // No password is that long: refused without spending a hash on it.
-    if password.chars().count() > passwords::MAXIMUM_LENGTH {
-        return Err(SignInRefusal::Invalid);
-    }
     let user = match users::sign_in_with_password(&state.app.database, &login, password).await {
         Ok(user) => user,
         Err(Error::InvalidCredentials) => return Err(SignInRefusal::Invalid),
@@ -276,8 +290,8 @@ struct PasswordFields {
 }
 
 /// `POST /account/password`: changes the signed-in user's password, then goes back to
-/// `/account?changed=1`. A refusal renders the Account page again with 400. Users the Account
-/// page is not for get the not-found page.
+/// `/account?changed=1`. A refusal renders the Account page again with 400, or 429 past the rate
+/// limit. Users the Account page is not for get the not-found page.
 async fn change_password(
     State(state): State<PasswordState>,
     Extension(user): Extension<User>,
@@ -295,22 +309,29 @@ async fn change_password(
         )
         .await;
     }
-    match change(&state, &user, &session, fields).await {
+    // The current password is guessed like any other: the same budget as sign-in.
+    let client = state.attempts.client(&parts);
+    let result = if (state.attempts.allow)(client) {
+        change(&state, &user, &session, fields).await
+    } else {
+        tracing::warn!(%client, user = user.username, "password change refused: too many attempts");
+        Err(PasswordRefusal::TooMany)
+    };
+    match result {
         Ok(()) => {
             tracing::info!(user = user.username, "password changed");
             Redirect::to("/account?changed=1").into_response()
         }
         Err(refusal) => {
             parts.uri = Uri::from_static("/account");
-            render(
-                &state.app,
-                state.methods,
-                parts,
-                StatusCode::BAD_REQUEST,
-                move || {
-                    provide_context(PasswordChange { refusal });
-                },
-            )
+            let status = if refusal == PasswordRefusal::TooMany {
+                StatusCode::TOO_MANY_REQUESTS
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            render(&state.app, state.methods, parts, status, move || {
+                provide_context(PasswordChange { refusal });
+            })
             .await
         }
     }
@@ -368,4 +389,31 @@ async fn change(
         tracing::error!(%error, "keeping the session after a password change failed");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ipv6_clients_count_by_their_network() {
+        let address = |text: &str| text.parse::<IpAddr>().unwrap();
+        assert_eq!(
+            counted_address(address("2001:db8:1:2:aaaa::1")),
+            address("2001:db8:1:2::")
+        );
+        assert_eq!(
+            counted_address(address("2001:db8:1:2:ffff:ffff:ffff:ffff")),
+            address("2001:db8:1:2::")
+        );
+        assert_ne!(
+            counted_address(address("2001:db8:1:3::1")),
+            address("2001:db8:1:2::")
+        );
+        assert_eq!(counted_address(address("192.0.2.7")), address("192.0.2.7"));
+        assert_eq!(
+            counted_address(address("::ffff:192.0.2.7")),
+            address("192.0.2.7")
+        );
+    }
 }

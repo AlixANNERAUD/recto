@@ -264,12 +264,16 @@ async fn replace_memberships(
 /// Every failure is [`Error::InvalidCredentials`]: unknown login, wrong password, an account
 /// without a password, or a disabled account. A password is hashed in every case, against a
 /// fixed dummy hash when there is no real one, so the response time does not tell them apart
-/// either.
+/// either. A password longer than [`passwords::MAXIMUM_LENGTH`] cannot be right and is refused
+/// without hashing it, so long inputs cannot be used to exhaust the server.
 pub async fn sign_in_with_password(
     database: &(impl ConnectionTrait + TransactionTrait),
     login: &str,
     password: String,
 ) -> Result<users::Model> {
+    if password.chars().count() > passwords::MAXIMUM_LENGTH {
+        return Err(Error::InvalidCredentials);
+    }
     let user = find_by_login(database, login).await?;
     let matches = match user.as_ref().and_then(|user| user.password_hash.clone()) {
         Some(hash) => passwords::verify(password, hash).await,
@@ -898,6 +902,34 @@ mod tests {
                 "{login} should get InvalidCredentials"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn an_overlong_password_is_refused_unhashed() {
+        let database = crate::testing::database().await;
+        let alice = create_local(&database, local("alice", None), &POLICY)
+            .await
+            .unwrap();
+        let longest = "a".repeat(passwords::MAXIMUM_LENGTH);
+        set_password(&database, alice.id, longest.clone(), &POLICY)
+            .await
+            .unwrap();
+        assert!(
+            sign_in_with_password(&database, "alice", longest)
+                .await
+                .is_ok()
+        );
+
+        // Even the right password is refused past the bound, since it is never compared. The
+        // policy never accepts such a password, so it is stored directly.
+        let overlong = "a".repeat(passwords::MAXIMUM_LENGTH + 1);
+        let mut changes: users::ActiveModel = reload(&database, alice.id).await.into();
+        changes.password_hash = Set(Some(passwords::hash(overlong.clone()).await));
+        changes.update(&database).await.unwrap();
+        assert!(matches!(
+            sign_in_with_password(&database, "alice", overlong).await,
+            Err(Error::InvalidCredentials)
+        ));
     }
 
     #[tokio::test]

@@ -29,7 +29,11 @@ the setting is turned back on.
 
 Password sign-in attempts are counted per client address: a burst of 5, then one more every 4
 seconds. Beyond that, recto answers `429 Too Many Requests` with **Too many attempts. Wait a few
-seconds, then try again.**
+seconds, then try again.**, even to the right password. A password change on the Account page
+checks the current password, so it counts as an attempt too, from the same budget.
+
+An IPv6 client counts by its `/64` network rather than by its full address, since one home or
+machine usually has the whole network to pick addresses from.
 
 The client address is the address of the connection, so behind a reverse proxy every client
 shares the proxy's budget. With `RECTO_TRUST_FORWARDED_HEADERS=true`, recto reads it from

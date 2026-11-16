@@ -33,7 +33,7 @@ These work without JavaScript and accept only requests from recto's own pages (s
 | `GET /scan/results/{id}` | The result of a scan, for the preview image. |
 | `GET /scan/results/{id}/download` | The scan as a file download. |
 | `POST /scan/results/{id}/save` | Saves the scan into `RECTO_SCAN_OUTPUT_DIR`. |
-| `POST /account/password` | Changes your password, then redirects to `/account?changed=1`. |
+| `POST /account/password` | Changes your password, then redirects to `/account?changed=1`. Answers `400` with the page for a refused change, and `429` after too many password attempts (see [Password sign-in limit](accounts.md#password-sign-in-limit)). |
 | `POST /administration/users` | Creates a local account. |
 | `POST /administration/users/{id}/administrator` | Grants or removes administration. |
 | `POST /administration/users/{id}/disabled` | Disables or enables a user. |
