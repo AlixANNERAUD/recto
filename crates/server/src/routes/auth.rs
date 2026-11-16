@@ -118,13 +118,18 @@ async fn finish(
 }
 
 /// Signs in the user of an identity the provider vouched for: finds or creates the user, then
-/// starts the session. A disabled user gets the No access page and no session.
+/// starts the session. Whoever the session signed in before is forgotten first, so a refused
+/// sign-in leaves nobody signed in: a disabled user gets the No access page and no session.
 async fn complete(
     database: &DatabaseConnection,
     session: &Session,
     signed_in: &SignedIn,
     next: &str,
 ) -> Redirect {
+    if let Err(error) = session::forget_user(session).await {
+        tracing::error!(%error, "ending the previous sign-in failed");
+        return Redirect::to(&error_location("unavailable", next));
+    }
     let user = match users::sign_in_with_identity(database, &signed_in.identity).await {
         Ok(user) => user,
         Err(recto_domain::Error::Disabled) => {
@@ -246,9 +251,13 @@ mod tests {
                 .to_owned()
         }
 
-        /// A session holding a sign-in in progress, as the callback finds it.
+        /// A session holding a sign-in in progress, as the callback finds it, started while
+        /// another user was signed in.
         async fn pending(store: &DatabaseSessionStore) -> Session {
             let session = Session::new(None, Arc::new(store.clone()), None);
+            session::sign_in(&session, 999, SignInMethod::Password)
+                .await
+                .unwrap();
             session.insert(NEXT, "/jobs").await.unwrap();
             session.save().await.unwrap();
             Session::new(session.id(), Arc::new(store.clone()), None)

@@ -118,6 +118,14 @@ async fn start(
     session.insert(METHOD, method).await
 }
 
+/// Forgets who the session signed in, keeping the rest of it, such as the page to come back to.
+pub async fn forget_user(session: &Session) -> Result<(), tower_sessions::session::Error> {
+    for key in [USER_ID, SIGNED_IN_AT, METHOD] {
+        session.remove_value(key).await?;
+    }
+    Ok(())
+}
+
 /// Ends the session and returns how it signed in; `None` when it was not signed in, as on
 /// `/no-access`, where the provider signed the person in but recto did not.
 pub async fn sign_out(session: &Session) -> Option<SignInMethod> {
