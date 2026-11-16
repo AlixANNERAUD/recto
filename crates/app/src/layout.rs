@@ -240,7 +240,13 @@ pub fn Layout(
 /// The frame of the pages shown without a signed-in user (sign-in errors, no access): the app's
 /// logo and name and one centered card.
 #[component]
-pub fn Bare(#[prop(into)] title: String, children: Children) -> impl IntoView {
+pub fn Bare(
+    #[prop(into)] title: String,
+    /// Whether to show the theme switch; the offline page has none, since it cannot work there.
+    #[prop(default = true)]
+    switch: bool,
+    children: Children,
+) -> impl IntoView {
     let document_title = tf!("app.page_title", page = title.clone(), name = app_name());
     view! {
         <Title text=document_title />
@@ -250,7 +256,7 @@ pub fn Bare(#[prop(into)] title: String, children: Children) -> impl IntoView {
                     <Mark />
                     <span class="truncate">{app_name()}</span>
                 </p>
-                <ThemeSwitch />
+                {switch.then(|| view! { <ThemeSwitch /> })}
             </div>
             <section class="bg-card grid gap-4 rounded-lg border p-6 shadow-[0_1px_2px_rgba(0,0,0,0.08)]">
                 <h1 class="text-xl font-semibold">{title}</h1>

@@ -3,7 +3,11 @@
 //! sign-in page can offer the switch and show the brand too, and browsers can fetch the manifest
 //! and worker without cookies; the cross-site check still applies.
 
-use std::sync::Arc;
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
 
 use axum::{
     Form, Router,
@@ -44,7 +48,8 @@ struct PwaState {
     branding: Arc<Branding>,
 }
 
-/// `POST /theme`, `GET /brand/*`, `/manifest.webmanifest` and `/sw.js`. `secure_cookies` is whether recto is served over HTTPS.
+/// `POST /theme`, `GET /brand/*`, `/manifest.webmanifest` and `/sw.js`. `secure_cookies` is
+/// whether recto is served over HTTPS.
 pub fn router(branding: Arc<Branding>, secure_cookies: bool) -> Router {
     let icon = |pick: fn(&Branding) -> &Bytes| {
         get(move |State(state): State<PwaState>| async move {
@@ -79,7 +84,7 @@ pub fn router(branding: Arc<Branding>, secure_cookies: bool) -> Router {
 }
 
 /// The web app manifest: what browsers read to install recto as an app.
-pub fn manifest(branding: &Branding) -> serde_json::Value {
+fn manifest(branding: &Branding) -> serde_json::Value {
     let icon = |path: &str, size: &str, purpose: &str| {
         serde_json::json!({
             "src": path, "sizes": size, "type": "image/png", "purpose": purpose,
@@ -102,9 +107,35 @@ pub fn manifest(branding: &Branding) -> serde_json::Value {
     })
 }
 
-/// The worker's source. Its cache is named after the version, so an upgrade drops the old one.
-pub fn service_worker() -> String {
-    SERVICE_WORKER.replace("__VERSION__", env!("CARGO_PKG_VERSION"))
+/// The worker's source. Its cache is named after the version and the brand, so an upgrade or a
+/// new brand drops the old one.
+fn service_worker(branding: &Branding) -> String {
+    SERVICE_WORKER
+        .replace("__VERSION__", env!("CARGO_PKG_VERSION"))
+        .replace("__BRAND__", &fingerprint(branding))
+}
+
+/// A short hash of what the brand serves, so changing it (with the same version) gives the
+/// worker a new cache name and browsers install the new worker.
+fn fingerprint(branding: &Branding) -> String {
+    let mut hasher = DefaultHasher::new();
+    branding.name.hash(&mut hasher);
+    branding.short_name.hash(&mut hasher);
+    branding.color.hash(&mut hasher);
+    branding.style.hash(&mut hasher);
+    if let Some(logo) = &branding.logo {
+        logo.bytes.hash(&mut hasher);
+    }
+    let icons = &branding.icons;
+    for icon in [
+        &icons.any_192,
+        &icons.any_512,
+        &icons.maskable_512,
+        &icons.apple_180,
+    ] {
+        icon.hash(&mut hasher);
+    }
+    format!("{:08x}", hasher.finish() as u32)
 }
 
 async fn web_manifest(State(state): State<PwaState>) -> Response {
@@ -119,13 +150,13 @@ async fn web_manifest(State(state): State<PwaState>) -> Response {
 }
 
 /// `no-cache` lets browsers check for a new worker on every load, which is how updates arrive.
-async fn worker() -> Response {
+async fn worker(State(state): State<PwaState>) -> Response {
     (
         [
             (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
             (header::CACHE_CONTROL, "no-cache"),
         ],
-        service_worker(),
+        service_worker(&state.branding),
     )
         .into_response()
 }
@@ -199,10 +230,22 @@ async fn choose_theme(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::branding::default_branding;
+
+    #[test]
+    fn a_new_brand_gives_the_worker_a_new_cache() {
+        let mut other = default_branding();
+        other.name = "Maison".into();
+        assert_ne!(service_worker(&default_branding()), service_worker(&other));
+        let mut icon = default_branding();
+        icon.icons.any_192 = Bytes::from_static(b"another icon");
+        assert_ne!(service_worker(&default_branding()), service_worker(&icon));
+        assert!(!service_worker(&other).contains("__BRAND__"));
+    }
 
     #[test]
     fn the_worker_caches_only_static_files() {
-        let source = service_worker();
+        let source = service_worker(&default_branding());
         assert!(source.contains("\"/pkg/\"") && source.contains("\"/brand/\""));
         for never in [
             "/api/",
