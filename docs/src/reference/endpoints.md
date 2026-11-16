@@ -14,6 +14,7 @@ instead. A single sign-on user without the required claim, or disabled, is sent 
 | `/jobs` | Jobs: the print queue, with Cancel buttons. |
 | `/scan` | Scan: scanners, options, preview and results. Needs JavaScript. |
 | `/account` | Account: change your password. Only for users with a password, and with local accounts on. |
+| `/administration` | Redirects to `/administration/users`. Administrators only. |
 | `/administration/users` | Users: create local accounts, set passwords, disable users, grant administration. Administrators only. |
 | `/administration/groups` | Groups: the groups from the identity provider and their members. Administrators only. |
 | `/sign-in` | The password form, and the single sign-on button when a provider is set. It redirects to `/auth/login` instead when a provider is set and local accounts are off, or no account has a password. |

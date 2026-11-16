@@ -99,6 +99,7 @@
     "sections": "Administration sections",
     "users": {
       "tab": "Users",
+      "document_title": "Users · Administration",
       "list": "Users",
       "load_failed": "The users could not be loaded. Try again in a moment.",
       "columns": {
@@ -110,6 +111,7 @@
         "actions": "Actions"
       },
       "no_groups": "None",
+      "groups_separator": ", ",
       "single_sign_on": "Single sign-on",
       "password": "Password",
       "no_method": "None",
@@ -166,6 +168,7 @@
     },
     "groups": {
       "tab": "Groups",
+      "document_title": "Groups · Administration",
       "intro": "Groups and their members come from the identity provider at each sign-in, so they are read-only here.",
       "load_failed": "The groups could not be loaded. Try again in a moment.",
       "empty": "No groups yet",

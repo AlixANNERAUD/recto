@@ -200,7 +200,7 @@ pub fn UsersPage() -> impl IntoView {
         .into_any(),
     };
     view! {
-        <Layout title=t!("administration.title")>
+        <Layout title=t!("administration.title") document_title=t!("administration.users.document_title")>
             <Sections current=Section::Users />
             {alert}
             {create}
@@ -367,7 +367,8 @@ fn UserTableRow(
         view! { <span class="text-muted-foreground">{t!("administration.users.no_groups")}</span> }
             .into_any()
     } else {
-        view! { <span>{user.groups.join(", ")}</span> }.into_any()
+        view! { <span>{user.groups.join(t!("administration.users.groups_separator"))}</span> }
+            .into_any()
     };
     let methods = {
         let single_sign_on = user.single_sign_on.then(|| {

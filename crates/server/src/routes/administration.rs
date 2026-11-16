@@ -46,7 +46,8 @@ struct AdministrationState {
     policy: PasswordPolicy,
 }
 
-/// `GET /administration/users` and `/administration/groups`, and the forms of the Users page.
+/// `GET /administration/users` and `/administration/groups`, `/administration` leading to the
+/// first, and the forms of the Users page.
 pub fn router(app: AppState, auth: &AuthState) -> Router {
     let state = AdministrationState {
         app,
@@ -54,6 +55,7 @@ pub fn router(app: AppState, auth: &AuthState) -> Router {
         policy: auth.password_policy,
     };
     Router::new()
+        .route("/administration", get(|| async { Redirect::to(USERS) }))
         .route(USERS, get(users_page).post(create))
         .route(
             "/administration/users/{id}/administrator",

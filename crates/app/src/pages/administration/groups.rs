@@ -55,7 +55,7 @@ pub fn GroupsPage() -> impl IntoView {
         .into_any(),
     };
     view! {
-        <Layout title=t!("administration.title")>
+        <Layout title=t!("administration.title") document_title=t!("administration.groups.document_title")>
             <Sections current=Section::Groups />
             <p class="text-muted-foreground text-sm">{t!("administration.groups.intro")}</p>
             {content}

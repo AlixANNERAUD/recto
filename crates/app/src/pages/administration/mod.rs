@@ -1,5 +1,5 @@
 //! The administration pages, for administrators only: `/administration/users` and
-//! `/administration/groups`. The server loads their data, checks that the user administers
+//! `/administration/groups`, which `/administration` leads to. The server loads their data, checks that the user administers
 //! recto, and hands each page what it shows as a context; anyone else gets the not-found page,
 //! so the pages do not reveal that they exist. Every change is a plain form posted to the
 //! server, which works without JavaScript.

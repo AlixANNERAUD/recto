@@ -94,8 +94,14 @@ const NAV_ITEM: &str = "relative flex flex-col items-center gap-0.5 rounded-md p
 const NAV_CURRENT: &str = "text-brand bg-brand-subtle hover:bg-brand-subtle";
 const NAV_INDICATOR: &str = "absolute bg-brand rounded-full bottom-0 left-1/4 right-1/4 h-[3px] md:left-0 md:right-auto md:top-1/4 md:bottom-1/4 md:h-auto md:w-[3px]";
 
+/// `title` is the page's heading, and its document title unless `document_title` is given, for
+/// pages that share a heading.
 #[component]
-pub fn Layout(#[prop(into)] title: String, children: Children) -> impl IntoView {
+pub fn Layout(
+    #[prop(into)] title: String,
+    #[prop(optional, into)] document_title: Option<String>,
+    children: Children,
+) -> impl IntoView {
     let path = use_location().pathname.get_untracked();
     let administrator = is_administrator();
     // Rendered twice, for the phone row and the side rail; CSS shows one of them.
@@ -165,7 +171,10 @@ pub fn Layout(#[prop(into)] title: String, children: Children) -> impl IntoView 
             </form>
         }
     });
-    let document_title = tf!("app.page_title", page = title.clone());
+    let document_title = tf!(
+        "app.page_title",
+        page = document_title.unwrap_or_else(|| title.clone())
+    );
     view! {
         <Title text=document_title />
         <a

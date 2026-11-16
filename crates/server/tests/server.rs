@@ -1910,8 +1910,12 @@ async fn administration_is_hidden_from_non_admins() {
     );
     let response = harness.send(page("/", Some(&carol))).await;
     assert!(!text(response).await.contains("/administration"));
+    // The section's own address leads administrators to its first page.
+    let response = harness.send(page("/administration", Some(&admin))).await;
+    assert_redirect(&response, "/administration/users");
 
     for path in [
+        "/administration",
         "/administration/users",
         "/administration/groups",
         "/administration/users/",
@@ -1956,6 +1960,63 @@ async fn administration_is_hidden_from_non_admins() {
     for (uri, fields) in administration_forms(admin_id) {
         let response = harness.send(form(&uri, None, &fields)).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn administration_pages_have_their_own_titles() {
+    let harness = Harness::new().await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    for (path, title) in [
+        (
+            "/administration/users",
+            "<title>Users · Administration · recto</title>",
+        ),
+        (
+            "/administration/groups",
+            "<title>Groups · Administration · recto</title>",
+        ),
+    ] {
+        let response = harness.send(page(path, Some(&admin))).await;
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let html = text(response).await;
+        assert!(html.contains(title), "{path}: {html}");
+        assert!(html.contains(">Administration</h1>"), "{path}: {html}");
+    }
+}
+
+#[tokio::test]
+async fn crafted_notices_put_nothing_on_the_users_page() {
+    let harness = Harness::new().await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    let id = harness.user_id("admin").await;
+    let users_page = |query: String| page(&format!("/administration/users?{query}"), Some(&admin));
+
+    // A notice of the server names a listed user.
+    let response = harness
+        .send(users_page(format!("done=created&user={id}")))
+        .await;
+    assert!(
+        text(response)
+            .await
+            .contains("The account admin was created.")
+    );
+
+    for query in [
+        format!("done=%3Cscript%3Ealert(1)%3C%2Fscript%3E&user={id}"),
+        format!("done=Your+account+was+deleted&user={id}"),
+        format!("done=created&user={}", id + 100),
+        "done=created&user=admin".to_owned(),
+        "done=created".to_owned(),
+        format!("user={id}"),
+    ] {
+        let response = harness.send(users_page(query.clone())).await;
+        assert_eq!(response.status(), StatusCode::OK, "{query}");
+        let html = text(response).await;
+        assert!(!html.contains("role=\"status\""), "{query}: {html}");
+        assert!(!html.contains("was created"), "{query}: {html}");
+        assert!(!html.contains("<script>alert"), "{query}: {html}");
+        assert!(!html.contains("was deleted"), "{query}: {html}");
     }
 }
 
