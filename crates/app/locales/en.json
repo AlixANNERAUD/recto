@@ -243,7 +243,7 @@
       },
       "errors": {
         "invalid_name": "The name must be 1 to 127 characters among letters, digits, dots, underscores and hyphens.",
-        "invalid_address": "The address must start with ipp://, ipps://, http://, https://, socket://, lpd://, dnssd:// or usb:// and name a host.",
+        "invalid_address": "The address must start with ipp://, ipps://, http://, https://, socket://, lpd://, dnssd:// or usb:// and name a host, without a user name or password.",
         "needs_confirmation": "Tick the confirmation to remove the printer.",
         "refused": "CUPS refused the change: check that the cups service lets recto administer it.",
         "refused_guide": "How to set it up",

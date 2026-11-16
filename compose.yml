@@ -19,9 +19,10 @@
 # To save into an existing folder owned by someone else, such as Paperless's consume folder, set
 # `user: "<uid>:<gid>"` on the recto service to that owner instead.
 #
-# Printers: add them to the `cups` service, for example
+# Printers: administrators add and manage them on recto's Printers page. recto talks to CUPS's
+# local socket, shared through the cups-socket volume (see examples/cups/cups-files.conf). The
+# command line works too:
 #   docker compose exec cups lpadmin -p office -E -v ipp://192.168.1.60/ipp/print -m everywhere
-# (the local socket is the only way to administer CUPS, see examples/cups/cups-files.conf).
 # Scanners: see the sane-airscan lines below.
 services:
   recto:
@@ -39,6 +40,9 @@ services:
       RECTO_OIDC_ISSUER: ${RECTO_OIDC_ISSUER:-}
       RECTO_OIDC_CLIENT_ID: ${RECTO_OIDC_CLIENT_ID:-}
       RECTO_CUPS_URL: http://cups:631
+      # CUPS's local socket, for the Printers page to add and manage printers. CUPS knows recto by
+      # the `recto` account of the cups service's entrypoint, which must carry recto's uid.
+      RECTO_CUPS_ADMIN_SOCKET: /run/cups/cups.sock
       # Where "Save" on the scan page writes; it must be writable by uid 65532 (chown 65532 consume).
       RECTO_SCAN_OUTPUT_DIR: /consume
       RECTO_LOG_FORMAT: ${RECTO_LOG_FORMAT:-json}
@@ -57,6 +61,8 @@ services:
       # docs/src/how-to/back-up.md.
       - recto-data:/data
       - ./consume:/consume
+      # Read-only is enough to connect to a socket.
+      - cups-socket:/run/cups:ro
       # Docker's bridge network carries no multicast, so sane-airscan cannot discover scanners:
       # list them in airscan.conf. The Debian dll.conf probes every backend, which is slow in a
       # container; the one here enables airscan, escl and net only. net.conf lists saned hosts.
@@ -83,6 +89,18 @@ services:
     # `docker buildx imagetools inspect olbat/cupsd:latest` and copy its Digest.
     image: olbat/cupsd:latest@sha256:3a9d7c319f4153c87e16db4edb6ef6c317aa7e71f8abe65c3419cc9aca851194
     restart: unless-stopped
+    # The image has no `recto` account, which cups-files.conf makes an administrator over the local
+    # socket: CUPS matches the peer's uid with the passwd entry of the name recto sends. The uid is
+    # recto's (65532, or the one of `user:` on the recto service: change it here as well). The
+    # image has no entrypoint of its own, its command is `cupsd -f`. Check this again when the
+    # image digest changes.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        grep -q '^recto:' /etc/group || echo 'recto:x:65532:' >> /etc/group
+        grep -q '^recto:' /etc/passwd || echo 'recto:x:65532:65532:recto:/nonexistent:/usr/sbin/nologin' >> /etc/passwd
+        exec /usr/sbin/cupsd -f
     volumes:
       # The named volume keeps the printers added with lpadmin (printers.conf lives in /etc/cups);
       # the file mounted over it is the one this repository controls.
@@ -90,6 +108,8 @@ services:
       - ./examples/cups/cupsd.conf:/etc/cups/cupsd.conf:ro
       - ./examples/cups/cups-files.conf:/etc/cups/cups-files.conf:ro
       - cups-spool:/var/spool/cups
+      # The socket recto administers CUPS through.
+      - cups-socket:/run/cups
     # Publishing 631 exposes printing to whoever can reach the port (Docker's proxy hides their
     # address from cupsd.conf's allow list), so publish it only to a trusted network.
     # ports:
@@ -109,3 +129,4 @@ volumes:
   recto-data:
   cups-config:
   cups-spool:
+  cups-socket:
