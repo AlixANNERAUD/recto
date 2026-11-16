@@ -157,11 +157,40 @@ jobs:
           echo 'ci-password-long-enough' |
             docker compose exec -T recto /app/recto create-administrator --username admin
           status=$(curl --silent --output /dev/null --write-out '%{http_code} %{redirect_url}' \
+            --cookie-jar cookies.txt \
             --header 'Origin: http://localhost:8080' \
             --data 'login=admin&password=ci-password-long-enough&next=/' \
             http://localhost:8080/sign-in)
           echo "$status"
           test "$status" = "303 http://localhost:8080/"
+        env:
+          RECTO_IMAGE: recto:ci
+          RECTO_PUBLIC_URL: http://localhost:8080
+      # The Printers page manages CUPS through the shared socket: add a queue (a generic driver and
+      # an address nothing answers at, which only a PPD driver accepts without contacting it), see
+      # it in CUPS itself, then remove it.
+      - name: Add and remove a printer through recto
+        run: |
+          printers() {
+            curl --silent --output /dev/null --write-out '%{http_code} %{redirect_url}' \
+              --cookie cookies.txt --header 'Origin: http://localhost:8080' "$@"
+          }
+          status=$(printers \
+            --data-urlencode 'name=ci' \
+            --data-urlencode 'address=ipp://192.0.2.12/ipp/print' \
+            --data-urlencode 'driver=drv:///sample.drv/generic.ppd' \
+            http://localhost:8080/administration/printers/add)
+          echo "$status"
+          test "$status" = "303 http://localhost:8080/administration/printers?done=added"
+          docker compose exec -T cups lpstat -p ci
+          status=$(printers --data 'printer=ci&confirm=yes' \
+            http://localhost:8080/administration/printers/remove)
+          echo "$status"
+          test "$status" = "303 http://localhost:8080/administration/printers?done=removed"
+          if docker compose exec -T cups lpstat -p ci; then
+            echo '::error::The printer is still there'
+            exit 1
+          fi
         env:
           RECTO_IMAGE: recto:ci
           RECTO_PUBLIC_URL: http://localhost:8080
