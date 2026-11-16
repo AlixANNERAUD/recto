@@ -34,7 +34,7 @@ a default, such as `RECTO_LOCAL_ACCOUNTS`, must be left out rather than empty.
 | `RECTO_BRAND_SHORT_NAME` | the name | The installed app's label where space is short, such as under a home screen icon. 1 to 32 characters. |
 | `RECTO_BRAND_COLOR` | `#0f6cbd` | The accent color, `#rrggbb` in either case. White text on it needs a contrast of at least 4.5:1, or recto refuses to start. |
 | `RECTO_BRAND_LOGO` | none | A file shown before the name in the header and on the sign-in page instead of the printer glyph. PNG, JPEG or SVG, recognized by content, at most 1 MiB. |
-| `RECTO_BRAND_ICON` | none | A file the app icons are made from. A square PNG or JPEG, at least 512 by 512 pixels, at most 5 MiB. Without it, recto draws its icon in the accent color. |
+| `RECTO_BRAND_ICON` | none | A file the app icons are made from. A square PNG or JPEG, from 512 by 512 to 4096 by 4096 pixels, at most 5 MiB. Without it, recto draws its icon in the accent color. |
 
 At least one way to sign in is needed: `RECTO_LOCAL_ACCOUNTS=false` without an OpenID Connect
 provider is refused at startup.

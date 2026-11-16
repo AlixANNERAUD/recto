@@ -684,9 +684,13 @@ async fn the_brand_name_is_in_the_header_and_titles() {
     assert!(!html.contains("· recto"), "{html}");
     // Without a logo, the glyph stays.
     assert!(!html.contains(r#"src="/brand/logo""#), "{html}");
+    assert!(header.contains(GLYPH), "{header}");
     assert!(html.contains(r#"<link rel="icon" href="/brand/icon-192.png""#));
     assert!(html.contains(r#"<link rel="apple-touch-icon" href="/brand/apple-touch-icon.png""#));
 }
+
+/// The start of the printer glyph's square, which a logo replaces.
+const GLYPH: &str = r#"<span aria-hidden="true" class="bg-primary text-primary-foreground"#;
 
 #[tokio::test]
 async fn a_logo_replaces_the_glyph() {
@@ -708,7 +712,10 @@ async fn a_logo_replaces_the_glyph() {
     let html = harness.page("/printers", &cookie).await;
     let header = &html[html.find("<header").unwrap()..html.find("</header>").unwrap()];
     assert!(header.contains(image), "{header}");
-    assert!(sign_in_page(&harness).await.contains(image));
+    assert!(!header.contains(GLYPH), "{header}");
+    let sign_in = sign_in_page(&harness).await;
+    assert!(sign_in.contains(image), "{sign_in}");
+    assert!(!sign_in.contains(GLYPH), "{sign_in}");
 }
 
 #[tokio::test]

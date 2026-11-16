@@ -10,7 +10,7 @@ use std::{
 
 use axum::body::Bytes;
 use image::{
-    DynamicImage, GenericImageView, ImageFormat, Rgba, RgbaImage,
+    DynamicImage, ImageFormat, ImageReader, Rgba, RgbaImage,
     imageops::{self, FilterType},
 };
 pub use recto_app::branding::{BrandFile, BrandIcons, Branding, DEFAULT_COLOR, DEFAULT_NAME};
@@ -22,9 +22,14 @@ const LOGO_LIMIT: u64 = MEBIBYTE;
 const ICON_LIMIT: u64 = 5 * MEBIBYTE;
 /// The largest icon a browser asks for; anything smaller would be blown up.
 const ICON_MINIMUM: u32 = 512;
+/// Checked before decoding: a small, highly compressed file could otherwise unpack into
+/// hundreds of megabytes.
+const ICON_MAXIMUM: u32 = 4096;
 /// What WCAG 2 asks of normal text (level AA).
 const MINIMUM_CONTRAST: f64 = 4.5;
 const WHITE: [u8; 3] = [255; 3];
+/// The light theme's page background; its cards are white.
+const LIGHT_BACKGROUND: [u8; 3] = [0xf5; 3];
 const BLACK: [u8; 3] = [0; 3];
 /// The dark theme's cards, where most accent text sits.
 const DARK_CARD: [u8; 3] = [0x29; 3];
@@ -46,7 +51,7 @@ pub struct BrandOptions {
     /// A PNG, JPEG or SVG file of at most 1 MiB shown in the header instead of the glyph.
     #[arg(long, env = "RECTO_BRAND_LOGO", value_parser = parse_path)]
     pub brand_logo: Option<PathBuf>,
-    /// A square PNG or JPEG file of at least 512 by 512 pixels and at most 5 MiB for the app
+    /// A square PNG or JPEG file of 512 to 4096 pixels a side and at most 5 MiB for the app
     /// icons, which are otherwise drawn in the accent color.
     #[arg(long, env = "RECTO_BRAND_ICON", value_parser = parse_path)]
     pub brand_icon: Option<PathBuf>,
@@ -168,16 +173,11 @@ fn mix(a: [u8; 3], b: [u8; 3], t: f64) -> [u8; 3] {
 
 /// The accent tokens of `style/main.css` for another color, under the same selectors so that,
 /// coming after the stylesheet, they win. Buttons keep the color in both themes (white text on
-/// it was checked); accent text in the dark theme is lightened until it reads on the cards.
+/// it was checked at startup). Accent text (`--brand`) sits on the cards, the page and its own
+/// subtle background: it is darkened in the light theme and lightened in the dark one, by the
+/// least step that reads on all of them.
 fn accent_style(color: [u8; 3]) -> String {
-    let hover = mix(color, BLACK, 0.12);
-    let light = tokens(color, hover, color, mix(color, WHITE, 0.92), color);
-    let dark_brand = (0..=20)
-        .map(|step| mix(color, WHITE, f64::from(step) / 20.0))
-        .find(|brand| contrast(*brand, DARK_CARD) >= MINIMUM_CONTRAST)
-        .unwrap_or(WHITE);
-    let dark_subtle = mix(color, DARK_BACKGROUND, 0.8);
-    let dark = tokens(color, hover, dark_brand, dark_subtle, dark_brand);
+    let (light, dark) = (light_accent(color).css(), dark_accent(color).css());
     format!(
         ":root{{{light}}}\
          @media (prefers-color-scheme: dark){{:root:not([data-theme=\"light\"]){{{dark}}}}}\
@@ -185,21 +185,60 @@ fn accent_style(color: [u8; 3]) -> String {
     )
 }
 
-fn tokens(
+/// The accent tokens of one theme.
+struct Accent {
     primary: [u8; 3],
-    hover: [u8; 3],
+    primary_hover: [u8; 3],
+    /// Text, on the cards, the page and `brand_subtle`.
     brand: [u8; 3],
-    subtle: [u8; 3],
+    brand_subtle: [u8; 3],
+    /// The focus ring, as visible as the accent text.
     ring: [u8; 3],
-) -> String {
-    format!(
-        "--primary:{};--primary-hover:{};--brand:{};--brand-subtle:{};--ring:{};",
-        hex(primary),
-        hex(hover),
-        hex(brand),
-        hex(subtle),
-        hex(ring)
-    )
+}
+
+impl Accent {
+    /// The tokens of a theme whose accent text is `color` moved towards `toward` until it
+    /// reaches the minimum contrast on every surface, the theme's own subtle background
+    /// included.
+    fn new(color: [u8; 3], brand_subtle: [u8; 3], toward: [u8; 3], surfaces: [[u8; 3]; 2]) -> Self {
+        let brand = (0..=20)
+            .map(|step| mix(color, toward, f64::from(step) / 20.0))
+            .find(|brand| {
+                [brand_subtle, surfaces[0], surfaces[1]]
+                    .iter()
+                    .all(|surface| contrast(*brand, *surface) >= MINIMUM_CONTRAST)
+            })
+            // Black or white always reads on these surfaces; this is never reached.
+            .unwrap_or(toward);
+        Self {
+            primary: color,
+            primary_hover: mix(color, BLACK, 0.12),
+            brand,
+            brand_subtle,
+            ring: brand,
+        }
+    }
+
+    fn css(&self) -> String {
+        format!(
+            "--primary:{};--primary-hover:{};--brand:{};--brand-subtle:{};--ring:{};",
+            hex(self.primary),
+            hex(self.primary_hover),
+            hex(self.brand),
+            hex(self.brand_subtle),
+            hex(self.ring)
+        )
+    }
+}
+
+fn light_accent(color: [u8; 3]) -> Accent {
+    let subtle = mix(color, WHITE, 0.92);
+    Accent::new(color, subtle, BLACK, [WHITE, LIGHT_BACKGROUND])
+}
+
+fn dark_accent(color: [u8; 3]) -> Accent {
+    let subtle = mix(color, DARK_BACKGROUND, 0.8);
+    Accent::new(color, subtle, WHITE, [DARK_CARD, DARK_BACKGROUND])
 }
 
 /// The file at `path`, refused beyond `limit` bytes without reading further.
@@ -253,13 +292,23 @@ fn read_icon(path: &Path) -> Result<DynamicImage, String> {
                 path.display()
             )
         })?;
-    let image = image::load_from_memory_with_format(&bytes, format).map_err(|error| {
+    let undecodable = |error: image::ImageError| {
         format!(
             "RECTO_BRAND_ICON {} cannot be decoded: {error}",
             path.display()
         )
-    })?;
-    let (width, height) = image.dimensions();
+    };
+    // The size, from the header alone, is checked before the pixels are decoded.
+    let (width, height) = ImageReader::with_format(Cursor::new(&bytes), format)
+        .into_dimensions()
+        .map_err(undecodable)?;
+    if width > ICON_MAXIMUM || height > ICON_MAXIMUM {
+        return Err(format!(
+            "RECTO_BRAND_ICON {} is {width} by {height} pixels; it must be at most \
+             {ICON_MAXIMUM} by {ICON_MAXIMUM}",
+            path.display()
+        ));
+    }
     if width != height {
         return Err(format!(
             "RECTO_BRAND_ICON {} is {width} by {height} pixels; it must be square",
@@ -273,7 +322,7 @@ fn read_icon(path: &Path) -> Result<DynamicImage, String> {
             path.display()
         ));
     }
-    Ok(image)
+    image::load_from_memory_with_format(&bytes, format).map_err(undecodable)
 }
 
 /// The operator's image as the icons. The maskable one keeps it to the middle 80 %, the part
@@ -508,6 +557,52 @@ mod tests {
     }
 
     #[test]
+    fn accent_text_reads_on_every_surface() {
+        let mut checked = 0;
+        for red in (0..=255).step_by(17) {
+            for green in (0..=255).step_by(17) {
+                for blue in (0..=255).step_by(17) {
+                    let color = [red, green, blue];
+                    // Only colors the startup check accepts.
+                    if contrast(WHITE, color) < MINIMUM_CONTRAST {
+                        continue;
+                    }
+                    checked += 1;
+                    let light = light_accent(color);
+                    let dark = dark_accent(color);
+                    for (theme, accent, surfaces) in [
+                        (
+                            "light",
+                            &light,
+                            [WHITE, LIGHT_BACKGROUND, light.brand_subtle],
+                        ),
+                        (
+                            "dark",
+                            &dark,
+                            [DARK_CARD, DARK_BACKGROUND, dark.brand_subtle],
+                        ),
+                    ] {
+                        for surface in surfaces {
+                            let ratio = contrast(accent.brand, surface);
+                            assert!(
+                                ratio >= MINIMUM_CONTRAST,
+                                "{theme} {} on {}: {ratio:.2}",
+                                hex(accent.brand),
+                                hex(surface)
+                            );
+                        }
+                        assert_eq!(accent.ring, accent.brand);
+                        assert_eq!(accent.primary, color);
+                    }
+                }
+            }
+        }
+        assert!(checked > 1000, "{checked}");
+        // A color that already reads is kept as it is in the light theme.
+        assert_eq!(light_accent([0x0f, 0x6c, 0xbd]).brand, [0x0f, 0x6c, 0xbd]);
+    }
+
+    #[test]
     fn names_are_bounded() {
         for bad in ["", "   ", &"n".repeat(65)] {
             let error = load(&options(|o| o.brand_name = bad.to_owned())).unwrap_err();
@@ -581,6 +676,49 @@ mod tests {
         assert_eq!(maskable.get_pixel(0, 0).0, [0x8a, 0x2b, 0xe2, 255]);
         assert_eq!(maskable.get_pixel(256, 256).0, [200, 30, 30, 255]);
         assert_eq!(decode(&icons.apple_180).dimensions(), (180, 180));
+    }
+
+    /// A PNG with only a header claiming `size` by `size` pixels: what a tiny file that
+    /// decompresses into a huge image looks like before decoding.
+    fn png_header(size: u32) -> Vec<u8> {
+        fn crc(bytes: &[u8]) -> u32 {
+            let mut crc = !0u32;
+            for byte in bytes {
+                crc ^= u32::from(*byte);
+                for _ in 0..8 {
+                    crc = if crc & 1 == 1 {
+                        (crc >> 1) ^ 0xedb8_8320
+                    } else {
+                        crc >> 1
+                    };
+                }
+            }
+            !crc
+        }
+        fn chunk(png: &mut Vec<u8>, kind: &[u8], data: &[u8]) {
+            png.extend((data.len() as u32).to_be_bytes());
+            let body = [kind, data].concat();
+            png.extend(&body);
+            png.extend(crc(&body).to_be_bytes());
+        }
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut header = [size.to_be_bytes(), size.to_be_bytes()].concat();
+        header.extend([8, 6, 0, 0, 0]);
+        chunk(&mut png, b"IHDR", &header);
+        chunk(&mut png, b"IDAT", &[]);
+        chunk(&mut png, b"IEND", &[]);
+        png
+    }
+
+    #[test]
+    fn a_huge_icon_is_refused_before_decoding() {
+        let dir = temporary_directory();
+        let path = dir.path().join("huge.png");
+        std::fs::write(&path, png_header(11_000)).unwrap();
+        let error = load(&options(|o| o.brand_icon = Some(path))).unwrap_err();
+        assert!(error.contains("RECTO_BRAND_ICON"), "{error}");
+        assert!(error.contains("huge.png"), "{error}");
+        assert!(error.contains("at most 4096 by 4096"), "{error}");
     }
 
     #[test]
