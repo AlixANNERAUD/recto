@@ -10,7 +10,7 @@ pub struct Model {
     pub id: i64,
     pub user_id: i64,
     pub printer: String,
-    pub cups_job_id: i64,
+    pub cups_job_id: Option<i64>,
     pub document_name: String,
     pub submitted_at: DateTimeWithTimeZone,
     pub state: String,
@@ -23,7 +23,7 @@ pub enum Relation {
         from = "Column::UserId",
         to = "super::users::Column::Id",
         on_update = "NoAction",
-        on_delete = "Cascade"
+        on_delete = "Restrict"
     )]
     Users,
 }

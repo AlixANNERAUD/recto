@@ -104,12 +104,18 @@ pub enum Notice {
 }
 
 impl Notice {
+    const ALL: [Notice; 2] = [Notice::Access, Notice::Forgotten];
+
     /// The value of the `done` query parameter.
     pub fn code(self) -> &'static str {
         match self {
             Notice::Access => "access",
             Notice::Forgotten => "forgotten",
         }
+    }
+
+    fn from_code(code: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|notice| notice.code() == code)
     }
 
     fn message(self) -> &'static str {
@@ -122,12 +128,8 @@ impl Notice {
 
 fn notice() -> Option<&'static str> {
     let query = use_query_map();
-    let query = query.read_untracked();
-    match query.get("done")?.as_str() {
-        "access" => Some(Notice::Access.message()),
-        "forgotten" => Some(Notice::Forgotten.message()),
-        _ => None,
-    }
+    let code = query.read_untracked().get("done")?;
+    Notice::from_code(&code).map(Notice::message)
 }
 
 #[component]
@@ -177,6 +179,8 @@ fn DevicesPage(kind: DeviceKind) -> impl IntoView {
             <Alert tone=Tone::Danger>{t!("administration.devices.load_failed")}</Alert>
         }
         .into_any(),
+        // Without the listing, no rule does not mean no device: the alert above says enough.
+        Some(devices) if devices.is_empty() && data.listing_failed => ().into_any(),
         Some(devices) if devices.is_empty() => {
             view! { <Empty title=empty body=empty_body /> }.into_any()
         }
@@ -233,14 +237,20 @@ fn Device(kind: DeviceKind, device: DeviceRow, groups: Vec<GroupChoice>) -> impl
         DeviceAccess::Groups(ids) => ids.clone(),
     };
     let missing = (!device.listed).then(|| {
-        view! { <span class="text-danger text-xs font-semibold">{t!("administration.devices.not_found")}</span> }
+        view! {
+            <span class="text-danger text-xs font-semibold">
+                {t!("administration.devices.not_found")}
+            </span>
+        }
     });
     let detail = device
         .detail
         .map(|detail| view! { <p class="text-muted-foreground text-sm">{detail}</p> });
     let choices = if groups.is_empty() {
-        view! { <p class="text-muted-foreground text-sm">{t!("administration.devices.no_groups")}</p> }
-            .into_any()
+        view! {
+            <p class="text-muted-foreground text-sm">{t!("administration.devices.no_groups")}</p>
+        }
+        .into_any()
     } else {
         view! {
             <ul class="grid gap-1">
@@ -274,7 +284,9 @@ fn Device(kind: DeviceKind, device: DeviceRow, groups: Vec<GroupChoice>) -> impl
                 <button type="submit" class=small_button_class(ButtonVariant::Secondary)>
                     {t!("administration.devices.forget")}
                 </button>
-                <span class="text-muted-foreground ml-2 text-xs">{t!("administration.devices.forget_hint")}</span>
+                <span class="text-muted-foreground ml-2 text-xs">
+                    {t!("administration.devices.forget_hint")}
+                </span>
             </form>
         }
     });
@@ -291,23 +303,46 @@ fn Device(kind: DeviceKind, device: DeviceRow, groups: Vec<GroupChoice>) -> impl
                     {t!("administration.devices.change")}
                 </summary>
                 <div class="grid gap-4 pt-2">
-                    <form method="post" action=format!("{}/access", kind.path()) class="grid gap-3">
-                        <input type="hidden" name="device" value=device.name />
-                        <label class="flex min-h-8 items-center gap-2">
-                            <input type="radio" name="access" value="everyone" checked=everyone class="accent-brand size-4" />
-                            {t!("administration.devices.choose_everyone")}
-                        </label>
-                        <label class="flex min-h-8 items-center gap-2">
-                            <input type="radio" name="access" value="groups" checked=!everyone class="accent-brand size-4" />
-                            {t!("administration.devices.choose_groups")}
-                        </label>
-                        <div class="pl-6">{choices}</div>
-                        <p class="text-muted-foreground text-xs">{t!("administration.devices.administrators_note")}</p>
-                        <div>
-                            <button type="submit" class=small_button_class(ButtonVariant::Primary)>
-                                {t!("administration.devices.save")}
-                            </button>
-                        </div>
+                    <form method="post" action=format!("{}/access", kind.path())>
+                        <input type="hidden" name="device" value=device.name.clone() />
+                        // Every row has the same controls: the legend says which device these are.
+                        <fieldset class="grid gap-3">
+                            <legend class="sr-only">
+                                {tf!("administration.devices.access_of", device = device.name)}
+                            </legend>
+                            <label class="flex min-h-8 items-center gap-2">
+                                <input
+                                    type="radio"
+                                    name="access"
+                                    value="everyone"
+                                    checked=everyone
+                                    class="accent-brand size-4"
+                                />
+                                {t!("administration.devices.choose_everyone")}
+                            </label>
+                            <label class="flex min-h-8 items-center gap-2">
+                                <input
+                                    type="radio"
+                                    name="access"
+                                    value="groups"
+                                    checked=!everyone
+                                    class="accent-brand size-4"
+                                />
+                                {t!("administration.devices.choose_groups")}
+                            </label>
+                            <div class="pl-6">{choices}</div>
+                            <p class="text-muted-foreground text-xs">
+                                {t!("administration.devices.administrators_note")}
+                            </p>
+                            <div>
+                                <button
+                                    type="submit"
+                                    class=small_button_class(ButtonVariant::Primary)
+                                >
+                                    {t!("administration.devices.save")}
+                                </button>
+                            </div>
+                        </fieldset>
                     </form>
                     {forget}
                 </div>

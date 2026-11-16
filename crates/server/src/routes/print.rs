@@ -163,7 +163,7 @@ async fn may_cancel(state: &AppState, user: &User, id: i32) -> Result<(), Refusa
             Refusal::Unavailable
         })?;
     let record = jobs::matching(&records, job.id, job.created);
-    if visible(job, record, user, state.job_visibility) {
+    if visible(record, user, state.job_visibility) {
         Ok(())
     } else {
         Err(Refusal::JobNotFound)

@@ -3262,3 +3262,155 @@ async fn device_forms_need_an_administrator() {
     assert_eq!(rules.len(), 1);
     assert!(rules.contains_key("gone"));
 }
+
+#[tokio::test]
+async fn a_failed_recording_still_reports_success() {
+    let harness = Harness::new().await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    sea_orm::ConnectionTrait::execute_unprepared(&harness.database, "DROP TABLE print_jobs")
+        .await
+        .unwrap();
+    let response = print(
+        &harness,
+        &cookie,
+        &[("printer", "office")],
+        Some(("a.pdf", PDF)),
+    )
+    .await;
+    // CUPS has the job: it prints whatever the records say.
+    assert!(location(&response).starts_with("/jobs?submitted="));
+    assert_eq!(harness.print.submitted().len(), 1);
+}
+
+#[tokio::test]
+async fn the_job_list_fails_closed_with_private_jobs() {
+    let (harness, cookie) = private_jobs().await;
+    let admin = harness.administrator("root-subject", "root").await;
+    sea_orm::ConnectionTrait::execute_unprepared(&harness.database, "DROP TABLE print_jobs")
+        .await
+        .unwrap();
+    let response = harness.send(api("list_jobs", &cookie)).await;
+    assert!(!response.status().is_success());
+    let body = text(response).await;
+    assert!(
+        body.contains("Something went wrong. Try again in a moment."),
+        "{body}"
+    );
+    assert!(!body.contains("document-1.pdf"));
+
+    // Administrators see every job anyway, so the records only name the owners.
+    let response = harness.send(api("list_jobs", &admin)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    for id in 1..=3 {
+        assert!(body.contains(&format!("document-{id}.pdf")), "{body}");
+    }
+}
+
+#[tokio::test]
+async fn device_lists_fail_closed() {
+    let harness = with_a_restricted_printer().await;
+    let plain = harness.sign_in("alice-subject", "alice").await;
+    let admin = harness.administrator("root-subject", "root").await;
+    for table in ["device_access_groups", "device_access"] {
+        sea_orm::ConnectionTrait::execute_unprepared(
+            &harness.database,
+            &format!("DROP TABLE {table}"),
+        )
+        .await
+        .unwrap();
+    }
+    let list_scanners = |cookie: &str| {
+        post(
+            "/api/list_scanners",
+            cookie,
+            Some("application/x-www-form-urlencoded"),
+            b"refresh=false".to_vec(),
+        )
+    };
+    for request in [api("list_printers", &plain), list_scanners(&plain)] {
+        let response = harness.send(request).await;
+        assert!(!response.status().is_success());
+        let body = text(response).await;
+        assert!(
+            body.contains("Something went wrong. Try again in a moment."),
+            "{body}"
+        );
+        assert!(
+            !body.contains("mock:0") && !body.contains("\"open\""),
+            "{body}"
+        );
+    }
+
+    // Administrators may use everything, so nothing is read for them.
+    let response = harness.send(api("list_printers", &admin)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(text(response).await.contains("lab"));
+    let response = harness.send(list_scanners(&admin)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(text(response).await.contains("mock:0"));
+}
+
+#[tokio::test]
+async fn a_rule_keeps_every_ticked_group() {
+    let (harness, admin, staff) = device_harness().await;
+    let lab = harness.staff(&["staff", "lab"]).await;
+    assert_eq!(lab, staff);
+    let lab = groups::Entity::find()
+        .filter(groups::Column::Name.eq("lab"))
+        .one(&harness.database)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    let (first, second) = (staff.to_string(), lab.to_string());
+    let response = harness
+        .send(form(
+            "/administration/printers/access",
+            Some(&admin),
+            &[
+                ("device", "Bureau / 2e étage"),
+                ("access", "groups"),
+                ("groups", &first),
+                ("groups", &second),
+            ],
+        ))
+        .await;
+    assert_redirect(&response, "/administration/printers?done=access");
+    let mut expected = vec![staff, lab];
+    expected.sort_unstable();
+    assert_eq!(
+        harness.printer_rules().await["Bureau / 2e étage"],
+        Access::Groups(expected)
+    );
+}
+
+#[tokio::test]
+async fn the_printers_page_lists_the_rules_when_cups_is_down() {
+    let (harness, admin, staff) = device_harness().await;
+    harness.print.set_unavailable("stopped");
+    let response = harness
+        .send(page("/administration/printers", Some(&admin)))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    assert!(html.contains("CUPS did not answer"), "{html}");
+    // No rule and no listing: CUPS may well have printers, so the page does not say it has none.
+    assert!(!html.contains("No printers"), "{html}");
+
+    access::set(
+        &harness.database,
+        DeviceKind::Printer,
+        "Bureau / 2e étage",
+        Access::Groups(vec![staff]),
+    )
+    .await
+    .unwrap();
+    let response = harness
+        .send(page("/administration/printers", Some(&admin)))
+        .await;
+    let html = text(response).await;
+    assert!(html.contains("CUPS did not answer"), "{html}");
+    assert!(html.contains("Bureau / 2e étage"), "{html}");
+    assert!(html.contains("Groups: staff"), "{html}");
+}

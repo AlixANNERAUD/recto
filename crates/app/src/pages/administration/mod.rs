@@ -47,8 +47,9 @@ fn Sections(current: Section) -> impl IntoView {
         }
     };
     view! {
-        <nav aria-label=t!("administration.sections")>
-            <ul class="flex gap-1 border-b">
+        // Scrolls sideways rather than overflow the page when the tabs outgrow a phone's width.
+        <nav aria-label=t!("administration.sections") class="overflow-x-auto">
+            <ul class="flex min-w-max gap-1 border-b">
                 {tab(Section::Users, "/administration/users", t!("administration.users.tab"))}
                 {tab(Section::Groups, "/administration/groups", t!("administration.groups.tab"))}
                 {tab(Section::Printers, "/administration/printers", t!("administration.printers.tab"))}

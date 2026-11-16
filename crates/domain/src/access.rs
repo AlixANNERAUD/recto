@@ -11,10 +11,10 @@ use chrono::Utc;
 use recto_entity::{device_access, device_access_groups, group_memberships};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
-    EntityTrait, QueryFilter, QueryOrder, TransactionTrait,
+    EntityTrait, QueryFilter, QueryOrder,
 };
 
-use crate::error::Result;
+use crate::{database::begin_write, error::Result};
 
 /// The kind of device a rule is for: the same name can be a printer and a scanner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,13 +72,17 @@ pub async fn rules(db: &impl ConnectionTrait, kind: DeviceKind) -> Result<HashMa
 
 /// Sets who may use a device, in one transaction, so a reader never sees a rule half written.
 /// `Everyone` removes the rule.
+///
+/// On SQLite the transaction takes the write lock first, so two saves of the same device run one
+/// after the other. On PostgreSQL they can overlap: both remove the old rule, and the second to
+/// insert the new one fails on the unique device name, an error rather than a mixed rule.
 pub async fn set(
     db: &DatabaseConnection,
     kind: DeviceKind,
     device: &str,
     access: Access,
 ) -> Result<()> {
-    let transaction = db.begin().await?;
+    let transaction = begin_write(db).await?;
     remove(&transaction, kind, device).await?;
     if let Access::Groups(groups) = access {
         let row = device_access::ActiveModel {
@@ -108,23 +112,14 @@ pub async fn forget(db: &impl ConnectionTrait, kind: DeviceKind, device: &str) -
     remove(db, kind, device).await
 }
 
-/// Deletes the rule and its groups explicitly rather than counting on the cascade, which
-/// depends on the database enforcing foreign keys.
+/// Deletes the rule; its groups go with it, as the database enforces foreign keys (on SQLite,
+/// [`connect`](crate::database::connect) turns them on).
 async fn remove(db: &impl ConnectionTrait, kind: DeviceKind, device: &str) -> Result<()> {
-    let existing = device_access::Entity::find()
+    device_access::Entity::delete_many()
         .filter(device_access::Column::Kind.eq(kind.as_str()))
         .filter(device_access::Column::Device.eq(device))
-        .one(db)
+        .exec(db)
         .await?;
-    if let Some(existing) = existing {
-        device_access_groups::Entity::delete_many()
-            .filter(device_access_groups::Column::AccessId.eq(existing.id))
-            .exec(db)
-            .await?;
-        device_access::Entity::delete_by_id(existing.id)
-            .exec(db)
-            .await?;
-    }
     Ok(())
 }
 
@@ -171,10 +166,17 @@ impl Usable {
                 groups: Vec::new(),
             });
         }
+        let rules = rules(db, kind).await?;
+        // Without any rule every device is open, and the groups would decide nothing.
+        let groups = if rules.is_empty() {
+            Vec::new()
+        } else {
+            group_ids_of(db, user_id).await?
+        };
         Ok(Self {
-            rules: rules(db, kind).await?,
+            rules,
             administrator,
-            groups: group_ids_of(db, user_id).await?,
+            groups,
         })
     }
 
@@ -273,6 +275,20 @@ mod tests {
             .unwrap();
         forget(&db, DeviceKind::Scanner, "net:a").await.unwrap();
         assert!(rules(&db, DeviceKind::Scanner).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn removing_a_rule_removes_its_groups() {
+        let db = crate::testing::database().await;
+        let staff = group(&db, "staff").await;
+        set(&db, DeviceKind::Printer, "p", Access::Groups(vec![staff]))
+            .await
+            .unwrap();
+        set(&db, DeviceKind::Printer, "p", Access::Everyone)
+            .await
+            .unwrap();
+        let links = device_access_groups::Entity::find().all(&db).await.unwrap();
+        assert!(links.is_empty());
     }
 
     #[test]

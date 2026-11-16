@@ -3,7 +3,8 @@
 //! with [`require_user`](crate::state::require_user) as well.
 //!
 //! Errors carry a translated message made on the server ([`messages::scan_error`],
-//! `print.unavailable_banner`), never the error's internals; the details go to the log.
+//! `print.unavailable_banner`, `common.try_again`), never the error's internals; the details go
+//! to the log.
 //!
 //! [`messages::scan_error`]: crate::messages::scan_error
 
@@ -28,13 +29,9 @@ pub struct ScanOutcome {
 #[server(endpoint = "list_printers")]
 pub async fn list_printers() -> Result<Vec<Printer>, ServerFnError> {
     let context = server::Context::new()?;
-    let printers = async {
-        let printers = context.state.print.printers().await?;
-        context.usable_printers(printers).await
-    };
-    printers
-        .await
-        .map_err(|error| context.print_failure(&error))
+    let printers = context.state.print.printers().await;
+    let printers = printers.map_err(|error| context.print_failure(&error))?;
+    context.usable_printers(printers).await
 }
 
 #[server(endpoint = "list_jobs")]
@@ -48,24 +45,18 @@ pub async fn list_jobs() -> Result<Vec<Job>, ServerFnError> {
 #[server(endpoint = "list_scanners")]
 pub async fn list_scanners(refresh: bool) -> Result<Vec<ScannerInfo>, ServerFnError> {
     let context = server::Context::new()?;
-    let scanners = async {
-        let scanners = context.state.scan.scanners(refresh).await?;
-        context.usable_scanners(scanners).await
-    };
-    scanners.await.map_err(|error| context.scan_failure(&error))
+    let scanners = context.state.scan.scanners(refresh).await;
+    let scanners = scanners.map_err(|error| context.scan_failure(&error))?;
+    context.usable_scanners(scanners).await
 }
 
 // Named so its request type does not clash with the `ScannerCapabilities` model.
 #[server(name = ScannerCapabilitiesRequest, endpoint = "scanner_capabilities")]
 pub async fn scanner_capabilities(id: String) -> Result<ScannerCapabilities, ServerFnError> {
     let context = server::Context::new()?;
-    let capabilities = async {
-        context.listed(&id).await?;
-        context.state.scan.capabilities(&id).await
-    };
-    capabilities
-        .await
-        .map_err(|error| context.scan_failure(&error))
+    context.listed(&id).await?;
+    let capabilities = context.state.scan.capabilities(&id).await;
+    capabilities.map_err(|error| context.scan_failure(&error))
 }
 
 /// A quick low-resolution scan of the whole glass from `source` (the device's current one when
@@ -73,8 +64,8 @@ pub async fn scanner_capabilities(id: String) -> Result<ScannerCapabilities, Ser
 #[server(endpoint = "preview")]
 pub async fn preview(id: String, source: Option<String>) -> Result<ScanOutcome, ServerFnError> {
     let context = server::Context::new()?;
+    context.listed(&id).await?;
     let scanned = async {
-        context.listed(&id).await?;
         let capabilities = context.state.scan.capabilities(&id).await?;
         let settings = recto_scanning::preview_settings(&capabilities, source);
         let settings = server::checked(settings, None, &capabilities)?;
@@ -99,8 +90,8 @@ pub async fn scan(
     format: OutputFormat,
 ) -> Result<ScanOutcome, ServerFnError> {
     let context = server::Context::new()?;
+    context.listed(&id).await?;
     let scanned = async {
-        context.listed(&id).await?;
         let capabilities = context.state.scan.capabilities(&id).await?;
         let settings = server::checked(settings, selection, &capabilities)?;
         let request = ScanRequest {
@@ -114,15 +105,14 @@ pub async fn scan(
     scanned.await.map_err(|error| context.scan_failure(&error))
 }
 
-/// Whether `user` sees `job` and may cancel it. `record` is the job's record, when recto
+/// Whether `user` sees a job and may cancel it. `record` is the job's record, when recto
 /// submitted it. Administrators and the `All` setting see everything; otherwise only the
 /// submitter does, so jobs recto did not submit (no record) are for administrators only.
 ///
-/// Without a creation time from CUPS, [`recto_domain::jobs::matching`] takes the newest record with the job's
-/// id. That is acceptable here: CUPS always sends `time-at-creation` in practice.
+/// Without a creation time from CUPS, [`recto_domain::jobs::matching`] takes the newest record
+/// with the job's id. That is acceptable here: CUPS always sends `time-at-creation` in practice.
 #[cfg(feature = "ssr")]
 pub fn visible(
-    _job: &Job,
     record: Option<&recto_domain::jobs::RecordedJob>,
     user: &crate::state::User,
     visibility: crate::state::JobVisibility,
@@ -208,29 +198,30 @@ mod server {
                     if self.user.is_administrator || visibility == JobVisibility::All {
                         return Ok(jobs);
                     }
-                    return Err(self.print_failure(&PrintError::Unavailable(
-                        "the job records could not be read".into(),
-                    )));
+                    return Err(self.try_again());
                 }
             };
             let mut changes = Vec::new();
-            for job in jobs.iter_mut() {
-                let Some(record) = jobs::matching(&records, job.id, job.created) else {
-                    continue;
-                };
-                job.owner = Some(record.display_name.clone());
-                if record.state != job.state.keyword() {
-                    changes.push((record.id, job.state.keyword()));
+            jobs.retain_mut(|job| {
+                let record = jobs::matching(&records, job.id, job.created);
+                if let Some(record) = record {
+                    job.owner = Some(record.display_name.clone());
+                    if record.state != job.state.keyword() {
+                        changes.push((record.id, job.state.keyword()));
+                    }
                 }
-            }
+                visible(record, &self.user, visibility)
+            });
             if let Err(error) = jobs::update_states(database, &changes).await {
                 tracing::error!(%error, "updating the job records failed");
             }
-            jobs.retain(|job| {
-                let record = jobs::matching(&records, job.id, job.created);
-                visible(job, record, &self.user, visibility)
-            });
             Ok(jobs)
+        }
+
+        /// What the user is told when the database cannot say what they may see or use: nothing
+        /// about the cause helps them, and the details are in the log.
+        fn try_again(&self) -> ServerFnError {
+            ServerFnError::new(embedded_i18n::t!("common.try_again", locale = self.locale))
         }
 
         /// Drops the printers the user may not use. The rules not being readable is a failure,
@@ -238,10 +229,10 @@ mod server {
         pub async fn usable_printers(
             &self,
             printers: Vec<Printer>,
-        ) -> Result<Vec<Printer>, PrintError> {
+        ) -> Result<Vec<Printer>, ServerFnError> {
             let usable = self.usable(DeviceKind::Printer).await.map_err(|error| {
                 tracing::error!(%error, "reading the printer access rules failed");
-                PrintError::Unavailable("the access rules could not be read".into())
+                self.try_again()
             })?;
             Ok(printers
                 .into_iter()
@@ -254,10 +245,10 @@ mod server {
         pub async fn usable_scanners(
             &self,
             scanners: Vec<ScannerInfo>,
-        ) -> Result<Vec<ScannerInfo>, ScanError> {
+        ) -> Result<Vec<ScannerInfo>, ServerFnError> {
             let usable = self.usable(DeviceKind::Scanner).await.map_err(|error| {
                 tracing::error!(%error, "reading the scanner access rules failed");
-                ScanError::Device("the access rules could not be read".into())
+                self.try_again()
             })?;
             Ok(scanners
                 .into_iter()
@@ -281,13 +272,14 @@ mod server {
         /// the single SANE thread, so every other scan, until the connection times out. The
         /// cached list is enough: Refresh in the interface updates it.
         /// A scanner the user may not use is as unknown as one that does not exist.
-        pub async fn listed(&self, id: &str) -> Result<(), ScanError> {
-            let scanners = self.state.scan.scanners(false).await?;
+        pub async fn listed(&self, id: &str) -> Result<(), ServerFnError> {
+            let scanners = self.state.scan.scanners(false).await;
+            let scanners = scanners.map_err(|error| self.scan_failure(&error))?;
             let scanners = self.usable_scanners(scanners).await?;
             if scanners.iter().any(|scanner| scanner.id == id) {
                 Ok(())
             } else {
-                Err(ScanError::NotFound(id.to_owned()))
+                Err(self.scan_failure(&ScanError::NotFound(id.to_owned())))
             }
         }
 

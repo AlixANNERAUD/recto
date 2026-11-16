@@ -23,7 +23,8 @@
     "account_of": "Account of {name}"
   },
   "common": {
-    "network_error": "Could not reach {name}. Check your connection and try again."
+    "network_error": "Could not reach {name}. Check your connection and try again.",
+    "try_again": "Something went wrong. Try again in a moment."
   },
   "time": {
     "just_now": "just now",
@@ -215,6 +216,7 @@
       "separator": ", ",
       "not_found": "Not found",
       "change": "Change who may use it",
+      "access_of": "Who may use {device}",
       "choose_everyone": "Everyone",
       "choose_groups": "These groups",
       "no_groups": "No groups yet. Without a group, only administrators can use it.",

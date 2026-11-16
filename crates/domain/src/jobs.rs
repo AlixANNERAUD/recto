@@ -26,7 +26,8 @@ pub struct NewJob {
     pub document_name: String,
 }
 
-/// A recorded job with the user who submitted it.
+/// A recorded job with the user who submitted it. Only records that have a CUPS job id are
+/// read back: one without never matches a CUPS job.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedJob {
     pub id: i64,
@@ -44,7 +45,7 @@ pub async fn record(database: &impl ConnectionTrait, job: NewJob) -> Result<()> 
     print_jobs::ActiveModel {
         user_id: Set(job.user_id),
         printer: Set(job.printer),
-        cups_job_id: Set(i64::from(job.cups_job_id)),
+        cups_job_id: Set(Some(i64::from(job.cups_job_id))),
         document_name: Set(job.document_name),
         submitted_at: Set(Utc::now().fixed_offset()),
         state: Set("pending".to_owned()),
@@ -55,8 +56,7 @@ pub async fn record(database: &impl ConnectionTrait, job: NewJob) -> Result<()> 
     Ok(())
 }
 
-/// The records of these CUPS job ids, with their users. A record whose user no longer exists
-/// does not exist either (the records go with their user).
+/// The records of these CUPS job ids, with their users.
 pub async fn for_cups_ids(
     database: &impl ConnectionTrait,
     ids: &[i32],
@@ -74,7 +74,7 @@ pub async fn for_cups_ids(
         .filter_map(|(job, user)| {
             let user = user?;
             Some(RecordedJob {
-                cups_job_id: i32::try_from(job.cups_job_id).ok()?,
+                cups_job_id: i32::try_from(job.cups_job_id?).ok()?,
                 id: job.id,
                 user_id: job.user_id,
                 username: user.username,
@@ -210,23 +210,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_match_window_ends_at_five_minutes() {
+        let records = [recorded(7, "2026-01-01T00:00:00Z")];
+        let submitted = records[0].submitted_at.timestamp();
+        assert!(matching(&records, 7, Some(submitted + 300)).is_some());
+        assert!(matching(&records, 7, Some(submitted + 301)).is_none());
+        // A clock behind recto's puts the creation before the submission.
+        assert!(matching(&records, 7, Some(submitted - 60)).is_some());
+        assert!(matching(&records, 7, Some(submitted - 301)).is_none());
+    }
+
     #[tokio::test]
-    async fn records_go_with_their_user() {
+    async fn a_record_without_a_cups_id_matches_nothing() {
+        let database = crate::testing::database().await;
+        let alice = user(&database, "alice").await;
+        print_jobs::ActiveModel {
+            user_id: Set(alice.id),
+            printer: Set("office".to_owned()),
+            cups_job_id: Set(None),
+            document_name: Set("report.pdf".to_owned()),
+            submitted_at: Set(Utc::now().fixed_offset()),
+            state: Set("pending".to_owned()),
+            ..Default::default()
+        }
+        .insert(&database)
+        .await
+        .unwrap();
+        assert!(for_cups_ids(&database, &[0, 1]).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_user_with_recorded_jobs_cannot_be_deleted() {
         let database = crate::testing::database().await;
         let alice = user(&database, "alice").await;
         record(&database, new_job(alice.id, 7)).await.unwrap();
 
-        users::Entity::delete_by_id(alice.id)
-            .exec(&database)
-            .await
-            .unwrap();
-        assert_eq!(
-            print_jobs::Entity::find()
-                .all(&database)
-                .await
-                .unwrap()
-                .len(),
-            0
-        );
+        let deleted = users::Entity::delete_by_id(alice.id).exec(&database).await;
+        assert!(deleted.is_err());
+        assert_eq!(for_cups_ids(&database, &[7]).await.unwrap().len(), 1);
     }
 }
