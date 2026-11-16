@@ -3877,6 +3877,7 @@ dependencies = [
  "leptos_axum",
  "leptos_meta",
  "leptos_router",
+ "recto-domain",
  "recto-printing",
  "recto-scanning",
  "sea-orm",
