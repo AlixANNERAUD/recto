@@ -54,6 +54,11 @@ piece of the page: the print form (to show only the options of the chosen printe
 oversized files), the job list (to refresh itself), and the whole scan page (preview, area
 selection and results).
 
+Installing recto as an app adds a small service worker. It keeps the interface's scripts, styles
+and brand images for faster loads, and an offline page it shows when the server cannot be
+reached. Pages themselves always come from the server. Its cache carries the recto version, so
+an upgrade replaces it.
+
 ## State
 
 recto keeps little, and only its accounts on disk:

@@ -101,6 +101,14 @@ frame-ancestors 'none'`, so it can draw itself and nothing else: no script, no r
 to recto's cookies or pages. The brand color goes into the page's style only after recto has
 checked it is a `#rrggbb` value, and the name is escaped like any other text.
 
+## The service worker
+
+The service worker of the installed app caches only the interface's scripts and styles
+(`/pkg/`), the brand images (`/brand/`) and the offline page. It never stores pages, scans,
+print or account responses: for everything else it leaves the request to the browser, as if no
+worker existed. The manifest and the worker are public because browsers fetch them without
+cookies, and they hold nothing private: a name, a color, icons and a few lines of script.
+
 ## Files
 
 Uploaded files are recognized by their content, not their name, and only PDF, JPEG and PNG are

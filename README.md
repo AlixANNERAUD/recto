@@ -68,7 +68,7 @@ Authentik and others), or both.
 - **One small container**, configured with environment variables only, running as non-root with a
   read-only file system, for amd64 and arm64. Accounts and sessions live in a **SQLite** file on a
   volume, or in **PostgreSQL**; `recto backup` copies SQLite while it runs.
-- **Works on phones**, in light and dark mode.
+- **Works on phones**, in light and dark mode, and installs as an app on phones and computers.
 
 ## Quick start
 

@@ -21,6 +21,7 @@ instead. A single sign-on user without the required claim, or disabled, is sent 
 | `/no-access` | Shown to single sign-on users without the required claim, or disabled. |
 | `/auth/error` | Shown when sign-in fails. |
 | `/auth/signed-out` | Shown after signing out; the post-logout redirect URI. |
+| `/offline` | Shown by the installed app's service worker when recto cannot be reached. Open to anyone. |
 
 ## Forms and actions
 
@@ -64,6 +65,17 @@ Public, so the sign-in page and the installed app can show them. Each answers wi
 | `GET /brand/icon-maskable-512.png` | The app icon for devices that crop it to their own shape, 512 by 512 pixels, PNG: the artwork keeps to the middle 80 % on a full background of the accent color. |
 | `GET /brand/apple-touch-icon.png` | The home screen icon of iPhones and iPads, 180 by 180 pixels, PNG. |
 | `GET /brand/logo` | The logo of `RECTO_BRAND_LOGO`, with the type read from its content. `404` without one. An SVG logo is sent with a Content Security Policy that sandboxes it. |
+
+## The installed app
+
+Open to anyone, because browsers fetch them without cookies. They hold nothing private. See
+[Install recto as an app](../how-to/install-app.md).
+
+| Method and path | Does |
+| --- | --- |
+| `GET /manifest.webmanifest` | The web app manifest: the brand's name, color and icons, `display: standalone`. `Cache-Control: no-cache`. |
+| `GET /sw.js` | The service worker. Its cache is named after the recto version. `Cache-Control: no-cache`. |
+| `GET /pwa.js` | The script that registers the service worker. One of the interface's static files. |
 
 ## Sign-in
 
