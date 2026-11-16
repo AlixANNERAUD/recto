@@ -138,9 +138,11 @@ jobs:
         run: |
           mkdir consume
           sudo chown 65532:65532 consume
-          # "Save" runs as 65532, so prove the folder the quick start prepares is writable by it.
-          docker compose run --rm --no-deps --entrypoint sh recto \
-            -c 'touch /consume/.probe && rm /consume/.probe'
+          # "Save" runs as 65532, so prove the folder the quick start prepares is writable by it,
+          # from BusyBox since the image has no shell.
+          docker run --rm --user 65532:65532 --volume "$PWD/consume:/consume" \
+            busybox:1.37.0@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec \
+            sh -c 'touch /consume/.probe && rm /consume/.probe'
           if ! docker compose up --detach --no-build --wait --wait-timeout 150; then
             docker compose logs
             exit 1
