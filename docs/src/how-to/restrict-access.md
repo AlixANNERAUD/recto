@@ -72,3 +72,25 @@ Sign in with an account that has the role: you reach the Print page. Sign in wit
 not: you see **No access to recto**. If everyone sees it, the claim is probably missing from the
 token; recto also reads the UserInfo endpoint when it is, so check the claim's name and that the
 provider sends it to this client.
+
+## Keep jobs private
+
+By default everyone signed in sees every print job and can cancel it. To keep each person's jobs
+to themselves, set:
+
+```yaml
+RECTO_JOB_VISIBILITY: own
+```
+
+Then:
+
+- People see, and can cancel, only the jobs they sent through recto. A job someone else sent is
+  reported as missing.
+- Administrators see and cancel every job.
+- Jobs recto did not send (from another computer printing straight to CUPS) or sent before you
+  turned the setting on are not recorded, so only administrators see them.
+
+If recto cannot read its records of who sent what, it shows people no jobs and refuses their
+cancellations rather than guess. Administrators are not affected.
+
+Anyone who reaches CUPS directly still sees every job there: this setting limits recto only.

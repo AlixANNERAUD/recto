@@ -9,7 +9,9 @@ recto is built for a household, or a small team, that trusts itself:
 
 - **Everyone signed in is equal for printing and scanning.** Anyone who passes sign-in, and the
   required claim when one is set, can use every printer and scanner, and see and cancel every
-  print job.
+  print job. With `RECTO_JOB_VISIBILITY=own`, jobs are private: people see and cancel only
+  their own, and administrators see all (see
+  [Keep jobs private](../how-to/restrict-access.md#keep-jobs-private)).
 - **Administrators manage accounts, nothing more.** They create local accounts, set passwords,
   disable users and appoint other administrators. They cannot read passwords, and they cannot
   act on their own account from the web page.

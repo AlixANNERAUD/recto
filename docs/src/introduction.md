@@ -19,7 +19,8 @@ with no drivers to install on each device.
 
 - **Prints** PDF, JPEG and PNG files on any CUPS printer, with copies, two-sided printing, color
   and a page range. It shows each printer's state, supply levels and errors, and the print
-  queue, where any job can be cancelled. Printing works without JavaScript.
+  queue, where any job can be cancelled (or only your own, if the operator keeps jobs private).
+  Printing works without JavaScript.
 - **Scans** from any SANE scanner: network scanners that speak eSCL or WSD (most recent Brother,
   Canon, Epson and HP models), scanners shared by `saned`, and USB scanners. Choose the
   resolution, colors, source and format (PDF, PNG or JPEG), preview the glass and drag to scan
