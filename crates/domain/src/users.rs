@@ -76,7 +76,9 @@ pub struct UserSummary {
 /// (see [`Identity::administrator`] for how the claim and manual grants combine).
 ///
 /// Two first sign-ins of the same person can race; the loser hits a unique index and the whole
-/// sign-in is retried once, which then finds the winner's user.
+/// sign-in is retried once, which then finds the winner's user. Only once: when three or more
+/// race, or the retry meets yet another clash, one of them can still fail with
+/// [`Error::Database`], and that person signs in again.
 pub async fn sign_in_with_identity(
     database: &(impl ConnectionTrait + TransactionTrait),
     identity: &Identity,
@@ -802,6 +804,11 @@ mod tests {
         sign_in_with_identity(&database, &alice).await.unwrap();
         assert_eq!(group_names(&database, user.id).await, ["b"]);
 
+        // A known claim with no groups is not an unknown one: it clears the memberships.
+        alice.groups = Some(Vec::new());
+        sign_in_with_identity(&database, &alice).await.unwrap();
+        assert!(group_names(&database, user.id).await.is_empty());
+
         // Groups are never deleted automatically, even once empty.
         assert_eq!(groups::Entity::find().count(&database).await.unwrap(), 2);
         assert_eq!(
@@ -809,7 +816,7 @@ mod tests {
                 .count(&database)
                 .await
                 .unwrap(),
-            1
+            0
         );
     }
 
