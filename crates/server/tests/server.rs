@@ -21,18 +21,19 @@ use recto::{
 use recto_app::state::{AppState, JobVisibility};
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::{
+    access::{self, Access, DeviceKind},
     jobs,
     passwords::{self, PasswordPolicy},
     testing::{TempDir, temporary_directory},
     users::{self, Identity},
 };
-use recto_entity::{print_jobs, sessions};
+use recto_entity::{groups, print_jobs, sessions};
 use recto_printing::{
     Capabilities, ColorMode, DocumentFormat, Job, JobState, PageRanges, PrintOptions, Printer,
     PrinterState, Sides, testing::MockPrintService,
 };
 use recto_scanning::{MockScannerService, OutputFormat, ResultStore};
-use sea_orm::{DatabaseConnection, EntityTrait, PaginatorTrait};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
 use tower::ServiceExt;
 use tower_sessions::{Session, SessionStore, cookie::time::OffsetDateTime, session::Id};
 use url::Url;
@@ -84,6 +85,8 @@ struct Setup {
     job_visibility: JobVisibility,
     /// The jobs CUPS holds; one of bob's by default.
     jobs: Option<Vec<Job>>,
+    /// The printers CUPS holds; the office printer by default.
+    printers: Option<Vec<Printer>>,
 }
 
 impl Default for Setup {
@@ -100,6 +103,7 @@ impl Default for Setup {
             branding: default_branding(),
             job_visibility: JobVisibility::All,
             jobs: None,
+            printers: None,
         }
     }
 }
@@ -107,6 +111,7 @@ impl Default for Setup {
 struct Harness {
     router: Router,
     print: Arc<MockPrintService>,
+    scan: Arc<MockScannerService>,
     results: Arc<ResultStore>,
     sessions: DatabaseSessionStore,
     database: DatabaseConnection,
@@ -126,7 +131,7 @@ impl Harness {
         let dir = temporary_directory();
         let print = Arc::new(
             MockPrintService::new()
-                .with_printers(vec![office()])
+                .with_printers(setup.printers.unwrap_or_else(|| vec![office()]))
                 .with_jobs(setup.jobs.unwrap_or_else(|| {
                     vec![Job {
                         id: 7,
@@ -139,6 +144,7 @@ impl Harness {
                     }]
                 })),
         );
+        let scan = Arc::new(MockScannerService::default());
         let results = Arc::new(ResultStore::new(
             dir.path().join("results"),
             setup.result_ttl,
@@ -148,7 +154,7 @@ impl Harness {
         std::fs::write(site.join("pkg/recto.css"), STYLESHEET).unwrap();
         let state = AppState {
             print: print.clone(),
-            scan: Arc::new(MockScannerService::default()),
+            scan: scan.clone(),
             results: results.clone(),
             output_dir: setup.output_dir,
             max_upload_size: setup.max_upload_size,
@@ -185,6 +191,7 @@ impl Harness {
         Self {
             router: router(state, auth),
             print,
+            scan,
             results,
             sessions,
             database,
@@ -2887,4 +2894,150 @@ async fn ownership_fails_closed() {
         .await;
     assert_redirect(&response, "/jobs?error=unavailable");
     assert!(harness.print.canceled().is_empty());
+}
+
+/// A harness with the printers "open" and "lab"; "lab" is limited to the group "staff". The
+/// plain user "alice" is in no group, "sam" is in "staff", "root" is an administrator in none.
+async fn with_a_restricted_printer() -> Harness {
+    let harness = Harness::with(Setup {
+        printers: Some(vec![printer_named("open"), printer_named("lab")]),
+        ..Setup::default()
+    })
+    .await;
+    harness.member_of("sam-subject", "sam", &["staff"]).await;
+    restrict_to_staff(&harness, DeviceKind::Printer, "lab").await;
+    harness
+}
+
+fn printer_named(name: &str) -> Printer {
+    Printer {
+        name: name.into(),
+        is_default: name == "open",
+        ..office()
+    }
+}
+
+async fn restrict_to_staff(harness: &Harness, kind: DeviceKind, device: &str) {
+    let staff = groups::Entity::find()
+        .filter(groups::Column::Name.eq("staff"))
+        .one(&harness.database)
+        .await
+        .unwrap()
+        .expect("the staff group exists once a member signed in")
+        .id;
+    access::set(&harness.database, kind, device, Access::Groups(vec![staff]))
+        .await
+        .unwrap();
+}
+
+impl Harness {
+    /// Signs in a user of these groups (created at sign-in) and returns the session cookie.
+    async fn member_of(&self, subject: &str, username: &str, groups: &[&str]) -> String {
+        let identity = Identity {
+            issuer: "https://id.test/".into(),
+            subject: subject.into(),
+            preferred_username: Some(username.into()),
+            groups: Some(groups.iter().map(|group| (*group).to_owned()).collect()),
+            ..Identity::default()
+        };
+        users::sign_in_with_identity(&self.database, &identity)
+            .await
+            .unwrap();
+        self.sign_in(subject, username).await
+    }
+}
+
+#[tokio::test]
+async fn printing_to_a_restricted_printer_is_refused() {
+    let harness = with_a_restricted_printer().await;
+    let plain = harness.sign_in("alice-subject", "alice").await;
+    let response = print(
+        &harness,
+        &plain,
+        &[("printer", "lab")],
+        Some(("a.pdf", PDF)),
+    )
+    .await;
+    assert_redirect(&response, "/?error=printer_not_found");
+    assert!(harness.print.submitted().is_empty());
+
+    // The open printer still prints, and so do a member and an administrator on "lab".
+    let response = print(
+        &harness,
+        &plain,
+        &[("printer", "open")],
+        Some(("a.pdf", PDF)),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(location(&response).starts_with("/jobs?submitted="));
+    let member = harness.sign_in("sam-subject", "sam").await;
+    let admin = harness.administrator("root-subject", "root").await;
+    for cookie in [member, admin] {
+        let response = print(
+            &harness,
+            &cookie,
+            &[("printer", "lab")],
+            Some(("a.pdf", PDF)),
+        )
+        .await;
+        assert!(location(&response).starts_with("/jobs?submitted="));
+    }
+}
+
+#[tokio::test]
+async fn scanning_on_a_restricted_scanner_is_refused() {
+    let harness = with_a_restricted_printer().await;
+    restrict_to_staff(&harness, DeviceKind::Scanner, "mock:0").await;
+    let plain = harness.sign_in("alice-subject", "alice").await;
+    let response = harness
+        .send(post(
+            "/api/preview",
+            &plain,
+            Some("application/x-www-form-urlencoded"),
+            b"id=mock%3A0".to_vec(),
+        ))
+        .await;
+    assert!(text(response).await.contains("Scanner not found"));
+    assert!(harness.scan.opened().is_empty());
+    assert!(harness.scan.scan_requests().is_empty());
+
+    let member = harness.sign_in("sam-subject", "sam").await;
+    let response = harness
+        .send(post(
+            "/api/preview",
+            &member,
+            Some("application/x-www-form-urlencoded"),
+            b"id=mock%3A0".to_vec(),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(harness.scan.scan_requests().len(), 1);
+}
+
+#[tokio::test]
+async fn access_fails_closed() {
+    let harness = with_a_restricted_printer().await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    sea_orm::ConnectionTrait::execute_unprepared(
+        &harness.database,
+        "DROP TABLE device_access_groups",
+    )
+    .await
+    .unwrap();
+    sea_orm::ConnectionTrait::execute_unprepared(&harness.database, "DROP TABLE device_access")
+        .await
+        .unwrap();
+    // The rules are unreadable, so neither the restricted printer nor the open one prints.
+    for printer in ["lab", "open"] {
+        let response = print(
+            &harness,
+            &cookie,
+            &[("printer", printer)],
+            Some(("a.pdf", PDF)),
+        )
+        .await;
+        assert_redirect(&response, "/?error=unavailable");
+    }
+    assert!(harness.print.submitted().is_empty());
 }

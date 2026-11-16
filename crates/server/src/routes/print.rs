@@ -14,7 +14,10 @@ use recto_app::{
     refusal::Refusal,
     state::{AppState, JobVisibility, User},
 };
-use recto_domain::jobs::{self, NewJob};
+use recto_domain::{
+    access::{DeviceKind, Usable},
+    jobs::{self, NewJob},
+};
 use recto_printing::{
     Capabilities, ColorMode, DocumentFormat, PageRanges, PrintError, PrintOptions, PrintRequest,
     Sides,
@@ -59,6 +62,22 @@ async fn submit_form(state: &AppState, user: &User, multipart: Multipart) -> Res
     // From the content, never the name or declared type: a renamed document stops here.
     let format = DocumentFormat::detect(&document).ok_or(Refusal::UnsupportedFormat)?;
     let printer_name = form.printer.ok_or(Refusal::InvalidForm)?;
+    // Before CUPS is asked anything: a printer the user may not use is unknown to them. Rules
+    // that cannot be read refuse everything, the open printers too.
+    let usable = Usable::read(
+        &state.database,
+        DeviceKind::Printer,
+        user.id,
+        user.is_administrator,
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "reading the printer access rules failed");
+        Refusal::Unavailable
+    })?;
+    if !usable.allows(&printer_name) {
+        return Err(Refusal::PrinterNotFound);
+    }
     let printer = state.print.printer(&printer_name).await.map_err(refusal)?;
     if !printer.accepting_jobs {
         return Err(Refusal::NotAccepting);

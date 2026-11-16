@@ -15,13 +15,30 @@ pub struct Model {
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
+    #[sea_orm(has_many = "super::device_access_groups::Entity")]
+    DeviceAccessGroups,
     #[sea_orm(has_many = "super::group_memberships::Entity")]
     GroupMemberships,
+}
+
+impl Related<super::device_access_groups::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::DeviceAccessGroups.def()
+    }
 }
 
 impl Related<super::group_memberships::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::GroupMemberships.def()
+    }
+}
+
+impl Related<super::device_access::Entity> for Entity {
+    fn to() -> RelationDef {
+        super::device_access_groups::Relation::DeviceAccess.def()
+    }
+    fn via() -> Option<RelationDef> {
+        Some(super::device_access_groups::Relation::Groups.def().rev())
     }
 }
 

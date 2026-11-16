@@ -28,8 +28,13 @@ pub struct ScanOutcome {
 #[server(endpoint = "list_printers")]
 pub async fn list_printers() -> Result<Vec<Printer>, ServerFnError> {
     let context = server::Context::new()?;
-    let printers = context.state.print.printers().await;
-    printers.map_err(|error| context.print_failure(&error))
+    let printers = async {
+        let printers = context.state.print.printers().await?;
+        context.usable_printers(printers).await
+    };
+    printers
+        .await
+        .map_err(|error| context.print_failure(&error))
 }
 
 #[server(endpoint = "list_jobs")]
@@ -43,8 +48,11 @@ pub async fn list_jobs() -> Result<Vec<Job>, ServerFnError> {
 #[server(endpoint = "list_scanners")]
 pub async fn list_scanners(refresh: bool) -> Result<Vec<ScannerInfo>, ServerFnError> {
     let context = server::Context::new()?;
-    let scanners = context.state.scan.scanners(refresh).await;
-    scanners.map_err(|error| context.scan_failure(&error))
+    let scanners = async {
+        let scanners = context.state.scan.scanners(refresh).await?;
+        context.usable_scanners(scanners).await
+    };
+    scanners.await.map_err(|error| context.scan_failure(&error))
 }
 
 // Named so its request type does not clash with the `ScannerCapabilities` model.
@@ -130,10 +138,14 @@ mod server {
 
     use embedded_i18n::Locale;
     use leptos::prelude::ServerFnError;
-    use recto_domain::jobs;
-    use recto_printing::{Job, PrintError};
+    use recto_domain::{
+        access::{DeviceKind, Usable},
+        jobs,
+    };
+    use recto_printing::{Job, PrintError, Printer};
     use recto_scanning::{
-        OutputFormat, ScanError, ScanSettings, ScannedPage, ScannerCapabilities, Selection,
+        OutputFormat, ScanError, ScanSettings, ScannedPage, ScannerCapabilities, ScannerInfo,
+        Selection,
     };
 
     use super::ScanOutcome;
@@ -221,13 +233,57 @@ mod server {
             Ok(jobs)
         }
 
+        /// Drops the printers the user may not use. The rules not being readable is a failure,
+        /// not an open door: a restricted printer must never show because its rule was lost.
+        pub async fn usable_printers(
+            &self,
+            printers: Vec<Printer>,
+        ) -> Result<Vec<Printer>, PrintError> {
+            let usable = self.usable(DeviceKind::Printer).await.map_err(|error| {
+                tracing::error!(%error, "reading the printer access rules failed");
+                PrintError::Unavailable("the access rules could not be read".into())
+            })?;
+            Ok(printers
+                .into_iter()
+                .filter(|printer| usable.allows(&printer.name))
+                .collect())
+        }
+
+        /// Drops the scanners the user may not use; fails closed like
+        /// [`usable_printers`](Self::usable_printers).
+        pub async fn usable_scanners(
+            &self,
+            scanners: Vec<ScannerInfo>,
+        ) -> Result<Vec<ScannerInfo>, ScanError> {
+            let usable = self.usable(DeviceKind::Scanner).await.map_err(|error| {
+                tracing::error!(%error, "reading the scanner access rules failed");
+                ScanError::Device("the access rules could not be read".into())
+            })?;
+            Ok(scanners
+                .into_iter()
+                .filter(|scanner| usable.allows(&scanner.id))
+                .collect())
+        }
+
+        async fn usable(&self, kind: DeviceKind) -> recto_domain::Result<Usable> {
+            Usable::read(
+                &self.state.database,
+                kind,
+                self.user.id,
+                self.user.is_administrator,
+            )
+            .await
+        }
+
         /// Refuses a scanner the scanner list does not have. Ids come from the browser, and
         /// SANE's `net` backend opens an unknown `net:<host>:<device>` by connecting to that
         /// host: any user could make recto reach arbitrary hosts, and an unreachable one holds
         /// the single SANE thread, so every other scan, until the connection times out. The
         /// cached list is enough: Refresh in the interface updates it.
+        /// A scanner the user may not use is as unknown as one that does not exist.
         pub async fn listed(&self, id: &str) -> Result<(), ScanError> {
             let scanners = self.state.scan.scanners(false).await?;
+            let scanners = self.usable_scanners(scanners).await?;
             if scanners.iter().any(|scanner| scanner.id == id) {
                 Ok(())
             } else {

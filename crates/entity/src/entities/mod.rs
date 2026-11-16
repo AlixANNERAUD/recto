@@ -2,6 +2,8 @@
 
 pub mod prelude;
 
+pub mod device_access;
+pub mod device_access_groups;
 pub mod group_memberships;
 pub mod groups;
 pub mod print_jobs;

@@ -1,10 +1,12 @@
 //! Domain of recto: the accounts (users and groups) and the database that keeps them.
 //!
 //! [`database`] opens, migrates and backs up the database; [`users`] and [`groups`] hold the
-//! account rules, which sign-in and the administration pages share; [`jobs`] records who
+//! account rules, which sign-in and the administration pages share; [`access`] limits devices
+//! to groups; [`jobs`] records who
 //! submitted each print job; the `testing` module (behind the `testing` feature) gives tests a
 //! fresh, migrated database.
 
+pub mod access;
 pub mod database;
 pub mod error;
 pub mod groups;

@@ -19,16 +19,19 @@ use recto::{
 use recto_app::state::{AppState, JobVisibility};
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::{
+    access::{self, Access, DeviceKind},
     jobs::{self, NewJob},
     testing::{TempDir, temporary_directory},
     users::{self, Identity},
 };
-use recto_entity::users as user_rows;
+use recto_entity::{groups, users as user_rows};
 use recto_printing::{
     Capabilities, ColorMode, Job, JobState, Printer, PrinterState, Sides, StateReason, Supply,
     testing::MockPrintService,
 };
-use recto_scanning::{MockScannerService, ResultStore, ScanError};
+use recto_scanning::{
+    MockScannerService, ResultStore, ScanError, ScanMode, ScannerCapabilities, ScannerInfo,
+};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use tower::ServiceExt;
 use tower_sessions::Session;
@@ -89,11 +92,24 @@ impl Harness {
     }
 
     async fn branded(printers: Vec<Printer>, jobs: Vec<Job>, branding: Branding) -> Self {
-        Self::build(printers, jobs, branding, JobVisibility::All).await
+        Self::build(printers, jobs, branding, JobVisibility::All, None).await
+    }
+
+    /// With the scanners SANE finds, instead of the mock's own.
+    async fn scanning(printers: Vec<Printer>, scanners: Vec<ScannerInfo>) -> Self {
+        let scanners = Some(scanners);
+        Self::build(
+            printers,
+            vec![],
+            default_branding(),
+            JobVisibility::All,
+            scanners,
+        )
+        .await
     }
 
     async fn private(printers: Vec<Printer>, jobs: Vec<Job>) -> Self {
-        Self::build(printers, jobs, default_branding(), JobVisibility::Own).await
+        Self::build(printers, jobs, default_branding(), JobVisibility::Own, None).await
     }
 
     async fn build(
@@ -101,6 +117,7 @@ impl Harness {
         jobs: Vec<Job>,
         branding: Branding,
         job_visibility: JobVisibility,
+        scanners: Option<Vec<ScannerInfo>>,
     ) -> Self {
         let database = recto_domain::testing::database().await;
         let dir = temporary_directory();
@@ -109,7 +126,18 @@ impl Harness {
                 .with_printers(printers)
                 .with_jobs(jobs),
         );
-        let scan = Arc::new(MockScannerService::default());
+        let scan = Arc::new(match scanners {
+            Some(scanners) => MockScannerService::new(
+                scanners,
+                ScannerCapabilities {
+                    resolutions: vec![75],
+                    modes: vec![ScanMode::Color],
+                    sources: vec![],
+                    area: None,
+                },
+            ),
+            None => MockScannerService::default(),
+        });
         let site = dir.path().join("site");
         std::fs::create_dir_all(&site).unwrap();
         let state = AppState {
@@ -176,6 +204,21 @@ impl Harness {
             .unwrap();
         session.save().await.unwrap();
         format!("recto_session={}", session.id().unwrap())
+    }
+
+    /// Signs in a user who belongs to these groups, created at the first sign-in.
+    async fn sign_in_in(&self, subject: &str, username: &str, groups: &[&str]) -> String {
+        let identity = Identity {
+            issuer: "https://id.test/".into(),
+            subject: subject.into(),
+            preferred_username: Some(username.into()),
+            groups: Some(groups.iter().map(|group| (*group).to_owned()).collect()),
+            ..Identity::default()
+        };
+        users::sign_in_with_identity(&self.database, &identity)
+            .await
+            .unwrap();
+        self.sign_in(subject, username).await
     }
 
     /// The HTML of a page for a signed-in user.
@@ -938,4 +981,109 @@ async fn all_visibility_is_unchanged() {
         "{html}"
     );
     assert!(html.contains(r#"action="/jobs/2/cancel""#), "{html}");
+}
+
+fn scanner(id: &str) -> ScannerInfo {
+    ScannerInfo {
+        id: id.into(),
+        vendor: "Recto".into(),
+        model: format!("Model {id}"),
+        kind: "flatbed scanner".into(),
+    }
+}
+
+/// Printers "front-desk" and "darkroom", scanners "net:a" and "net:b"; "darkroom" and "net:b" are limited to
+/// the group "staff". Returns the harness and the cookies of a plain user, a staff member and
+/// an administrator in no group.
+async fn with_restricted_devices() -> (Harness, String, String, String) {
+    let harness = Harness::scanning(
+        vec![printer("front-desk", true), printer("darkroom", false)],
+        vec![scanner("net:a"), scanner("net:b")],
+    )
+    .await;
+    let plain = harness.sign_in("alice-subject", "alice").await;
+    let member = harness.sign_in_in("sam-subject", "sam", &["staff"]).await;
+    let admin = harness.sign_in("root-subject", "root").await;
+    let root = user_rows::Entity::find()
+        .filter(user_rows::Column::Username.eq("root"))
+        .one(&harness.database)
+        .await
+        .unwrap()
+        .unwrap();
+    users::set_administrator_from_command_line(&harness.database, root.id, true)
+        .await
+        .unwrap();
+    let staff = groups::Entity::find()
+        .filter(groups::Column::Name.eq("staff"))
+        .one(&harness.database)
+        .await
+        .unwrap()
+        .unwrap()
+        .id;
+    for (kind, device) in [
+        (DeviceKind::Printer, "darkroom"),
+        (DeviceKind::Scanner, "net:b"),
+    ] {
+        access::set(&harness.database, kind, device, Access::Groups(vec![staff]))
+            .await
+            .unwrap();
+    }
+    (harness, plain, member, admin)
+}
+
+async fn scanner_ids(harness: &Harness, cookie: &str) -> Vec<String> {
+    let response = harness
+        .call(
+            "list_scanners",
+            cookie,
+            "application/x-www-form-urlencoded",
+            "refresh=false".into(),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    let scanners: Vec<ScannerInfo> = serde_json::from_str(&body).expect(&body);
+    scanners.into_iter().map(|scanner| scanner.id).collect()
+}
+
+#[tokio::test]
+async fn restricted_devices_are_hidden_from_others() {
+    let (harness, plain, _, _) = with_restricted_devices().await;
+    for uri in ["/", "/printers"] {
+        let html = harness.page(uri, &plain).await;
+        assert!(html.contains("front-desk"), "{uri}: {html}");
+        assert!(!html.contains("darkroom"), "{uri}: {html}");
+    }
+    assert_eq!(scanner_ids(&harness, &plain).await, ["net:a"]);
+}
+
+#[tokio::test]
+async fn members_and_administrators_see_restricted_devices() {
+    let (harness, _, member, admin) = with_restricted_devices().await;
+    for cookie in [&member, &admin] {
+        for uri in ["/", "/printers"] {
+            let html = harness.page(uri, cookie).await;
+            assert!(
+                html.contains("front-desk") && html.contains("darkroom"),
+                "{uri}: {html}"
+            );
+        }
+        assert_eq!(scanner_ids(&harness, cookie).await, ["net:a", "net:b"]);
+    }
+}
+
+#[tokio::test]
+async fn nothing_changes_without_rules() {
+    let harness = Harness::scanning(
+        vec![printer("front-desk", true), printer("darkroom", false)],
+        vec![scanner("net:a"), scanner("net:b")],
+    )
+    .await;
+    let plain = harness.sign_in("alice-subject", "alice").await;
+    let html = harness.page("/printers", &plain).await;
+    assert!(
+        html.contains("front-desk") && html.contains("darkroom"),
+        "{html}"
+    );
+    assert_eq!(scanner_ids(&harness, &plain).await, ["net:a", "net:b"]);
 }
