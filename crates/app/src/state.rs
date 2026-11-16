@@ -14,6 +14,16 @@ use sea_orm::DatabaseConnection;
 
 use crate::branding::Branding;
 
+/// Whose jobs people see in the job list and may cancel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum JobVisibility {
+    /// Everyone sees every job (the household trust model).
+    #[default]
+    All,
+    /// People see the jobs they submitted through recto; administrators see every job.
+    Own,
+}
+
 /// The services behind the interface. Trait objects, so tests swap in mocks.
 #[derive(Clone)]
 pub struct AppState {
@@ -31,6 +41,7 @@ pub struct AppState {
     pub database: DatabaseConnection,
     /// The name, colors, logo and icons the operator chose.
     pub branding: Arc<Branding>,
+    pub job_visibility: JobVisibility,
 }
 
 /// The signed-in user of a request, read from the accounts database on every request, so that

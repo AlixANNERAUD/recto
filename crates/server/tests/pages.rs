@@ -16,7 +16,7 @@ use recto::{
     branding::{BrandOptions, Branding, default_branding},
     serve::{AuthState, router},
 };
-use recto_app::state::AppState;
+use recto_app::state::{AppState, JobVisibility};
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::{
     jobs::{self, NewJob},
@@ -89,6 +89,19 @@ impl Harness {
     }
 
     async fn branded(printers: Vec<Printer>, jobs: Vec<Job>, branding: Branding) -> Self {
+        Self::build(printers, jobs, branding, JobVisibility::All).await
+    }
+
+    async fn private(printers: Vec<Printer>, jobs: Vec<Job>) -> Self {
+        Self::build(printers, jobs, default_branding(), JobVisibility::Own).await
+    }
+
+    async fn build(
+        printers: Vec<Printer>,
+        jobs: Vec<Job>,
+        branding: Branding,
+        job_visibility: JobVisibility,
+    ) -> Self {
         let database = recto_domain::testing::database().await;
         let dir = temporary_directory();
         let print = Arc::new(
@@ -114,6 +127,7 @@ impl Harness {
                 .build(),
             database: database.clone(),
             branding: Arc::new(branding),
+            job_visibility,
         };
         let public_url = Url::parse(PUBLIC_URL).unwrap();
         let openid = OpenId::new(OpenIdSettings {
@@ -846,4 +860,82 @@ async fn pages_link_the_manifest_and_worker() {
         "{html}"
     );
     assert!(html.contains(r#"src="/pwa.js""#), "{html}");
+}
+
+/// A job CUPS holds, created now and owned by `owner` in CUPS's eyes.
+fn recent(id: i32, owner: &str) -> Job {
+    Job {
+        created: Some(now()),
+        ..job(id, Some(owner), JobState::Processing)
+    }
+}
+
+/// Job 1 recorded for alice, job 2 for bob, job 3 not recorded.
+async fn three_jobs(harness: &Harness) -> String {
+    let alice = harness.sign_in("alice-subject", "alice").await;
+    harness.sign_in("bob-subject", "bob").await;
+    record_job_of(harness, "alice", "alice", 1).await;
+    record_job_of(harness, "bob", "bob", 2).await;
+    alice
+}
+
+fn lists(html: &str, id: i32) -> bool {
+    html.contains(&format!("document-{id}.pdf"))
+}
+
+fn three_cups_jobs() -> Vec<Job> {
+    vec![recent(1, "alice"), recent(2, "bob"), recent(3, "carol")]
+}
+
+#[tokio::test]
+async fn with_own_visibility_people_see_their_jobs() {
+    let harness = Harness::private(vec![kitchen()], three_cups_jobs()).await;
+    let cookie = three_jobs(&harness).await;
+    let html = harness.page("/jobs", &cookie).await;
+    assert!(lists(&html, 1), "{html}");
+    assert!(!lists(&html, 2) && !lists(&html, 3), "{html}");
+}
+
+#[tokio::test]
+async fn administrators_see_every_job() {
+    let harness = Harness::private(vec![kitchen()], three_cups_jobs()).await;
+    three_jobs(&harness).await;
+    let admin = harness.sign_in("root-subject", "root").await;
+    let root = users::find_by_username(&harness.database, "root")
+        .await
+        .unwrap()
+        .unwrap();
+    users::set_administrator_from_command_line(&harness.database, root.id, true)
+        .await
+        .unwrap();
+    let html = harness.page("/jobs", &admin).await;
+    assert!(
+        lists(&html, 1) && lists(&html, 2) && lists(&html, 3),
+        "{html}"
+    );
+}
+
+#[tokio::test]
+async fn ownership_follows_the_record_not_the_cups_name() {
+    let harness = Harness::private(
+        vec![kitchen()],
+        vec![recent(1, "alice"), recent(2, "alice")],
+    )
+    .await;
+    let cookie = three_jobs(&harness).await;
+    let html = harness.page("/jobs", &cookie).await;
+    assert!(lists(&html, 1), "{html}");
+    assert!(!lists(&html, 2), "{html}");
+}
+
+#[tokio::test]
+async fn all_visibility_is_unchanged() {
+    let harness = Harness::new(vec![kitchen()], three_cups_jobs()).await;
+    let cookie = three_jobs(&harness).await;
+    let html = harness.page("/jobs", &cookie).await;
+    assert!(
+        lists(&html, 1) && lists(&html, 2) && lists(&html, 3),
+        "{html}"
+    );
+    assert!(html.contains(r#"action="/jobs/2/cancel""#), "{html}");
 }

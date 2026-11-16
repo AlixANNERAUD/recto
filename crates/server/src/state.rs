@@ -160,6 +160,7 @@ pub async fn build(
         leptos_options,
         database: database.clone(),
         branding: Arc::new(branding),
+        job_visibility: config.job_visibility,
     };
     let openid = config
         .oidc_issuer

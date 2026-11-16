@@ -3,6 +3,7 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
+use recto_app::state::JobVisibility;
 use recto_domain::passwords;
 use url::Url;
 
@@ -89,6 +90,15 @@ pub struct Config {
     pub listen_address: SocketAddr,
     #[arg(long, env = "RECTO_SITE_ROOT", default_value = "/app/site")]
     pub site_root: PathBuf,
+    /// `all` shows every job to everyone; `own` shows people the jobs they submitted through
+    /// recto, and administrators every job.
+    #[arg(
+        long,
+        env = "RECTO_JOB_VISIBILITY",
+        default_value = "all",
+        value_parser = parse_job_visibility
+    )]
+    pub job_visibility: JobVisibility,
     #[arg(long, env = "RECTO_LOG_FORMAT", value_enum, default_value = "json")]
     pub log_format: LogFormat,
     /// The name, colors, logo and icons; checked when the server starts (`branding::load`).
@@ -200,6 +210,17 @@ pub fn check_password_minimum_length(length: usize) -> Result<(), String> {
 
 /// CUPS clients commonly write the server as `ipp://` or `ipps://`; IPP runs over HTTP, so the
 /// scheme is mapped to the one the HTTP client needs.
+// Not a `ValueEnum`: its error would not name the environment variable.
+fn parse_job_visibility(value: &str) -> Result<JobVisibility, String> {
+    match value {
+        "all" => Ok(JobVisibility::All),
+        "own" => Ok(JobVisibility::Own),
+        _ => Err(format!(
+            "RECTO_JOB_VISIBILITY must be all or own, not {value}"
+        )),
+    }
+}
+
 fn parse_cups_url(value: &str) -> Result<Url, url::ParseError> {
     let value = value.trim();
     let mapped = if let Some(rest) = value.strip_prefix("ipps://") {
@@ -327,6 +348,18 @@ mod tests {
 
     fn parse(extra: &[&str]) -> Result<Config, clap::Error> {
         parse_arguments(REQUIRED.iter().chain(extra))
+    }
+
+    #[test]
+    fn job_visibility_defaults_to_all() {
+        assert_eq!(parse(&[]).unwrap().job_visibility, JobVisibility::All);
+        let own = parse(&["--job-visibility", "own"]).unwrap();
+        assert_eq!(own.job_visibility, JobVisibility::Own);
+        let error = parse(&["--job-visibility", "mine"]).unwrap_err();
+        assert!(
+            error.to_string().contains("RECTO_JOB_VISIBILITY"),
+            "{error}"
+        );
     }
 
     #[test]

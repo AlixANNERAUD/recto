@@ -10,8 +10,9 @@ use axum::{
     response::Redirect,
 };
 use recto_app::{
+    functions::visible,
     refusal::Refusal,
-    state::{AppState, User},
+    state::{AppState, JobVisibility, User},
 };
 use recto_domain::jobs::{self, NewJob};
 use recto_printing::{
@@ -91,20 +92,23 @@ async fn submit_form(state: &AppState, user: &User, multipart: Multipart) -> Res
     Ok(id)
 }
 
-/// `POST /jobs/{id}/cancel`: answers `303 /jobs`, or `303 /jobs?error=<code>`. Anyone signed in
-/// may cancel any job (the household trust model); CUPS is asked in the user's name when it
-/// hides the job's owner.
+/// `POST /jobs/{id}/cancel`: answers `303 /jobs`, or `303 /jobs?error=<code>`. By default anyone
+/// signed in may cancel any job (the household trust model); with private jobs, only the
+/// jobs the user may see. CUPS is asked in the user's name when it hides the job's owner.
 pub async fn cancel(
     State(state): State<AppState>,
     Extension(user): Extension<User>,
     Path(id): Path<String>,
 ) -> Redirect {
     let canceled = match id.parse::<i32>() {
-        Ok(id) => state
-            .print
-            .cancel(id, &user.username)
-            .await
-            .map_err(refusal),
+        Ok(id) => match may_cancel(&state, &user, id).await {
+            Ok(()) => state
+                .print
+                .cancel(id, &user.username)
+                .await
+                .map_err(refusal),
+            Err(refusal) => Err(refusal),
+        },
         Err(_) => Err(Refusal::JobNotFound),
     };
     match canceled {
@@ -113,6 +117,32 @@ pub async fn cancel(
             Redirect::to("/jobs")
         }
         Err(refusal) => Redirect::to(&format!("/jobs?error={}", refusal.code())),
+    }
+}
+
+/// Applies the job privacy setting. A job the user may not see is reported as missing, as it is
+/// in the list. Whoever sees every job needs no lookup, so those cases never touch the database.
+/// Ownership that cannot be read refuses: nobody cancels on a guess.
+async fn may_cancel(state: &AppState, user: &User, id: i32) -> Result<(), Refusal> {
+    if user.is_administrator || state.job_visibility == JobVisibility::All {
+        return Ok(());
+    }
+    let jobs = state.print.jobs().await.map_err(refusal)?;
+    let job = jobs
+        .iter()
+        .find(|job| job.id == id)
+        .ok_or(Refusal::JobNotFound)?;
+    let records = jobs::for_cups_ids(&state.database, &[id])
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, job = id, "reading the job records failed");
+            Refusal::Unavailable
+        })?;
+    let record = jobs::matching(&records, job.id, job.created);
+    if visible(job, record, user, state.job_visibility) {
+        Ok(())
+    } else {
+        Err(Refusal::JobNotFound)
     }
 }
 

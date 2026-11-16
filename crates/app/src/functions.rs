@@ -36,9 +36,8 @@ pub async fn list_printers() -> Result<Vec<Printer>, ServerFnError> {
 pub async fn list_jobs() -> Result<Vec<Job>, ServerFnError> {
     let context = server::Context::new()?;
     let jobs = context.state.print.jobs().await;
-    let mut jobs = jobs.map_err(|error| context.print_failure(&error))?;
-    context.name_owners(&mut jobs).await;
-    Ok(jobs)
+    let jobs = jobs.map_err(|error| context.print_failure(&error))?;
+    context.name_owners_and_filter(jobs).await
 }
 
 #[server(endpoint = "list_scanners")]
@@ -107,6 +106,24 @@ pub async fn scan(
     scanned.await.map_err(|error| context.scan_failure(&error))
 }
 
+/// Whether `user` sees `job` and may cancel it. `record` is the job's record, when recto
+/// submitted it. Administrators and the `All` setting see everything; otherwise only the
+/// submitter does, so jobs recto did not submit (no record) are for administrators only.
+///
+/// Without a creation time from CUPS, [`recto_domain::jobs::matching`] takes the newest record with the job's
+/// id. That is acceptable here: CUPS always sends `time-at-creation` in practice.
+#[cfg(feature = "ssr")]
+pub fn visible(
+    _job: &Job,
+    record: Option<&recto_domain::jobs::RecordedJob>,
+    user: &crate::state::User,
+    visibility: crate::state::JobVisibility,
+) -> bool {
+    user.is_administrator
+        || visibility == crate::state::JobVisibility::All
+        || record.is_some_and(|record| record.user_id == user.id)
+}
+
 #[cfg(feature = "ssr")]
 mod server {
     use std::sync::Arc;
@@ -120,9 +137,10 @@ mod server {
     };
 
     use super::ScanOutcome;
+    use super::visible;
     use crate::{
         i18n, messages,
-        state::{AppState, User, require_user},
+        state::{AppState, JobVisibility, User, require_user},
     };
 
     /// What every server function needs, read from the request before its first `await`.
@@ -160,17 +178,27 @@ mod server {
             ServerFnError::new(message)
         }
 
-        /// Names the jobs' owners from the records of the jobs recto submitted, and keeps the
-        /// records' states current. A database failure is logged and leaves CUPS's own owners:
-        /// the list still shows.
-        pub async fn name_owners(&self, jobs: &mut [Job]) {
+        /// Names the jobs' owners from the records of the jobs recto submitted, keeps the
+        /// records' states current, and drops the jobs the user may not see. A database
+        /// failure is logged and leaves CUPS's own owners, so the list still shows; but when
+        /// ownership decides what the user sees, no record means no jobs: it fails closed.
+        pub async fn name_owners_and_filter(
+            &self,
+            mut jobs: Vec<Job>,
+        ) -> Result<Vec<Job>, ServerFnError> {
             let ids: Vec<i32> = jobs.iter().map(|job| job.id).collect();
             let database = &self.state.database;
+            let visibility = self.state.job_visibility;
             let records = match jobs::for_cups_ids(database, &ids).await {
                 Ok(records) => records,
                 Err(error) => {
                     tracing::error!(%error, "reading the job records failed");
-                    return;
+                    if self.user.is_administrator || visibility == JobVisibility::All {
+                        return Ok(jobs);
+                    }
+                    return Err(self.print_failure(&PrintError::Unavailable(
+                        "the job records could not be read".into(),
+                    )));
                 }
             };
             let mut changes = Vec::new();
@@ -186,6 +214,11 @@ mod server {
             if let Err(error) = jobs::update_states(database, &changes).await {
                 tracing::error!(%error, "updating the job records failed");
             }
+            jobs.retain(|job| {
+                let record = jobs::matching(&records, job.id, job.created);
+                visible(job, record, &self.user, visibility)
+            });
+            Ok(jobs)
         }
 
         /// Refuses a scanner the scanner list does not have. Ids come from the browser, and

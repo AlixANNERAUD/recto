@@ -18,7 +18,7 @@ use recto::{
     branding::{BrandFile, Branding, default_branding},
     serve::{AuthState, router},
 };
-use recto_app::state::AppState;
+use recto_app::state::{AppState, JobVisibility};
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::{
     jobs,
@@ -81,6 +81,9 @@ struct Setup {
     local_accounts: bool,
     trust_forwarded_headers: bool,
     branding: Branding,
+    job_visibility: JobVisibility,
+    /// The jobs CUPS holds; one of bob's by default.
+    jobs: Option<Vec<Job>>,
 }
 
 impl Default for Setup {
@@ -95,6 +98,8 @@ impl Default for Setup {
             local_accounts: true,
             trust_forwarded_headers: false,
             branding: default_branding(),
+            job_visibility: JobVisibility::All,
+            jobs: None,
         }
     }
 }
@@ -122,15 +127,17 @@ impl Harness {
         let print = Arc::new(
             MockPrintService::new()
                 .with_printers(vec![office()])
-                .with_jobs(vec![Job {
-                    id: 7,
-                    printer: "office".into(),
-                    name: Some("minutes.pdf".into()),
-                    owner: Some("bob".into()),
-                    state: JobState::Processing,
-                    pages: None,
-                    created: None,
-                }]),
+                .with_jobs(setup.jobs.unwrap_or_else(|| {
+                    vec![Job {
+                        id: 7,
+                        printer: "office".into(),
+                        name: Some("minutes.pdf".into()),
+                        owner: Some("bob".into()),
+                        state: JobState::Processing,
+                        pages: None,
+                        created: None,
+                    }]
+                })),
         );
         let results = Arc::new(ResultStore::new(
             dir.path().join("results"),
@@ -151,6 +158,7 @@ impl Harness {
                 .build(),
             database: database.clone(),
             branding: Arc::new(setup.branding),
+            job_visibility: setup.job_visibility,
         };
         let public_url = Url::parse(setup.public_url).unwrap();
         let openid = setup.issuer.map(|issuer| {
@@ -2785,4 +2793,98 @@ async fn the_service_worker_is_public_and_versioned() {
     let source = String::from_utf8(body.to_vec()).unwrap();
     assert!(source.contains(concat!("recto-", env!("CARGO_PKG_VERSION"))));
     assert!(!source.contains("__VERSION__"));
+}
+
+fn job_of(id: i32, owner: &str) -> Job {
+    Job {
+        id,
+        printer: "office".into(),
+        name: Some(format!("document-{id}.pdf")),
+        owner: Some(owner.into()),
+        state: JobState::Processing,
+        pages: None,
+        created: Some(chrono::Utc::now().timestamp()),
+    }
+}
+
+/// A private harness with jobs 1 (alice's), 2 (bob's) and 3 (unrecorded); returns alice's cookie.
+async fn private_jobs() -> (Harness, String) {
+    let harness = Harness::with(Setup {
+        job_visibility: JobVisibility::Own,
+        jobs: Some(vec![
+            job_of(1, "alice"),
+            job_of(2, "alice"),
+            job_of(3, "carol"),
+        ]),
+        ..Setup::default()
+    })
+    .await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    harness.sign_in("bob-subject", "bob").await;
+    for (name, id) in [("alice", 1), ("bob", 2)] {
+        let user = harness.user_id(name).await;
+        jobs::record(
+            &harness.database,
+            jobs::NewJob {
+                user_id: user,
+                printer: "office".into(),
+                cups_job_id: id,
+                document_name: format!("document-{id}.pdf"),
+            },
+        )
+        .await
+        .unwrap();
+    }
+    (harness, cookie)
+}
+
+#[tokio::test]
+async fn others_jobs_cannot_be_canceled() {
+    let (harness, cookie) = private_jobs().await;
+    let response = harness
+        .send(post("/jobs/2/cancel", &cookie, None, vec![]))
+        .await;
+    assert_redirect(&response, "/jobs?error=job_not_found");
+    assert!(harness.print.canceled().is_empty());
+
+    let response = harness
+        .send(post("/jobs/1/cancel", &cookie, None, vec![]))
+        .await;
+    assert_redirect(&response, "/jobs");
+    assert_eq!(harness.print.canceled(), [(1, "alice".to_owned())]);
+}
+
+#[tokio::test]
+async fn unrecorded_jobs_are_canceled_by_administrators_only() {
+    let (harness, cookie) = private_jobs().await;
+    let response = harness
+        .send(post("/jobs/3/cancel", &cookie, None, vec![]))
+        .await;
+    assert_redirect(&response, "/jobs?error=job_not_found");
+    assert!(harness.print.canceled().is_empty());
+
+    let admin = harness.sign_in("root-subject", "root").await;
+    let root = harness.user_id("root").await;
+    users::set_administrator_from_command_line(&harness.database, root, true)
+        .await
+        .unwrap();
+    let response = harness
+        .send(post("/jobs/3/cancel", &admin, None, vec![]))
+        .await;
+    assert_redirect(&response, "/jobs");
+    assert_eq!(harness.print.canceled(), [(3, "root".to_owned())]);
+}
+
+#[tokio::test]
+async fn ownership_fails_closed() {
+    let (harness, cookie) = private_jobs().await;
+    // Users and sessions stay readable; only the records are gone.
+    sea_orm::ConnectionTrait::execute_unprepared(&harness.database, "DROP TABLE print_jobs")
+        .await
+        .unwrap();
+    let response = harness
+        .send(post("/jobs/1/cancel", &cookie, None, vec![]))
+        .await;
+    assert_redirect(&response, "/jobs?error=unavailable");
+    assert!(harness.print.canceled().is_empty());
 }
