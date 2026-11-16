@@ -587,6 +587,15 @@ async fn a_chosen_theme_is_rendered_by_the_server() {
     let html = page_with_theme(&harness, "/jobs", &cookie, "dark").await;
     assert!(html.contains(r#"data-theme="dark""#), "{html}");
     assert!(html.contains(r#"<meta name="color-scheme" content="dark""#));
+    for other in ["Follow the device", "Light"] {
+        let label = format!(r#"aria-label="{other}""#);
+        let at = html.find(&label).unwrap();
+        let button = &html[html[..at].rfind("<button").unwrap()..];
+        assert!(
+            button[..button.find('>').unwrap()].contains(r#"aria-pressed="false""#),
+            "{other} is not pressed"
+        );
+    }
     assert!(
         html.contains(r#"aria-label="Dark""#) && {
             let at = html.find(r#"aria-label="Dark""#).unwrap();
@@ -602,32 +611,18 @@ async fn a_junk_theme_cookie_renders_the_system_theme() {
     let harness = Harness::new(vec![kitchen()], vec![]).await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
     let html = page_with_theme(&harness, "/jobs", &cookie, "purple").await;
-    assert!(!html.contains("data-theme"), "{html}");
+    let root = &html[html.find("<html").unwrap()..];
+    assert!(
+        !root[..root.find('>').unwrap()].contains("data-theme"),
+        "{html}"
+    );
     assert!(html.contains(r#"<meta name="color-scheme" content="light dark""#));
 }
 
 #[tokio::test]
 async fn the_sign_in_page_has_the_switch() {
     let harness = Harness::new(vec![kitchen()], vec![]).await;
-    // Without any password the page sends visitors straight to single sign-on.
-    users::create_local(
-        &harness.database,
-        users::NewLocalUser {
-            username: "alice".into(),
-            display_name: String::new(),
-            email: None,
-            password: "correct horse battery".into(),
-            is_administrator: false,
-        },
-        &recto_domain::passwords::PasswordPolicy { minimum_length: 12 },
-    )
-    .await
-    .unwrap();
-    let request = Request::get("/sign-in")
-        .header(header::ACCEPT, "text/html")
-        .body(Body::empty())
-        .unwrap();
-    let html = text(harness.send(request).await).await;
+    let html = sign_in_page(&harness).await;
     assert!(html.contains(r#"action="/theme""#), "{html}");
 }
 
@@ -768,6 +763,7 @@ async fn the_offline_page_is_public() {
     let html = text(response).await;
     assert!(html.contains("You are offline"), "{html}");
     assert!(html.contains(r#"href="/""#), "{html}");
+    assert!(!html.contains(r#"action="/theme""#), "{html}");
 }
 
 #[tokio::test]
