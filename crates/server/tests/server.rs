@@ -2963,6 +2963,98 @@ async fn private_jobs() -> (Harness, String) {
     (harness, cookie)
 }
 
+fn job_in(id: i32, state: JobState) -> Job {
+    Job {
+        state,
+        ..job_of(id, "alice")
+    }
+}
+
+async fn ledger_row(harness: &Harness, cups_job_id: i64) -> print_jobs::Model {
+    print_jobs::Entity::find()
+        .filter(print_jobs::Column::CupsJobId.eq(cups_job_id))
+        .one(&harness.database)
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+async fn recorded_for_alice(harness: &Harness, cups_job_id: i32) {
+    harness.sign_in("alice-subject", "alice").await;
+    let user = harness.user_id("alice").await;
+    recto_domain::testing::recorded_job(
+        &harness.database,
+        user,
+        "office",
+        cups_job_id,
+        "report.pdf",
+    )
+    .await;
+}
+
+async fn tick(harness: &Harness) {
+    recto::serve::poll_once(&*harness.print, &harness.database).await;
+}
+
+#[tokio::test]
+async fn a_poll_refunds_a_canceled_job_that_printed_nothing() {
+    let harness = Harness::with(Setup {
+        jobs: Some(vec![
+            job_in(1, JobState::Canceled),
+            job_in(2, JobState::Completed),
+            job_in(3, JobState::Pending),
+        ]),
+        ..Setup::default()
+    })
+    .await;
+    for id in 1..=3 {
+        recorded_for_alice(&harness, id).await;
+    }
+
+    tick(&harness).await;
+
+    let canceled = ledger_row(&harness, 1).await;
+    assert!(canceled.finished && canceled.refunded);
+    assert_eq!(canceled.state, "canceled");
+    let completed = ledger_row(&harness, 2).await;
+    assert!(completed.finished && !completed.refunded);
+    let pending = ledger_row(&harness, 3).await;
+    assert!(!pending.finished && !pending.refunded);
+}
+
+#[tokio::test]
+async fn a_poll_survives_cups_being_down_and_resumes() {
+    let harness = Harness::with(Setup {
+        jobs: Some(vec![job_in(1, JobState::Canceled)]),
+        ..Setup::default()
+    })
+    .await;
+    recorded_for_alice(&harness, 1).await;
+
+    harness.print.set_unavailable("down");
+    tick(&harness).await;
+    assert!(!ledger_row(&harness, 1).await.finished);
+
+    harness.print.set_available();
+    tick(&harness).await;
+    assert!(ledger_row(&harness, 1).await.refunded);
+}
+
+#[tokio::test]
+async fn a_poll_finishes_a_job_cups_forgot() {
+    let harness = Harness::with(Setup {
+        jobs: Some(vec![]),
+        ..Setup::default()
+    })
+    .await;
+    recorded_for_alice(&harness, 9).await;
+
+    tick(&harness).await;
+
+    let forgotten = ledger_row(&harness, 9).await;
+    assert!(forgotten.finished && !forgotten.refunded);
+}
+
 #[tokio::test]
 async fn others_jobs_cannot_be_canceled() {
     let (harness, cookie) = private_jobs().await;

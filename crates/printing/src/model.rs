@@ -48,6 +48,14 @@ pub struct Job {
     pub created: Option<i64>,
 }
 
+/// What CUPS reports about one job: enough to tell whether it printed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JobStatus {
+    pub state: JobState,
+    /// `job-impressions-completed`; `None` when the printer does not report it.
+    pub impressions_completed: Option<u32>,
+}
+
 impl Job {
     /// Whether the job can still be canceled or is still being worked on.
     pub fn is_active(&self) -> bool {

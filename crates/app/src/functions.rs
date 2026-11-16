@@ -181,7 +181,7 @@ mod server {
         }
 
         /// Names the jobs' owners from the records of the jobs recto submitted, keeps the
-        /// records' states current, and drops the jobs the user may not see. A database
+        /// and drops the jobs the user may not see. A database
         /// failure is logged and leaves CUPS's own owners, so the list still shows; but when
         /// ownership decides what the user sees, no record means no jobs: it fails closed.
         pub async fn name_owners_and_filter(
@@ -201,20 +201,13 @@ mod server {
                     return Err(self.try_again());
                 }
             };
-            let mut changes = Vec::new();
             jobs.retain_mut(|job| {
                 let record = jobs::matching(&records, job.id, job.created);
                 if let Some(record) = record {
                     job.owner = Some(record.display_name.clone());
-                    if record.state != job.state.keyword() {
-                        changes.push((record.id, job.state.keyword()));
-                    }
                 }
                 visible(record, &self.user, visibility)
             });
-            if let Err(error) = jobs::update_states(database, &changes).await {
-                tracing::error!(%error, "updating the job records failed");
-            }
             Ok(jobs)
         }
 

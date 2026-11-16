@@ -26,7 +26,10 @@ use recto_app::{
     state::{AppState, User},
 };
 use recto_authentication::csrf::{self, AllowedOrigin};
+use recto_domain::ledger;
+use recto_printing::PrintService;
 use recto_scanning::{ResultStore, ScannerService};
+use sea_orm::DatabaseConnection;
 use tower::ServiceExt;
 use tower_http::services::ServeDir;
 use tower_sessions::session_store::ExpiredDeletion;
@@ -45,6 +48,9 @@ use crate::{
 const PURGE_INTERVAL: Duration = Duration::from_secs(10 * 60);
 /// How often expired sessions are deleted.
 const SESSION_PURGE_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+/// How often CUPS is asked about the jobs of the ledger that are not final.
+const JOB_POLL_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Where the interface's assets are and how they are named.
 pub fn leptos_options(config: &Config) -> LeptosOptions {
@@ -193,6 +199,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     };
     purge_expired_results(Arc::clone(&state.results));
     delete_expired_sessions(auth.sessions.clone());
+    poll_jobs(Arc::clone(&state.print), state.database.clone());
     find_scanners(Arc::clone(&state.scan));
     #[cfg_attr(
         not(all(feature = "dev-mocks", debug_assertions)),
@@ -257,6 +264,50 @@ fn find_scanners(scan: Arc<dyn ScannerService>) {
             Err(error) => tracing::warn!(%error, "listing the scanners failed"),
         }
     });
+}
+
+/// Records the final state of the ledger's jobs in the background, every [`JOB_POLL_INTERVAL`].
+fn poll_jobs(print: Arc<dyn PrintService>, database: DatabaseConnection) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(JOB_POLL_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            poll_once(&*print, &database).await;
+        }
+    });
+}
+
+/// One round of the job poller: refunds the entries CUPS never received, then asks CUPS about
+/// each entry that is not final. CUPS is only contacted while there is one. Failures are logged
+/// and the entries tried again by the next round.
+pub async fn poll_once(print: &dyn PrintService, database: &DatabaseConnection) {
+    let now = chrono::Utc::now();
+    match ledger::refund_unattached(database, now).await {
+        Ok(0) => {}
+        Ok(count) => tracing::warn!(count, "refunded ledger entries CUPS never received"),
+        Err(error) => tracing::error!(%error, "refunding the unsent ledger entries failed"),
+    }
+    let unfinished = match ledger::unfinished(database).await {
+        Ok(unfinished) => unfinished,
+        Err(error) => {
+            tracing::error!(%error, "reading the unfinished ledger entries failed");
+            return;
+        }
+    };
+    for (id, cups_job_id) in unfinished {
+        let status = match print.job_status(cups_job_id).await {
+            Ok(status) => status,
+            Err(error) => {
+                // With CUPS down every entry would wait for its own timeout.
+                tracing::warn!(%error, job = cups_job_id, "reading a job state failed");
+                return;
+            }
+        };
+        if let Err(error) = ledger::observe(database, id, status.as_ref(), now).await {
+            tracing::error!(%error, job = cups_job_id, "recording a job state failed");
+        }
+    }
 }
 
 /// Deletes expired sessions in the background, every [`SESSION_PURGE_INTERVAL`].

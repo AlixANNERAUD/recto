@@ -44,8 +44,21 @@ The pages of a PDF come from reading the file. When recto cannot read a PDF, it 
 and records the counts as unknown, which is not the same as zero. A page range that goes past the
 end of the document selects only the pages that exist.
 
-When CUPS refuses a job, the job is marked as refunded and stops counting. Costs are zero for
-now: prices are not set yet.
+## Refunds
+
+A refunded job stops counting. A job is refunded when:
+
+- CUPS refuses it.
+- CUPS never received it: the entry still has no CUPS job id after ten minutes, for example
+  because CUPS timed out while recto sent the job.
+- It ends canceled or aborted, never reached the processing state and printed no impression.
+
+Every 30 seconds, while some jobs are not final, recto asks CUPS about them and records the final
+state (completed, canceled or aborted) and the impressions printed. A job that was canceled after
+it started, or that printed some pages before it was aborted, keeps its full counts. A job that
+CUPS no longer knows is finished without a refund, because nothing says it did not print.
+
+Costs are zero for now: prices are not set yet.
 
 ## Printer states
 

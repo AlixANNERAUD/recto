@@ -16,8 +16,8 @@ use percent_encoding::percent_decode_str;
 use url::Url;
 
 use crate::{
-    Capabilities, ColorMode, Job, JobState, PrintError, PrintRequest, PrintService, Printer,
-    PrinterState, Sides, StateReason, supplies,
+    Capabilities, ColorMode, Job, JobState, JobStatus, PrintError, PrintRequest, PrintService,
+    Printer, PrinterState, Sides, StateReason, supplies,
 };
 
 /// Long enough for a busy CUPS, short enough that a page never hangs on a dead one.
@@ -262,6 +262,33 @@ impl PrintService for Cups {
         jobs.sort_unstable_by_key(|job| std::cmp::Reverse(job.id));
         jobs.dedup_by_key(|job| job.id);
         Ok(jobs)
+    }
+
+    async fn job_status(&self, job_id: i32) -> Result<Option<JobStatus>, PrintError> {
+        let mut request = new_request(Operation::GetJobAttributes, None)?;
+        add_operation(&mut request, attribute("job-uri", self.job_uri(job_id)?)?);
+        add_requested(&mut request, &["job-state", "job-impressions-completed"])?;
+        let response = self.send(&self.root_uri()?, request).await?;
+        match check(&response, || PrintError::JobNotFound(job_id)) {
+            Ok(()) => {}
+            Err(PrintError::JobNotFound(_)) => return Ok(None),
+            Err(error) => return Err(error),
+        }
+        let group = response
+            .attributes()
+            .groups_of(DelimiterTag::JobAttributes)
+            .next();
+        // An answer without a readable state must not look like a finished job.
+        let state = group
+            .and_then(|group| integer(group, "job-state"))
+            .and_then(JobState::from_ipp)
+            .ok_or_else(|| PrintError::Unavailable("CUPS did not return the job state".into()))?;
+        Ok(Some(JobStatus {
+            state,
+            impressions_completed: group
+                .and_then(|group| integer(group, "job-impressions-completed"))
+                .and_then(|impressions| u32::try_from(impressions).ok()),
+        }))
     }
 
     async fn cancel(&self, job_id: i32, requested_by: &str) -> Result<(), PrintError> {

@@ -416,7 +416,7 @@ async fn the_job_list_names_recto_users() {
 }
 
 #[tokio::test]
-async fn listing_jobs_keeps_recorded_states() {
+async fn listing_jobs_leaves_recorded_states_to_the_poller() {
     let finished = Job {
         created: Some(now()),
         ..job(7, Some("alice"), JobState::Completed)
@@ -432,7 +432,7 @@ async fn listing_jobs_keeps_recorded_states() {
     harness.page("/jobs", &cookie).await;
     assert_eq!(
         jobs::for_cups_ids(&harness.database, &[7]).await.unwrap()[0].state,
-        "completed"
+        "pending"
     );
 }
 

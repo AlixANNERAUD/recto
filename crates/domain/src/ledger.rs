@@ -5,8 +5,9 @@
 //! gets its CUPS job id afterwards, or is refunded when CUPS refuses it. This module is the only
 //! writer of new `print_jobs` rows.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use recto_entity::print_jobs;
+use recto_printing::{JobState, JobStatus};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
 };
@@ -152,12 +153,83 @@ pub async fn refund(database: &impl ConnectionTrait, id: i64) -> Result<()> {
     Ok(())
 }
 
+/// How long an entry may wait for its CUPS job id. A CUPS that timed out after receiving the job
+/// still answers within the request timeouts, so an entry older than this never reached CUPS.
+pub const ATTACH_GRACE: Duration = Duration::minutes(10);
+
+/// The entries CUPS may still be working on, as `(entry id, CUPS job id)`: attached, not final.
+pub async fn unfinished(database: &impl ConnectionTrait) -> Result<Vec<(i64, i32)>> {
+    let rows = print_jobs::Entity::find()
+        .filter(print_jobs::Column::Finished.eq(false))
+        .filter(print_jobs::Column::CupsJobId.is_not_null())
+        .all(database)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| Some((row.id, i32::try_from(row.cups_job_id?).ok()?)))
+        .collect())
+}
+
+/// Records what CUPS says of an entry's job. A job that printed nothing is refunded; `None`
+/// (CUPS forgot the job) only finishes the entry, because nothing says it did not print.
+pub async fn observe(
+    database: &impl ConnectionTrait,
+    id: i64,
+    status: Option<&JobStatus>,
+    _now: DateTime<Utc>,
+) -> Result<()> {
+    let Some(row) = print_jobs::Entity::find_by_id(id).one(database).await? else {
+        return Ok(());
+    };
+    let mut entry: print_jobs::ActiveModel = row.clone().into();
+    match status {
+        // Nothing says that it did not print.
+        None => entry.finished = Set(true),
+        Some(status) => {
+            entry.state = Set(status.state.keyword().to_owned());
+            if let Some(impressions) = status.impressions_completed {
+                entry.impressions_completed = Set(Some(i64::from(impressions)));
+            }
+            let seen_processing = row.seen_processing
+                || matches!(status.state, JobState::Processing | JobState::Stopped);
+            entry.seen_processing = Set(seen_processing);
+            let printed_nothing = status.impressions_completed.unwrap_or(0) == 0;
+            match status.state {
+                JobState::Completed => entry.finished = Set(true),
+                JobState::Canceled | JobState::Aborted => {
+                    entry.finished = Set(true);
+                    entry.refunded = Set(printed_nothing && !seen_processing);
+                }
+                _ => {}
+            }
+        }
+    }
+    entry.update(database).await?;
+    Ok(())
+}
+
+/// Refunds the entries that never got a CUPS job id within [`ATTACH_GRACE`]: CUPS most likely
+/// never received the job, and such an entry would count against the quotas forever. Returns how
+/// many were refunded.
+pub async fn refund_unattached(database: &impl ConnectionTrait, now: DateTime<Utc>) -> Result<u64> {
+    let result = print_jobs::Entity::update_many()
+        .col_expr(print_jobs::Column::Refunded, true.into())
+        .col_expr(print_jobs::Column::Finished, true.into())
+        .filter(print_jobs::Column::Finished.eq(false))
+        .filter(print_jobs::Column::CupsJobId.is_null())
+        .filter(print_jobs::Column::SubmittedAt.lt((now - ATTACH_GRACE).fixed_offset()))
+        .exec(database)
+        .await?;
+    Ok(result.rows_affected)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::users::{Identity, sign_in_with_identity};
     use chrono::Utc;
     use recto_entity::print_jobs;
+    use recto_printing::{JobState, JobStatus};
     use sea_orm::EntityTrait;
 
     fn entry(user_id: i64) -> NewEntry {
@@ -263,6 +335,187 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(row.refunded && row.finished);
+    }
+
+    async fn attached(database: &sea_orm::DatabaseConnection, cups_job_id: i32) -> i64 {
+        let identity = Identity {
+            issuer: "https://id.example".to_owned(),
+            subject: "alice".to_owned(),
+            preferred_username: Some("alice".to_owned()),
+            ..Identity::default()
+        };
+        let alice = sign_in_with_identity(database, &identity).await.unwrap();
+        let id = insert(database, entry(alice.id), Utc::now()).await.unwrap();
+        attach(database, id, cups_job_id).await.unwrap();
+        id
+    }
+
+    async fn row(database: &sea_orm::DatabaseConnection, id: i64) -> print_jobs::Model {
+        print_jobs::Entity::find_by_id(id)
+            .one(database)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    fn status(state: JobState, impressions: Option<u32>) -> JobStatus {
+        JobStatus {
+            state,
+            impressions_completed: impressions,
+        }
+    }
+
+    #[tokio::test]
+    async fn observing_a_job_through_to_completion_keeps_its_counts() {
+        let database = crate::testing::database().await;
+        let id = attached(&database, 5).await;
+        assert_eq!(unfinished(&database).await.unwrap(), vec![(id, 5)]);
+
+        observe(
+            &database,
+            id,
+            Some(&status(JobState::Pending, None)),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        let pending = row(&database, id).await;
+        assert!(!pending.finished && !pending.seen_processing);
+        assert_eq!(pending.state, "pending");
+
+        observe(
+            &database,
+            id,
+            Some(&status(JobState::Processing, Some(1))),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        let processing = row(&database, id).await;
+        assert!(!processing.finished && processing.seen_processing);
+        assert_eq!(processing.state, "processing");
+
+        observe(
+            &database,
+            id,
+            Some(&status(JobState::Completed, Some(10))),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        let done = row(&database, id).await;
+        assert!(done.finished && !done.refunded);
+        assert_eq!(done.state, "completed");
+        assert_eq!(done.impressions_completed, Some(10));
+        assert_eq!(done.pages, Some(10));
+        assert!(unfinished(&database).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_job_that_printed_nothing_is_refunded() {
+        for (state, impressions) in [
+            (JobState::Canceled, Some(0)),
+            (JobState::Canceled, None),
+            (JobState::Aborted, Some(0)),
+        ] {
+            let database = crate::testing::database().await;
+            let id = attached(&database, 5).await;
+            observe(&database, id, Some(&status(state, impressions)), Utc::now())
+                .await
+                .unwrap();
+            let job = row(&database, id).await;
+            assert!(job.finished && job.refunded, "{state:?} {impressions:?}");
+            assert_eq!(job.state, state.keyword());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_job_that_printed_something_keeps_its_counts() {
+        // Canceled after it reached processing, aborted with pages out, canceled with pages out
+        // that were never seen processing.
+        for (seen, state, impressions) in [
+            (true, JobState::Canceled, Some(0)),
+            (true, JobState::Canceled, None),
+            (false, JobState::Aborted, Some(2)),
+            (false, JobState::Canceled, Some(1)),
+            (false, JobState::Completed, Some(0)),
+            (false, JobState::Completed, None),
+        ] {
+            let database = crate::testing::database().await;
+            let id = attached(&database, 5).await;
+            if seen {
+                observe(
+                    &database,
+                    id,
+                    Some(&status(JobState::Processing, None)),
+                    Utc::now(),
+                )
+                .await
+                .unwrap();
+            }
+            observe(&database, id, Some(&status(state, impressions)), Utc::now())
+                .await
+                .unwrap();
+            let job = row(&database, id).await;
+            assert!(
+                job.finished && !job.refunded,
+                "{seen} {state:?} {impressions:?}"
+            );
+            assert_eq!(job.impressions_completed, impressions.map(i64::from));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_job_cups_forgot_is_finished_without_a_refund() {
+        let database = crate::testing::database().await;
+        let id = attached(&database, 5).await;
+        observe(&database, id, None, Utc::now()).await.unwrap();
+        let job = row(&database, id).await;
+        assert!(job.finished && !job.refunded);
+        assert_eq!(job.state, "pending");
+    }
+
+    #[tokio::test]
+    async fn an_entry_cups_never_heard_of_is_refunded_after_ten_minutes() {
+        let database = crate::testing::database().await;
+        let identity = Identity {
+            issuer: "https://id.example".to_owned(),
+            subject: "alice".to_owned(),
+            preferred_username: Some("alice".to_owned()),
+            ..Identity::default()
+        };
+        let alice = sign_in_with_identity(&database, &identity).await.unwrap();
+        let now = Utc::now();
+        let old = insert(
+            &database,
+            entry(alice.id),
+            now - chrono::Duration::minutes(11),
+        )
+        .await
+        .unwrap();
+        let recent = insert(
+            &database,
+            entry(alice.id),
+            now - chrono::Duration::minutes(9),
+        )
+        .await
+        .unwrap();
+        let sent = insert(
+            &database,
+            entry(alice.id),
+            now - chrono::Duration::minutes(30),
+        )
+        .await
+        .unwrap();
+        attach(&database, sent, 3).await.unwrap();
+
+        assert_eq!(refund_unattached(&database, now).await.unwrap(), 1);
+
+        assert!(row(&database, old).await.refunded);
+        assert!(row(&database, old).await.finished);
+        assert!(!row(&database, recent).await.refunded);
+        assert!(!row(&database, sent).await.refunded);
+        assert_eq!(refund_unattached(&database, now).await.unwrap(), 0);
     }
 
     #[tokio::test]

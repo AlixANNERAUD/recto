@@ -11,8 +11,8 @@ use ipp::request::IppRequestResponse;
 use ipp::value::IppValue;
 use recto_printing::testing::{attribute, ipp_response};
 use recto_printing::{
-    ColorMode, Cups, DocumentFormat, JobState, PageRanges, PrintError, PrintOptions, PrintRequest,
-    PrintService, PrinterState, Sides,
+    ColorMode, Cups, DocumentFormat, JobState, JobStatus, PageRanges, PrintError, PrintOptions,
+    PrintRequest, PrintService, PrinterState, Sides,
 };
 use url::Url;
 use wiremock::matchers::{method, path};
@@ -332,6 +332,77 @@ async fn lists_jobs_newest_first() {
     assert_eq!(jobs[0].pages, Some(2));
     assert_eq!(jobs[0].created, Some(1_700_000_007));
     assert_eq!(jobs[3].state, JobState::Completed);
+}
+
+fn status_group(
+    state: i32,
+    impressions: Option<i32>,
+) -> (DelimiterTag, Vec<ipp::attribute::IppAttribute>) {
+    let mut attributes = vec![attribute("job-state", IppValue::Enum(state))];
+    if let Some(impressions) = impressions {
+        attributes.push(attribute(
+            "job-impressions-completed",
+            IppValue::Integer(impressions),
+        ));
+    }
+    (DelimiterTag::JobAttributes, attributes)
+}
+
+async fn status_of(response: ResponseTemplate) -> (Result<Option<JobStatus>, PrintError>, String) {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(Ipp(Operation::GetJobAttributes, None))
+        .respond_with(response)
+        .mount(&server)
+        .await;
+    let result = cups(&server).job_status(9).await;
+    let sent = parse(&server.received_requests().await.unwrap()[0].body);
+    (result, attr(&sent, "job-uri").unwrap_or_default())
+}
+
+#[tokio::test]
+async fn reads_the_state_and_impressions_of_a_job() {
+    let (result, uri) = status_of(ipp(
+        StatusCode::SuccessfulOk,
+        vec![status_group(7, Some(3))],
+    ))
+    .await;
+    assert_eq!(
+        result.unwrap(),
+        Some(JobStatus {
+            state: JobState::Canceled,
+            impressions_completed: Some(3)
+        })
+    );
+    assert!(
+        uri.starts_with("ipp://127.0.0.1:") && uri.ends_with("/jobs/9"),
+        "{uri}"
+    );
+
+    let (result, _) = status_of(ipp(StatusCode::SuccessfulOk, vec![status_group(5, None)])).await;
+    assert_eq!(
+        result.unwrap(),
+        Some(JobStatus {
+            state: JobState::Processing,
+            impressions_completed: None
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_job_cups_forgot_has_no_status() {
+    for status in [StatusCode::ClientErrorNotFound, StatusCode::ClientErrorGone] {
+        let (result, _) = status_of(ipp(status, vec![])).await;
+        assert_eq!(result.unwrap(), None);
+    }
+}
+
+#[tokio::test]
+async fn a_failing_cups_is_not_a_forgotten_job() {
+    let (result, _) = status_of(ipp(StatusCode::ServerErrorBusy, vec![])).await;
+    assert!(matches!(result, Err(PrintError::Unavailable(_))));
+    let (result, _) = status_of(ipp(StatusCode::SuccessfulOk, vec![])).await;
+    assert!(matches!(result, Err(PrintError::Unavailable(_))));
 }
 
 async fn cancel_scenario(owner: Option<IppValue>) -> (Result<(), PrintError>, Option<String>) {

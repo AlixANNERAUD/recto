@@ -11,6 +11,7 @@ publish.workspace = true
 
 [dependencies]
 recto-entity.workspace = true
+recto-printing.workspace = true
 recto-migration.workspace = true
 sea-orm.workspace = true
 thiserror.workspace = true

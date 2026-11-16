@@ -28,7 +28,7 @@ pub use error::{AdminError, PrintError};
 pub use format::DocumentFormat;
 #[cfg(feature = "service")]
 pub use model::PrintRequest;
-pub use model::{Capabilities, Driver, DriverInfo, Job, NewPrinter, Printer};
+pub use model::{Capabilities, Driver, DriverInfo, Job, JobStatus, NewPrinter, Printer};
 pub use options::{ColorMode, PageRanges, PrintOptions, Sides};
 #[cfg(feature = "service")]
 pub use service::PrintService;

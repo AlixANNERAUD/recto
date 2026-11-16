@@ -46,6 +46,8 @@ only.
 | warn | `SANE could not start; scanning is off`, `SANE crashed while starting; scanning is off` | `error` |
 | warn | `the scan results directory is not usable` | `error`, `dir` |
 | warn | `printer administration is off` | `error` |
+| warn | `reading a job state failed` | `error`, `job` |
+| warn | `refunded ledger entries CUPS never received` | `count` |
 | warn | `listing the devices for the administration page failed` | `error` |
 | warn | `printer administration failed` | `error`, and `by` and `printer` for a printer form |
 | error | `starting the session failed` | `error` |
@@ -54,7 +56,8 @@ only.
 | error | `refunding the ledger entry failed` | `error` |
 | error | `linking the CUPS job to its ledger entry failed` | `error`, `job` |
 | error | `reading the job records failed` | `error`, and `job` when canceling |
-| error | `updating the job records failed` | `error` |
+| error | `recording a job state failed` | `error`, `job` |
+| error | `refunding the unsent ledger entries failed`, `reading the unfinished ledger entries failed` | `error` |
 | error | `reading the printer access rules failed`, `reading the scanner access rules failed` | `error` |
 | error | `saving the device access failed`, `forgetting the device access failed`, `loading the device rules failed` | `error` |
 | error | `listing the users failed`, `listing the groups failed` | `error` |

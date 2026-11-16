@@ -8,8 +8,8 @@ use ipp::request::IppRequestResponse;
 use ipp::value::IppValue;
 
 use crate::{
-    AdminError, DriverInfo, Job, JobState, NewPrinter, PrintError, PrintRequest, PrintService,
-    Printer, PrinterAdmin,
+    AdminError, DriverInfo, Job, JobState, JobStatus, NewPrinter, PrintError, PrintRequest,
+    PrintService, Printer, PrinterAdmin,
 };
 
 /// A valid PDF of `pages` empty pages, for tests that count them.
@@ -51,6 +51,7 @@ pub struct MockPrintService {
     jobs: Mutex<Vec<Job>>,
     submitted: Mutex<Vec<PrintRequest>>,
     canceled: Mutex<Vec<(i32, String)>>,
+    impressions: Mutex<Vec<(i32, u32)>>,
     unavailable: Mutex<Option<String>>,
     refusal: Mutex<Option<String>>,
 }
@@ -75,6 +76,16 @@ impl MockPrintService {
     pub fn with_jobs(self, jobs: Vec<Job>) -> Self {
         *lock(&self.jobs) = jobs;
         self
+    }
+
+    /// Sets what `job_status` reports of a job: its state and the impressions printed.
+    pub fn set_job(&self, job_id: i32, state: JobState, impressions: Option<u32>) {
+        if let Some(job) = lock(&self.jobs).iter_mut().find(|job| job.id == job_id) {
+            job.state = state;
+        }
+        let mut all = lock(&self.impressions);
+        all.retain(|(id, _)| *id != job_id);
+        all.extend(impressions.map(|impressions| (job_id, impressions)));
     }
 
     /// Makes every call fail with `PrintError::Unavailable(reason)` until `set_available`.
@@ -157,6 +168,21 @@ impl PrintService for MockPrintService {
         let mut jobs = lock(&self.jobs).clone();
         jobs.sort_unstable_by_key(|job| std::cmp::Reverse(job.id));
         Ok(jobs)
+    }
+
+    async fn job_status(&self, job_id: i32) -> Result<Option<JobStatus>, PrintError> {
+        self.check_available()?;
+        let state = lock(&self.jobs)
+            .iter()
+            .find(|job| job.id == job_id)
+            .map(|job| job.state);
+        Ok(state.map(|state| JobStatus {
+            state,
+            impressions_completed: lock(&self.impressions)
+                .iter()
+                .find(|(id, _)| *id == job_id)
+                .map(|(_, impressions)| *impressions),
+        }))
     }
 
     async fn cancel(&self, job_id: i32, requested_by: &str) -> Result<(), PrintError> {

@@ -79,18 +79,6 @@ pub fn matching(
         .max_by_key(|record| record.submitted_at)
 }
 
-/// Stores the new state keyword of records, by record id.
-pub async fn update_states(database: &impl ConnectionTrait, changes: &[(i64, &str)]) -> Result<()> {
-    for (id, state) in changes {
-        print_jobs::Entity::update_many()
-            .col_expr(print_jobs::Column::State, (*state).into())
-            .filter(print_jobs::Column::Id.eq(*id))
-            .exec(database)
-            .await?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,22 +149,6 @@ mod tests {
         assert_eq!(found.submitted_at, at("2026-03-01T00:00:00Z"));
         let newest = matching(&records, 7, None).unwrap();
         assert_eq!(newest.submitted_at, at("2026-03-01T00:00:00Z"));
-    }
-
-    #[tokio::test]
-    async fn states_are_updated() {
-        let database = crate::testing::database().await;
-        let alice = user(&database, "alice").await;
-        record(&database, alice.id, 7).await;
-        let id = for_cups_ids(&database, &[7]).await.unwrap()[0].id;
-
-        update_states(&database, &[(id, "completed")])
-            .await
-            .unwrap();
-        assert_eq!(
-            for_cups_ids(&database, &[7]).await.unwrap()[0].state,
-            "completed"
-        );
     }
 
     #[test]
