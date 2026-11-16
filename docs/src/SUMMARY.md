@@ -15,6 +15,7 @@
 - [Let only some people in](how-to/restrict-access.md)
 - [Add a printer](how-to/add-printer.md)
 - [Use an existing CUPS server](how-to/existing-cups.md)
+- [Set printer prices](how-to/set-prices.md)
 - [Add a scanner](how-to/add-scanner.md)
 - [Save scans into Paperless-ngx](how-to/paperless.md)
 - [Brand recto](how-to/brand.md)

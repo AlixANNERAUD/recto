@@ -1,8 +1,9 @@
 //! `/administration/printers` and `/administration/scanners`: each device and the groups that
 //! may use it, one row per device. The server answers an accepted form with
 //! `<page>?done=<notice>` and a refused one by rendering the page again with its
-//! [`DevicesProblem`]. When recto can administer CUPS, the printers' page also adds printers and
-//! each row manages its printer, in the same `<details>`.
+//! [`DevicesProblem`]. Each printer row also sets the printer's prices, and when recto can
+//! administer CUPS, the printers' page also adds printers and each row manages its printer, in
+//! the same `<details>`.
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_query_map;
@@ -56,6 +57,27 @@ pub struct DeviceRow {
     pub controls: Option<PrinterControls>,
     /// `false` for a rule whose device the service no longer lists.
     pub listed: bool,
+    /// What the printer charges; `None` for a scanner.
+    pub prices: Option<PriceRow>,
+}
+
+/// A printer's prices, which the server formats in the currency.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PriceRow {
+    pub mono_page: Price,
+    pub color_page: Price,
+    pub sheet: Price,
+}
+
+/// One price of a printer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Price {
+    /// What its field holds: the amount as it is typed, such as `0.05`, or what was typed when
+    /// the form was refused.
+    pub value: String,
+    /// The amount with the currency, such as `0.05 EUR`.
+    pub shown: String,
+    pub free: bool,
 }
 
 /// The state of a printer, which decides the actions its row offers.
@@ -128,6 +150,10 @@ pub struct DevicesPageData {
     pub listing_failed: bool,
     pub tools: Option<PrinterTools>,
     pub refusal: Option<DevicesProblem>,
+    /// The code of the currency prices are typed in, such as `EUR`.
+    pub currency: String,
+    /// A small price in that currency as it is typed, such as `0.05`, for the hint.
+    pub price_example: String,
 }
 
 /// Why a form of the page was refused.
@@ -161,6 +187,8 @@ pub enum DevicesProblem {
     Rejected(String),
     /// CUPS could not be asked.
     CupsUnavailable,
+    /// A price is not an amount in the currency.
+    InvalidPrices { currency: String, decimals: u32 },
 }
 
 impl DevicesProblem {
@@ -205,6 +233,21 @@ impl DevicesProblem {
                 return tf!("administration.printers.errors.rejected", message = message)
                     .into_any();
             }
+            DevicesProblem::InvalidPrices { currency, decimals } => {
+                let text = if decimals == 0 {
+                    tf!(
+                        "administration.printers.errors.invalid_whole_prices",
+                        currency = currency
+                    )
+                } else {
+                    tf!(
+                        "administration.printers.errors.invalid_prices",
+                        currency = currency,
+                        decimals = decimals
+                    )
+                };
+                return text.into_any();
+            }
         };
         text.into_any()
     }
@@ -231,10 +274,11 @@ pub enum Notice {
     Accepting,
     Rejecting,
     Removed,
+    Prices,
 }
 
 impl Notice {
-    const ALL: [Notice; 10] = [
+    const ALL: [Notice; 11] = [
         Notice::Access,
         Notice::Forgotten,
         Notice::Added,
@@ -245,6 +289,7 @@ impl Notice {
         Notice::Accepting,
         Notice::Rejecting,
         Notice::Removed,
+        Notice::Prices,
     ];
 
     /// The value of the `done` query parameter.
@@ -260,6 +305,7 @@ impl Notice {
             Notice::Accepting => "accepting",
             Notice::Rejecting => "rejecting",
             Notice::Removed => "removed",
+            Notice::Prices => "prices",
         }
     }
 
@@ -279,6 +325,7 @@ impl Notice {
             Notice::Accepting => t!("administration.printers.done.accepting"),
             Notice::Rejecting => t!("administration.printers.done.rejecting"),
             Notice::Removed => t!("administration.printers.done.removed"),
+            Notice::Prices => t!("administration.printers.done.prices"),
         }
     }
 }
@@ -331,6 +378,10 @@ fn DevicesPage(kind: DeviceKind) -> impl IntoView {
         .listing_failed
         .then(|| view! { <Alert tone=Tone::Danger>{listing_failed}</Alert> });
     let groups = data.groups;
+    let pricing = Pricing {
+        currency: data.currency,
+        example: data.price_example,
+    };
     let add = data.tools.map(|tools| view! { <AddPrinter tools /> });
     let list = match data.devices {
         None => view! {
@@ -346,7 +397,11 @@ fn DevicesPage(kind: DeviceKind) -> impl IntoView {
             <ul class="bg-card divide-y rounded-lg border shadow-[0_1px_2px_rgba(0,0,0,0.08)]">
                 {devices
                     .into_iter()
-                    .map(|device| view! { <Device kind device groups=groups.clone() /> })
+                    .map(|device| {
+                        view! {
+                            <Device kind device groups=groups.clone() pricing=pricing.clone() />
+                        }
+                    })
                     .collect_view()}
             </ul>
         }
@@ -387,9 +442,109 @@ fn access_text(access: &DeviceAccess, groups: &[GroupChoice]) -> String {
     }
 }
 
+/// What the price forms need to know of the currency.
+#[derive(Debug, Clone)]
+struct Pricing {
+    currency: String,
+    example: String,
+}
+
+/// What a printer charges, in words.
+fn prices_text(prices: &PriceRow) -> String {
+    let mut parts = Vec::new();
+    if !prices.mono_page.free {
+        parts.push(tf!(
+            "administration.printers.prices.per_mono_page",
+            amount = prices.mono_page.shown.clone()
+        ));
+    }
+    if !prices.color_page.free {
+        parts.push(tf!(
+            "administration.printers.prices.per_color_page",
+            amount = prices.color_page.shown.clone()
+        ));
+    }
+    if !prices.sheet.free {
+        parts.push(tf!(
+            "administration.printers.prices.per_sheet",
+            amount = prices.sheet.shown.clone()
+        ));
+    }
+    if parts.is_empty() {
+        t!("administration.printers.prices.free").to_owned()
+    } else {
+        tf!(
+            "administration.printers.prices.summary",
+            prices = parts.join(t!("administration.devices.separator"))
+        )
+    }
+}
+
+/// The Prices form of a printer row.
 #[component]
-fn Device(kind: DeviceKind, device: DeviceRow, groups: Vec<GroupChoice>) -> impl IntoView {
+fn PriceForm(name: String, prices: PriceRow, pricing: Pricing) -> impl IntoView {
+    let field = |field: &'static str, label: &'static str, price: Price| {
+        view! {
+            <label class="grid gap-1.5 text-sm font-semibold">
+                {label}
+                <input
+                    name=field
+                    type="text"
+                    inputmode="decimal"
+                    value=price.value
+                    autocomplete="off"
+                    placeholder="0"
+                    class=format!("{INPUT} font-normal")
+                />
+            </label>
+        }
+    };
+    view! {
+        <form
+            method="post"
+            action=format!("{}/prices", DeviceKind::Printer.path())
+            class="grid gap-3 border-t pt-4 sm:grid-cols-3"
+        >
+            <input type="hidden" name="printer" value=name.clone() />
+            // Every row has the same fields: the heading says which printer they price.
+            <h3 class="font-semibold sm:col-span-3">
+                {tf!("administration.printers.prices.title", printer = name)}
+            </h3>
+            {field("mono_page", t!("administration.printers.prices.mono_page"), prices.mono_page)}
+            {field("color_page", t!("administration.printers.prices.color_page"), prices.color_page)}
+            {field("sheet", t!("administration.printers.prices.sheet"), prices.sheet)}
+            <p class="text-muted-foreground text-xs sm:col-span-3">
+                {tf!(
+                    "administration.printers.prices.hint",
+                    currency = pricing.currency,
+                    example = pricing.example
+                )}
+            </p>
+            <div class="sm:col-span-3">
+                <button type="submit" class=small_button_class(ButtonVariant::Primary)>
+                    {t!("administration.printers.prices.save")}
+                </button>
+            </div>
+        </form>
+    }
+}
+
+#[component]
+fn Device(
+    kind: DeviceKind,
+    device: DeviceRow,
+    groups: Vec<GroupChoice>,
+    pricing: Pricing,
+) -> impl IntoView {
     let access = access_text(&device.access, &groups);
+    let charges = device
+        .prices
+        .as_ref()
+        .map(|prices| view! { <p class="text-sm">{prices_text(prices)}</p> });
+    let price_form = device
+        .prices
+        .clone()
+        .map(|prices| view! { <PriceForm name=device.name.clone() prices pricing /> });
     let everyone = device.access == DeviceAccess::Everyone;
     let selected = match &device.access {
         DeviceAccess::Everyone => vec![],
@@ -436,9 +591,11 @@ fn Device(kind: DeviceKind, device: DeviceRow, groups: Vec<GroupChoice>) -> impl
         }
         .into_any()
     };
-    // With the printer actions, the section is about more than access.
+    // With the printer actions or prices, the section is about more than access.
     let summary = if device.controls.is_some() {
         t!("administration.printers.manage.summary")
+    } else if device.prices.is_some() {
+        t!("administration.printers.change")
     } else {
         t!("administration.devices.change")
     };
@@ -467,6 +624,7 @@ fn Device(kind: DeviceKind, device: DeviceRow, groups: Vec<GroupChoice>) -> impl
             </div>
             {detail}
             <p class="text-sm">{access}</p>
+            {charges}
             <details class="text-sm">
                 <summary class="text-brand min-h-8 cursor-pointer font-semibold">
                     {summary}
@@ -513,6 +671,7 @@ fn Device(kind: DeviceKind, device: DeviceRow, groups: Vec<GroupChoice>) -> impl
                             </div>
                         </fieldset>
                     </form>
+                    {price_form}
                     {manage}
                     {forget}
                 </div>

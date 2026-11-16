@@ -31,6 +31,7 @@ only.
 | info | `job canceled` | `user`, `job` |
 | info | `device access changed`, `device access forgotten` | `by`, `device` |
 | info | `printer added` | `by`, `printer`, `address` |
+| info | `printer prices set` | `by`, `printer`, `mono_page`, `color_page`, `sheet` (minor units) |
 | info | `printer described`, `default printer set`, `printer paused`, `printer resumed`, `printer accepting jobs`, `printer rejecting jobs`, `printer removed` | `by`, `printer` |
 | info | `the CUPS socket does not exist yet`: harmless while CUPS is still starting, since recto connects at each request | `socket` |
 | info | `scan saved` | `user`, `path` |
@@ -53,6 +54,7 @@ only.
 | error | `starting the session failed` | `error` |
 | error | `password sign-in failed`, `changing a password failed`, `changing a user failed` | `error` |
 | error | `writing the ledger entry failed` | `error` |
+| error | `reading the printer prices failed`, `loading the printer prices failed`, `saving the printer prices failed`, `forgetting the printer prices failed` | `error` |
 | error | `refunding the ledger entry failed` | `error` |
 | error | `linking the CUPS job to its ledger entry failed` | `error`, `job` |
 | error | `reading the job records failed` | `error`, and `job` when canceling |

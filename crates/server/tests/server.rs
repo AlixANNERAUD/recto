@@ -24,6 +24,7 @@ use recto_domain::{
     access::{self, Access, DeviceKind},
     jobs,
     passwords::{self, PasswordPolicy},
+    prices::{self, Prices},
     testing::{TempDir, temporary_directory},
     users::{self, Identity},
 };
@@ -4110,4 +4111,188 @@ async fn printer_management_is_off_without_the_socket() {
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{route}");
     }
     assert!(harness.admin.calls().is_empty());
+}
+
+fn euros(mono_page: i64, color_page: i64, sheet: i64) -> Prices {
+    Prices {
+        mono_page,
+        color_page,
+        sheet,
+    }
+}
+
+#[tokio::test]
+async fn an_administrator_prices_a_printer() {
+    let (harness, admin, _) = device_harness().await;
+    let response = harness
+        .send(form(
+            "/administration/printers/prices",
+            Some(&admin),
+            &[
+                ("printer", "Bureau / 2e étage"),
+                ("mono_page", "0,05"),
+                ("color_page", "0.2"),
+                // Empty is free.
+                ("sheet", ""),
+            ],
+        ))
+        .await;
+    assert_redirect(&response, "/administration/printers?done=prices");
+    assert_eq!(
+        prices::get(&harness.database, "Bureau / 2e étage")
+            .await
+            .unwrap(),
+        euros(5, 20, 0)
+    );
+
+    let response = harness
+        .send(page("/administration/printers?done=prices", Some(&admin)))
+        .await;
+    let html = text(response).await;
+    assert!(html.contains("The prices were saved."), "{html}");
+    assert!(html.contains("0.05 EUR a black-and-white page"), "{html}");
+    assert!(html.contains("0.20 EUR a color page"), "{html}");
+    // The form shows the amounts as they are typed.
+    assert!(html.contains("value=\"0.05\""), "{html}");
+}
+
+#[tokio::test]
+async fn prices_are_shown_without_printer_management() {
+    let (harness, admin, _) = device_harness().await;
+    let html = text(
+        harness
+            .send(page("/administration/printers", Some(&admin)))
+            .await,
+    )
+    .await;
+    assert!(html.contains("Free"), "{html}");
+    assert!(
+        html.contains("action=\"/administration/printers/prices\""),
+        "{html}"
+    );
+    // Scanners have no prices.
+    let html = text(
+        harness
+            .send(page("/administration/scanners", Some(&admin)))
+            .await,
+    )
+    .await;
+    assert!(!html.contains("/prices"), "{html}");
+}
+
+#[tokio::test]
+async fn invalid_prices_are_refused_with_the_form_kept() {
+    let (harness, admin, _) = device_harness().await;
+    for typed in ["-0.05", "0.001", "cheap", "1000001"] {
+        let response = harness
+            .send(form(
+                "/administration/printers/prices",
+                Some(&admin),
+                &[
+                    ("printer", "Bureau / 2e étage"),
+                    ("mono_page", "0.05"),
+                    ("color_page", typed),
+                    ("sheet", "0"),
+                ],
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{typed}");
+        let html = text(response).await;
+        assert!(
+            html.contains("Prices are amounts in EUR with at most 2 decimals."),
+            "{html}"
+        );
+        assert!(html.contains(&format!("value=\"{typed}\"")), "{html}");
+        assert!(
+            prices::all(&harness.database).await.unwrap().is_empty(),
+            "{typed}"
+        );
+    }
+    let response = harness
+        .send(form(
+            "/administration/printers/prices",
+            Some(&admin),
+            &[("printer", " "), ("mono_page", "1")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn prices_need_an_administrator() {
+    let (harness, _, _) = device_harness().await;
+    let plain = harness.sign_in("alice-subject", "alice").await;
+    let response = harness
+        .send(form(
+            "/administration/printers/prices",
+            Some(&plain),
+            &[("printer", "Bureau / 2e étage"), ("mono_page", "1")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(prices::all(&harness.database).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_prices_of_a_missing_printer_can_be_forgotten() {
+    let (harness, admin, _) = device_harness().await;
+    prices::set(&harness.database, "gone", euros(1, 2, 3))
+        .await
+        .unwrap();
+    let html = text(
+        harness
+            .send(page("/administration/printers", Some(&admin)))
+            .await,
+    )
+    .await;
+    assert!(html.contains("gone"), "{html}");
+    assert!(html.contains("Not found"), "{html}");
+
+    let response = harness
+        .send(form(
+            "/administration/printers/forget",
+            Some(&admin),
+            &[("device", "gone")],
+        ))
+        .await;
+    assert_redirect(&response, "/administration/printers?done=forgotten");
+    assert!(prices::all(&harness.database).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_job_costs_the_prices_of_its_submission() {
+    let harness = Harness::new().await;
+    prices::set(&harness.database, "office", euros(5, 20, 1))
+        .await
+        .unwrap();
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let pdf = recto_printing::testing::sample_pdf(2);
+    let response = print(
+        &harness,
+        &cookie,
+        &[
+            ("printer", "office"),
+            ("copies", "3"),
+            ("sides", "two-sided-long-edge"),
+            ("color_mode", "color"),
+        ],
+        Some(("report.pdf", &pdf)),
+    )
+    .await;
+    assert_redirect(&response, "/jobs?submitted=8");
+    let cost = || async {
+        print_jobs::Entity::find()
+            .one(&harness.database)
+            .await
+            .unwrap()
+            .unwrap()
+            .cost
+    };
+    // 6 colour pages and 3 sheets.
+    assert_eq!(cost().await, 6 * 20 + 3);
+
+    prices::set(&harness.database, "office", euros(50, 200, 10))
+        .await
+        .unwrap();
+    assert_eq!(cost().await, 6 * 20 + 3);
 }

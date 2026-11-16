@@ -103,8 +103,8 @@ By default everyone signed in can use every printer and scanner. To limit one to
    from the provider's groups claim at each sign-in, and recto cannot edit them. Local accounts
    belong to no group: they cannot use a limited device unless they are administrators.
 2. Open **Administration**, then **Printers** or **Scanners**.
-3. Press **Change who may use it** on the device's row, choose **These groups**, tick the groups
-   and press **Save**.
+3. Press **Change who may use it** on the device's row (**Change access and prices** or
+   **Manage** for a printer), choose **These groups**, tick the groups and press **Save**.
 
 Then:
 

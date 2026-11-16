@@ -1310,11 +1310,11 @@ async fn with_the_socket_printers_have_actions() {
 }
 
 #[tokio::test]
-async fn without_the_socket_rows_only_change_access() {
+async fn without_the_socket_rows_change_access_and_prices() {
     let harness = Harness::new(vec![printer("open", false)], vec![]).await;
     let admin = administrator(&harness, "admin-subject", "admin").await;
     let html = harness.page("/administration/printers", &admin).await;
-    assert!(html.contains("Change who may use it"), "{html}");
+    assert!(html.contains("Change access and prices"), "{html}");
 }
 
 #[tokio::test]

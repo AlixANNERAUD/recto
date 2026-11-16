@@ -17,7 +17,8 @@ use recto_app::{
 use recto_domain::{
     access::{DeviceKind, Usable},
     jobs,
-    ledger::{self, NewEntry, Prices},
+    ledger::{self, NewEntry},
+    prices::{self, Prices},
 };
 use recto_printing::{
     Capabilities, ColorMode, DocumentFormat, PageRanges, PrintError, PrintOptions, PrintRequest,
@@ -95,13 +96,20 @@ async fn submit_form(state: &AppState, user: &User, multipart: Multipart) -> Res
         DocumentFormat::Jpeg | DocumentFormat::Png => Some(1),
     };
     let printed = document_pages.map(|pages| printed_pages(pages, options.page_ranges.as_ref()));
+    // The cost is fixed now: a later price change leaves this job's cost alone. Without quota
+    // rules yet, prices that cannot be read must not stop printing.
+    let prices = prices::get(&state.database, &printer.name)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::error!(%error, "reading the printer prices failed");
+            Prices::default()
+        });
     let counts = ledger::counts(
         printed,
         options.copies,
         options.sides != Sides::OneSided,
         options.color_mode == ColorMode::Color,
-        // Prices arrive with the printer settings.
-        Prices::default(),
+        prices,
     );
     let entry = NewEntry {
         user_id: user.id,

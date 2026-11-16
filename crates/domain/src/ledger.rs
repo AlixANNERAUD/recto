@@ -539,8 +539,11 @@ mod tests {
             std::process::id()
         );
         let database = crate::database::connect(&url).await.unwrap();
-        // Everything but the ledger migration, which is the last.
-        let before = Migrator::migrations().len() as u32 - 1;
+        // Every migration before the ledger's.
+        let before = Migrator::migrations()
+            .iter()
+            .position(|migration| migration.name() == "m20261117_000001_ledger")
+            .expect("the ledger migration") as u32;
         Migrator::up(&database, Some(before)).await.unwrap();
         for sql in [
             "INSERT INTO users (username, display_name, is_administrator, administrator_from_claim, \

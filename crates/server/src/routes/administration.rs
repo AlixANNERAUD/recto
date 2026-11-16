@@ -23,20 +23,21 @@ use recto_app::{
             devices::{
                 DeviceAccess, DeviceKind as PageKind, DeviceRow, DevicesPageData, DevicesProblem,
                 DriverChoice, GroupChoice, NewPrinterDraft, Notice as DeviceNotice,
-                PRINTER_TEXT_MAX, PrinterControls, PrinterTools,
+                PRINTER_TEXT_MAX, Price, PriceRow, PrinterControls, PrinterTools,
             },
             groups::{GroupMember, GroupRow, GroupsPageData},
             users::{NewUserDraft, Notice, UserRow, UsersPageData, UsersProblem, UsersRefusal},
         },
         sign_in::SignInMethods,
     },
-    state::{AppState, User},
+    state::{AppState, Currency, User},
 };
 use recto_domain::{
     Error, Problem,
     access::{self, Access, DeviceKind},
     groups,
     passwords::PasswordPolicy,
+    prices::{self, Prices},
     users::{self, NewLocalUser, UserSummary},
 };
 use recto_printing::{AdminError, Driver, NewPrinter, PrinterAdmin, PrinterState};
@@ -78,6 +79,7 @@ pub fn router(app: AppState, auth: &AuthState) -> Router {
         .route(PRINTERS, get(printers_page))
         .route(SCANNERS, get(scanners_page))
         .merge(printer_forms())
+        .route(&format!("{PRINTERS}/prices"), post(set_prices))
         .merge(device_forms(DeviceKind::Printer))
         .merge(device_forms(DeviceKind::Scanner))
         // The last layer runs first: anonymous visitors are sent to sign in before the check.
@@ -436,8 +438,31 @@ async fn devices_view(
         status,
         refusal,
         NewPrinterDraft::default(),
+        None,
     )
     .await
+}
+
+/// What a refused Prices form held: the printer, then the mono page, color page and sheet
+/// amounts as typed.
+type TypedPrices = (String, [String; 3]);
+
+/// A printer's prices for its row, or the typed ones of a refused form.
+fn price_row(currency: &Currency, prices: Prices, typed: Option<&[String; 3]>) -> PriceRow {
+    let price = |minor: i64, index: usize| Price {
+        value: match typed {
+            Some(typed) => typed[index].clone(),
+            None if minor == 0 => String::new(),
+            None => currency.amount(minor),
+        },
+        shown: currency.format(minor),
+        free: minor == 0,
+    };
+    PriceRow {
+        mono_page: price(prices.mono_page, 0),
+        color_page: price(prices.color_page, 1),
+        sheet: price(prices.sheet, 2),
+    }
 }
 
 /// A device the service lists: name, what tells it apart, and what its row can do.
@@ -446,7 +471,7 @@ type ListedDevice = (String, Option<String>, Option<PrinterControls>);
 /// How many drivers the Add printer list shows: CUPS knows thousands, so a search narrows them.
 const DRIVER_LIMIT: u32 = 50;
 
-/// [`devices_view`], with what the Add printer form held when it was refused.
+/// [`devices_view`], with what the Add printer form or a Prices form held when it was refused.
 async fn devices_view_with(
     state: &AdministrationState,
     mut parts: Parts,
@@ -454,6 +479,7 @@ async fn devices_view_with(
     status: StatusCode,
     refusal: Option<DevicesProblem>,
     draft: NewPrinterDraft,
+    typed_prices: Option<TypedPrices>,
 ) -> Response {
     let managed = kind == DeviceKind::Printer && state.app.printer_admin.is_some();
     let listed: Result<Vec<ListedDevice>, String> = match kind {
@@ -520,31 +546,53 @@ async fn devices_view_with(
 
     let rules = access::rules(&state.app.database, kind).await;
     let groups = groups::list(&state.app.database).await;
-    let (devices, groups) = match (rules, groups) {
-        (Ok(mut rules), Ok(groups)) => {
-            let to_row = |name: String, detail, controls, rule: Option<Access>, listed| DeviceRow {
-                name,
-                detail,
-                controls,
-                access: match rule {
-                    None | Some(Access::Everyone) => DeviceAccess::Everyone,
-                    Some(Access::Groups(ids)) => DeviceAccess::Groups(ids),
-                },
-                listed,
+    // Scanners have no prices.
+    let priced = match kind {
+        DeviceKind::Printer => prices::all(&state.app.database).await,
+        DeviceKind::Scanner => Ok(Default::default()),
+    };
+    let (devices, groups) = match (rules, groups, priced) {
+        (Ok(mut rules), Ok(groups), Ok(mut priced)) => {
+            // The settings of a device the service no longer lists stay manageable.
+            let mut missing: Vec<String> = rules
+                .keys()
+                .chain(priced.keys())
+                .filter(|name| !listed.iter().any(|(listed, _, _)| listed == *name))
+                .cloned()
+                .collect();
+            missing.sort();
+            missing.dedup();
+            let currency = &state.app.currency;
+            let mut to_row = |name: String, detail, controls, listed| {
+                let rule = rules.remove(&name);
+                let prices = (kind == DeviceKind::Printer).then(|| {
+                    let typed = typed_prices
+                        .as_ref()
+                        .filter(|(printer, _)| *printer == name)
+                        .map(|(_, typed)| typed);
+                    let prices = priced.remove(&name).unwrap_or_default();
+                    price_row(currency, prices, typed)
+                });
+                DeviceRow {
+                    name,
+                    detail,
+                    controls,
+                    access: match rule {
+                        None | Some(Access::Everyone) => DeviceAccess::Everyone,
+                        Some(Access::Groups(ids)) => DeviceAccess::Groups(ids),
+                    },
+                    listed,
+                    prices,
+                }
             };
             let mut rows: Vec<DeviceRow> = listed
                 .into_iter()
-                .map(|(name, detail, controls)| {
-                    let rule = rules.remove(&name);
-                    to_row(name, detail, controls, rule, true)
-                })
+                .map(|(name, detail, controls)| to_row(name, detail, controls, true))
                 .collect();
-            let mut missing: Vec<_> = rules.into_iter().collect();
-            missing.sort_by(|first, second| first.0.cmp(&second.0));
             rows.extend(
                 missing
                     .into_iter()
-                    .map(|(name, rule)| to_row(name, None, None, Some(rule), false)),
+                    .map(|name| to_row(name, None, None, false)),
             );
             let choices = groups
                 .into_iter()
@@ -555,12 +603,15 @@ async fn devices_view_with(
                 .collect();
             (Some(rows), choices)
         }
-        (rules, groups) => {
+        (rules, groups, priced) => {
             if let Err(error) = rules {
                 tracing::error!(%error, "loading the device rules failed");
             }
             if let Err(error) = groups {
                 tracing::error!(%error, "listing the groups failed");
+            }
+            if let Err(error) = priced {
+                tracing::error!(%error, "loading the printer prices failed");
             }
             (None, vec![])
         }
@@ -584,6 +635,8 @@ async fn devices_view_with(
         listing_failed,
         tools,
         refusal,
+        currency: state.app.currency.code.clone(),
+        price_example: state.app.currency.amount(5),
     };
     render(&state.app, state.methods, parts, status, move || {
         provide_context(data.clone());
@@ -687,7 +740,11 @@ async fn forget(
         )
         .await;
     };
-    match access::forget(&state.app.database, kind, &device).await {
+    let mut forgotten = access::forget(&state.app.database, kind, &device).await;
+    if forgotten.is_ok() && kind == DeviceKind::Printer {
+        forgotten = prices::set(&state.app.database, &device, Prices::default()).await;
+    }
+    match forgotten {
         Ok(()) => {
             tracing::info!(by = actor.username, device, "device access forgotten");
             devices_done(kind, DeviceNotice::Forgotten)
@@ -1030,6 +1087,10 @@ async fn perform(
                 {
                     tracing::error!(%error, "forgetting the device access failed");
                 }
+                if let Err(error) = prices::set(&state.app.database, name, Prices::default()).await
+                {
+                    tracing::error!(%error, "forgetting the printer prices failed");
+                }
             }
             removed.map(|()| DeviceNotice::Removed)
         }
@@ -1064,9 +1125,90 @@ async fn administer(
                 refusal.status,
                 Some(refusal.problem),
                 refusal.draft,
+                None,
             )
             .await
         }
+    }
+}
+
+/// `POST /administration/printers/prices` with `printer`, `mono_page`, `color_page` and
+/// `sheet`, amounts typed in the currency (empty is 0). Works without printer management: the
+/// prices are recto's, not CUPS's.
+async fn set_prices(
+    State(state): State<AdministrationState>,
+    Extension(actor): Extension<User>,
+    parts: Parts,
+    body: Bytes,
+) -> Response {
+    let printer = text_field(&body, "printer");
+    let typed = ["mono_page", "color_page", "sheet"].map(|name| text_field(&body, name));
+    let saved = match requested_prices(&state.app.currency, &printer, &typed) {
+        Ok(prices) => prices::set(&state.app.database, &printer, prices)
+            .await
+            .map(|()| prices)
+            .map_err(|error| {
+                tracing::error!(%error, "saving the printer prices failed");
+                (StatusCode::SERVICE_UNAVAILABLE, DevicesProblem::Unavailable)
+            }),
+        Err(refusal) => Err(refusal),
+    };
+    match saved {
+        Ok(prices) => {
+            tracing::info!(
+                by = actor.username,
+                printer,
+                mono_page = prices.mono_page,
+                color_page = prices.color_page,
+                sheet = prices.sheet,
+                "printer prices set"
+            );
+            devices_done(DeviceKind::Printer, DeviceNotice::Prices)
+        }
+        Err((status, problem)) => {
+            devices_view_with(
+                &state,
+                parts,
+                DeviceKind::Printer,
+                status,
+                Some(problem),
+                NewPrinterDraft::default(),
+                Some((printer, typed)),
+            )
+            .await
+        }
+    }
+}
+
+/// The prices a Prices form asks for, or why it is refused.
+fn requested_prices(
+    currency: &Currency,
+    printer: &str,
+    typed: &[String; 3],
+) -> Result<Prices, (StatusCode, DevicesProblem)> {
+    if printer.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, DevicesProblem::NoDevice));
+    }
+    let amount = |text: &str| {
+        if text.is_empty() {
+            Some(0)
+        } else {
+            currency.parse_amount(text)
+        }
+    };
+    match (amount(&typed[0]), amount(&typed[1]), amount(&typed[2])) {
+        (Some(mono_page), Some(color_page), Some(sheet)) => Ok(Prices {
+            mono_page,
+            color_page,
+            sheet,
+        }),
+        _ => Err((
+            StatusCode::BAD_REQUEST,
+            DevicesProblem::InvalidPrices {
+                currency: currency.code.clone(),
+                decimals: currency.decimals,
+            },
+        )),
     }
 }
 

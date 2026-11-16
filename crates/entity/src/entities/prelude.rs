@@ -5,6 +5,7 @@ pub use super::device_access_groups::Entity as DeviceAccessGroups;
 pub use super::group_memberships::Entity as GroupMemberships;
 pub use super::groups::Entity as Groups;
 pub use super::print_jobs::Entity as PrintJobs;
+pub use super::printer_prices::Entity as PrinterPrices;
 pub use super::sessions::Entity as Sessions;
 pub use super::user_identities::Entity as UserIdentities;
 pub use super::users::Entity as Users;

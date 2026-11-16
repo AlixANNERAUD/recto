@@ -240,7 +240,8 @@
         "resumed": "The printer is running again.",
         "accepting": "The printer accepts jobs again.",
         "rejecting": "The printer turns new jobs away.",
-        "removed": "The printer was removed."
+        "removed": "The printer was removed.",
+        "prices": "The prices were saved."
       },
       "errors": {
         "invalid_name": "The name must be 1 to 127 characters among letters, digits, dots, underscores and hyphens.",
@@ -253,7 +254,23 @@
         "refused_guide": "How to set it up",
         "unreachable": "The printer could not be reached: {message}",
         "rejected": "CUPS declined the change: {message}",
-        "cups_unavailable": "CUPS did not answer. Try again in a moment."
+        "cups_unavailable": "CUPS did not answer. Try again in a moment.",
+        "invalid_prices": "Prices are amounts in {currency} with at most {decimals} decimals.",
+        "invalid_whole_prices": "Prices are whole amounts in {currency}."
+      },
+      "change": "Change access and prices",
+      "prices": {
+        "title": "Prices of {printer}",
+        "mono_page": "Black-and-white page",
+        "color_page": "Color page",
+        "sheet": "Sheet",
+        "hint": "Amounts in {currency}, such as {example}. Empty is 0. A new price applies to later jobs only.",
+        "save": "Save prices",
+        "free": "Free",
+        "summary": "Prices: {prices}",
+        "per_mono_page": "{amount} a black-and-white page",
+        "per_color_page": "{amount} a color page",
+        "per_sheet": "{amount} a sheet"
       }
     },
     "scanners": {

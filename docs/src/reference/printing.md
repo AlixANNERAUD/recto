@@ -58,7 +58,10 @@ state (completed, canceled or aborted) and the impressions printed. A job that w
 it started, or that printed some pages before it was aborted, keeps its full counts. A job that
 CUPS no longer knows is finished without a refund, because nothing says it did not print.
 
-Costs are zero for now: prices are not set yet.
+A job's cost is the printer's price per black-and-white page, color page and sheet times its
+counts, taken from the prices when the job is sent and kept with it: a later price change does
+not change it. A printer without prices is free, and a job with unknown counts costs 0. See
+[Set printer prices](../how-to/set-prices.md).
 
 ## Printer states
 
