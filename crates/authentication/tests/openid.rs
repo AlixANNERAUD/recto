@@ -16,6 +16,7 @@ use openidconnect::{
 use recto_authentication::{
     OpenId, OpenIdError, OpenIdSettings, PendingSignIn, SignedIn, openid::ExtraClaims,
 };
+use recto_domain::users;
 use serde_json::{Value, json};
 use url::Url;
 use wiremock::{
@@ -54,6 +55,8 @@ struct Provider {
     slash: bool,
     /// Advertise an `end_session_endpoint`.
     end_session: bool,
+    /// Advertise a `userinfo_endpoint`.
+    user_info: bool,
 }
 
 impl Provider {
@@ -69,6 +72,7 @@ impl Provider {
             server: MockServer::start().await,
             slash,
             end_session,
+            user_info: true,
         };
         provider.mount_discovery().await;
         provider
@@ -80,7 +84,18 @@ impl Provider {
             server: MockServer::start().await,
             slash: false,
             end_session: true,
+            user_info: true,
         }
+    }
+
+    /// A provider without a UserInfo endpoint, whose ID tokens carry every claim.
+    async fn without_user_info() -> Self {
+        let provider = Self {
+            user_info: false,
+            ..Self::down().await
+        };
+        provider.mount_discovery().await;
+        provider
     }
 
     /// The issuer as the provider announces it, in discovery and in ID tokens.
@@ -118,7 +133,6 @@ impl Provider {
             "issuer": self.issuer(),
             "authorization_endpoint": format!("{base}/authorize"),
             "token_endpoint": format!("{base}/token"),
-            "userinfo_endpoint": format!("{base}/userinfo"),
             "jwks_uri": format!("{base}/jwks"),
             "response_types_supported": ["code"],
             "subject_types_supported": ["public"],
@@ -126,6 +140,9 @@ impl Provider {
         });
         if self.end_session {
             document["end_session_endpoint"] = json!(format!("{base}/logout"));
+        }
+        if self.user_info {
+            document["userinfo_endpoint"] = json!(format!("{base}/userinfo"));
         }
         Mock::given(method("GET"))
             .and(path(DISCOVERY_PATH))
@@ -393,6 +410,22 @@ async fn required_claim_from_userinfo() {
     assert_eq!(
         signed_in.identity.preferred_username.as_deref(),
         Some("alice")
+    );
+}
+
+#[tokio::test]
+async fn required_claim_with_failing_userinfo_is_unavailable() {
+    // Whether the person may sign in is unknown: a retry later, not a refusal.
+    let provider = Provider::start().await;
+    let openid = OpenId::new(OpenIdSettings {
+        required_claim: Some("groups".to_owned()),
+        required_value: Some("printers".to_owned()),
+        ..provider.settings()
+    });
+    let result = sign_in_with(&provider, &openid, |answer| answer.information_status = 500).await;
+    assert!(
+        matches!(result, Err(OpenIdError::Unavailable(_))),
+        "{result:?}"
     );
 }
 
@@ -797,4 +830,36 @@ async fn userinfo_failure_leaves_admin_and_groups_unknown() {
     .identity;
     assert_eq!(identity.administrator, Some(true));
     assert_eq!(identity.groups, None);
+}
+
+#[tokio::test]
+async fn without_userinfo_claims_missing_from_the_id_token_are_absent() {
+    let provider = Provider::without_user_info().await;
+    let openid = administrators(&provider);
+    let database = recto_domain::testing::database().await;
+    let granted = sign_in(
+        &provider,
+        &openid,
+        json!({"roles": ["admin"], "groups": ["staff"]}),
+        json!({}),
+    )
+    .await
+    .unwrap();
+    let user = users::sign_in_with_identity(&database, &granted.identity)
+        .await
+        .unwrap();
+    assert!(user.is_administrator && user.administrator_from_claim);
+
+    // Nothing else could carry the claims, so their absence takes back what they granted.
+    let revoked = sign_in(&provider, &openid, json!({}), json!({}))
+        .await
+        .unwrap();
+    assert_eq!(revoked.identity.administrator, Some(false));
+    assert_eq!(revoked.identity.groups, Some(Vec::new()));
+    assert_eq!(provider.user_information_requests().await, 0);
+    let user = users::sign_in_with_identity(&database, &revoked.identity)
+        .await
+        .unwrap();
+    assert!(!user.is_administrator);
+    assert!(!user.administrator_from_claim);
 }

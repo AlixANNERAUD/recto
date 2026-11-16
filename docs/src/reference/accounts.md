@@ -98,7 +98,8 @@ The claim is applied at each sign-in:
 - It takes back only the administration it granted. An administrator made on the Users page or
   on the command line stays one, whatever the claim says.
 - When the claim is missing from the token, recto asks the UserInfo endpoint. If that request
-  fails, administration is left as it is.
+  fails, administration is left as it is. A provider without a UserInfo endpoint puts every claim
+  in the token, so there a missing claim takes back the administration it granted.
 
 ## Groups
 
@@ -109,7 +110,8 @@ time are created. Groups are never deleted, even without members.
 
 Groups are read-only in recto. The Users page lists each user's groups, and the Groups page each
 group's members. They do not change what anyone may do in recto. If the UserInfo request
-fails, memberships are left as they are.
+fails, memberships are left as they are; with a provider without a UserInfo endpoint, a groups
+claim missing from the token means no groups.
 
 ## Disabled users
 

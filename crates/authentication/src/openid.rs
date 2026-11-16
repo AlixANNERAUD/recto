@@ -411,9 +411,10 @@ impl OpenId {
                         "the user information does not match the ID token: {error}"
                     )));
                 }
-                // Access cannot be decided without the claim; a missing profile only costs a
-                // nicer name.
-                Err(UserInfoError::Request(error)) if lacks_claim => {
+                // Access cannot be decided without the claim, whatever went wrong (no answer,
+                // an error status, an unreadable body); a missing profile only costs a nicer
+                // name.
+                Err(error) if lacks_claim => {
                     return Err(OpenIdError::Unavailable(error.to_string()));
                 }
                 Err(error) => {

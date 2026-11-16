@@ -69,8 +69,10 @@ More variables of `.env` are read by Compose itself, not by recto:
 ## Required claim
 
 With `RECTO_OIDC_REQUIRED_CLAIM` set, recto checks the claims of the ID token, completed by the
-UserInfo endpoint when the claim is missing from the token, at each single sign-on. The
-administrator claim is matched the same way.
+UserInfo endpoint when the claim is missing from the token, at each single sign-on. If the
+UserInfo request fails, whatever the reason, the sign-in stops with **Sign-in provider
+unavailable. Try again in a moment.** and a **Try again** button, rather than refusing access.
+The administrator claim is matched the same way.
 
 The claim is looked up by its whole name first, then as a path of names separated by dots into
 nested objects: `realm_access.roles` reads `roles` inside `realm_access`.
