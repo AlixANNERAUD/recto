@@ -353,14 +353,19 @@ fn http_status_error(code: u16) -> PrintError {
 
 /// Network failures. The reason goes into the message so the banner is actionable.
 fn transport_error(error: reqwest::Error) -> PrintError {
+    PrintError::Unavailable(error_chain(&error))
+}
+
+/// The error and its causes, joined, so the reason is not lost behind "error sending request".
+pub(crate) fn error_chain(error: &reqwest::Error) -> String {
     let mut message = error.to_string();
-    let mut source = std::error::Error::source(&error);
+    let mut source = std::error::Error::source(error);
     while let Some(cause) = source {
         message.push_str(": ");
         message.push_str(&cause.to_string());
         source = cause.source();
     }
-    PrintError::Unavailable(message)
+    message
 }
 
 /// Turns a non-success IPP status into the error the interface can explain.
@@ -391,7 +396,9 @@ fn check(
     })
 }
 
-fn printer_groups(response: &IppRequestResponse) -> impl Iterator<Item = &IppAttributeGroup> {
+pub(crate) fn printer_groups(
+    response: &IppRequestResponse,
+) -> impl Iterator<Item = &IppAttributeGroup> {
     response
         .attributes()
         .groups_of(DelimiterTag::PrinterAttributes)
@@ -430,7 +437,7 @@ fn strings(group: &IppAttributeGroup, name: &str) -> Vec<String> {
         .collect()
 }
 
-fn string(group: &IppAttributeGroup, name: &str) -> Option<String> {
+pub(crate) fn string(group: &IppAttributeGroup, name: &str) -> Option<String> {
     strings(group, name).into_iter().next()
 }
 

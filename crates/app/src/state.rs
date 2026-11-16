@@ -8,7 +8,7 @@ use leptos::{
     config::LeptosOptions,
     prelude::{ServerFnError, use_context},
 };
-use recto_printing::PrintService;
+use recto_printing::{PrintService, PrinterAdmin};
 use recto_scanning::{ResultStore, ScannerService};
 use sea_orm::DatabaseConnection;
 
@@ -28,6 +28,8 @@ pub enum JobVisibility {
 #[derive(Clone)]
 pub struct AppState {
     pub print: Arc<dyn PrintService>,
+    /// Adds and changes the printers of CUPS; `None` turns printer administration off.
+    pub printer_admin: Option<Arc<dyn PrinterAdmin>>,
     pub scan: Arc<dyn ScannerService>,
     /// Finished scans waiting to be downloaded or saved. Its I/O blocks: call it through
     /// `tokio::task::spawn_blocking`. Results belong to the [`User::id`], as text.

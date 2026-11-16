@@ -33,5 +33,6 @@ percent-encoding = { workspace = true, optional = true }
 # Enables `service` for this crate's own tests, so `cargo nextest run -p recto-printing` compiles
 # the service-gated ones without extra flags. Dev-dependencies never reach the wasm32 build.
 recto-printing = { path = ".", features = ["service", "testing"] }
-tokio.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }
+recto-domain = { workspace = true, features = ["testing"] }
 wiremock.workspace = true

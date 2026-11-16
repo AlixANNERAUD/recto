@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use recto_app::{branding::Branding, pages::sign_in::SignInMethods, state::AppState};
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::passwords::{self, PasswordPolicy};
-use recto_printing::Cups;
+use recto_printing::{Cups, CupsAdmin, PrinterAdmin};
 use recto_scanning::{
     ResultStore, SaneScanners, ScanError, ScanRequest, ScannedPage, ScannerCapabilities,
     ScannerInfo, ScannerService,
@@ -136,6 +136,22 @@ pub fn results_dir() -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// The printer administration client, when the CUPS socket is configured. CUPS may start after
+/// recto, so a socket that is not there yet only earns a warning.
+fn printer_admin(config: &Config) -> Option<Arc<dyn PrinterAdmin>> {
+    let socket = config.cups_admin_socket.as_deref()?;
+    if !socket.exists() {
+        tracing::warn!(socket = %socket.display(), "the CUPS socket does not exist yet");
+    }
+    match CupsAdmin::over_socket(socket) {
+        Ok(admin) => Some(Arc::new(admin)),
+        Err(error) => {
+            tracing::warn!(%error, "printer administration is off");
+            None
+        }
+    }
+}
+
 /// Builds every service. Nothing here needs CUPS, a scanner or the identity provider to answer,
 /// so recto starts while they are down.
 pub async fn build(
@@ -153,6 +169,7 @@ pub async fn build(
     let results = ResultStore::new(dir, SCAN_RESULT_TTL);
     let state = AppState {
         print: Arc::new(Cups::new(config.cups_url.clone())),
+        printer_admin: printer_admin(config),
         scan: scanners().await,
         results: Arc::new(results),
         output_dir: config.scan_output_dir.clone(),

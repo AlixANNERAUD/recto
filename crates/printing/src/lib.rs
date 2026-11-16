@@ -10,6 +10,8 @@ mod options;
 mod status;
 
 #[cfg(feature = "service")]
+mod admin;
+#[cfg(feature = "service")]
 mod cups;
 #[cfg(feature = "service")]
 mod service;
@@ -17,12 +19,14 @@ mod service;
 pub mod testing;
 
 #[cfg(feature = "service")]
+pub use admin::{CupsAdmin, PrinterAdmin};
+#[cfg(feature = "service")]
 pub use cups::Cups;
-pub use error::PrintError;
+pub use error::{AdminError, PrintError};
 pub use format::DocumentFormat;
 #[cfg(feature = "service")]
 pub use model::PrintRequest;
-pub use model::{Capabilities, Job, Printer};
+pub use model::{Capabilities, Driver, DriverInfo, Job, NewPrinter, Printer};
 pub use options::{ColorMode, PageRanges, PrintOptions, Sides};
 #[cfg(feature = "service")]
 pub use service::PrintService;

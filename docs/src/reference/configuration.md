@@ -25,6 +25,7 @@ a default, such as `RECTO_LOCAL_ACCOUNTS`, must be left out rather than empty.
 | `RECTO_OIDC_ADMINISTRATOR_VALUE` | none | The value the administrator claim must hold. Setting it without `RECTO_OIDC_ADMINISTRATOR_CLAIM` is refused at startup. |
 | `RECTO_OIDC_GROUPS_CLAIM` | none | The claim holding a single sign-on user's groups. See [Groups](accounts.md#groups). |
 | `RECTO_CUPS_URL` | `http://localhost:631` | The CUPS server. `ipp://` means `http://` and `ipps://` means `https://`. Without a port, the scheme's default (80 or 443) is used, not 631. |
+| `RECTO_CUPS_ADMIN_SOCKET` | none | The Unix socket of CUPS, such as `/run/cups/cups.sock`. Lets administrators manage printers from recto. Without it, printer administration is off. recto authenticates to CUPS as its `recto` account over this socket. |
 | `RECTO_SCAN_OUTPUT_DIR` | none | The folder **Save to folder** writes into. Without it, scans can only be downloaded and the button is hidden. |
 | `RECTO_MAX_UPLOAD_SIZE` | `52428800` (50 MiB) | The largest file accepted for printing, in bytes. |
 | `RECTO_LISTEN_ADDRESS` | `0.0.0.0:8080` | The address and port recto listens on. |

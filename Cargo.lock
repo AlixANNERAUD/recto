@@ -3957,6 +3957,7 @@ dependencies = [
  "bytes",
  "ipp",
  "percent-encoding",
+ "recto-domain",
  "recto-printing",
  "reqwest",
  "serde",

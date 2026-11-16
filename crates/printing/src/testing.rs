@@ -7,7 +7,10 @@ use ipp::model::{DelimiterTag, IppVersion, StatusCode};
 use ipp::request::IppRequestResponse;
 use ipp::value::IppValue;
 
-use crate::{Job, JobState, PrintError, PrintRequest, PrintService, Printer};
+use crate::{
+    AdminError, DriverInfo, Job, JobState, NewPrinter, PrintError, PrintRequest, PrintService,
+    Printer, PrinterAdmin,
+};
 
 /// A fixed in-memory print service that records what it is asked to do.
 #[derive(Default)]
@@ -124,6 +127,129 @@ impl PrintService for MockPrintService {
         job.state = JobState::Canceled;
         lock(&self.canceled).push((job_id, requested_by.to_owned()));
         Ok(())
+    }
+}
+
+/// What a [`MockPrinterAdmin`] was asked, in order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AdminCall {
+    Add(NewPrinter),
+    Describe {
+        name: String,
+        description: Option<String>,
+        location: Option<String>,
+    },
+    SetDefault(String),
+    Pause(String),
+    Resume(String),
+    Accept(String),
+    Reject(String),
+    Delete(String),
+    Drivers {
+        search: String,
+        limit: u32,
+    },
+}
+
+/// A printer administration that records what it is asked and changes nothing.
+#[derive(Default)]
+pub struct MockPrinterAdmin {
+    calls: Mutex<Vec<AdminCall>>,
+    drivers: Mutex<Vec<DriverInfo>>,
+    failure: Mutex<Option<AdminError>>,
+}
+
+impl MockPrinterAdmin {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The drivers `drivers` searches in.
+    pub fn with_drivers(self, drivers: Vec<DriverInfo>) -> Self {
+        *lock(&self.drivers) = drivers;
+        self
+    }
+
+    /// Makes every call fail with `error` (after recording it) until `succeed`.
+    pub fn fail_with(&self, error: AdminError) {
+        *lock(&self.failure) = Some(error);
+    }
+
+    pub fn succeed(&self) {
+        *lock(&self.failure) = None;
+    }
+
+    pub fn calls(&self) -> Vec<AdminCall> {
+        lock(&self.calls).clone()
+    }
+
+    fn record(&self, call: AdminCall) -> Result<(), AdminError> {
+        lock(&self.calls).push(call);
+        match lock(&self.failure).clone() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl PrinterAdmin for MockPrinterAdmin {
+    async fn add(&self, printer: NewPrinter) -> Result<(), AdminError> {
+        self.record(AdminCall::Add(printer))
+    }
+
+    async fn describe(
+        &self,
+        name: &str,
+        description: Option<String>,
+        location: Option<String>,
+    ) -> Result<(), AdminError> {
+        self.record(AdminCall::Describe {
+            name: name.to_owned(),
+            description,
+            location,
+        })
+    }
+
+    async fn set_default(&self, name: &str) -> Result<(), AdminError> {
+        self.record(AdminCall::SetDefault(name.to_owned()))
+    }
+
+    async fn pause(&self, name: &str) -> Result<(), AdminError> {
+        self.record(AdminCall::Pause(name.to_owned()))
+    }
+
+    async fn resume(&self, name: &str) -> Result<(), AdminError> {
+        self.record(AdminCall::Resume(name.to_owned()))
+    }
+
+    async fn accept(&self, name: &str) -> Result<(), AdminError> {
+        self.record(AdminCall::Accept(name.to_owned()))
+    }
+
+    async fn reject(&self, name: &str) -> Result<(), AdminError> {
+        self.record(AdminCall::Reject(name.to_owned()))
+    }
+
+    async fn delete(&self, name: &str) -> Result<(), AdminError> {
+        self.record(AdminCall::Delete(name.to_owned()))
+    }
+
+    async fn drivers(&self, search: &str, limit: u32) -> Result<Vec<DriverInfo>, AdminError> {
+        self.record(AdminCall::Drivers {
+            search: search.to_owned(),
+            limit,
+        })?;
+        let words: Vec<String> = search.split_whitespace().map(str::to_lowercase).collect();
+        Ok(lock(&self.drivers)
+            .iter()
+            .filter(|driver| {
+                let model = driver.make_and_model.to_lowercase();
+                words.iter().all(|word| model.contains(word))
+            })
+            .take(usize::try_from(limit).unwrap_or(usize::MAX))
+            .cloned()
+            .collect())
     }
 }
 

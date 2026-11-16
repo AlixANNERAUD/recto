@@ -82,6 +82,10 @@ pub struct Config {
     pub trust_forwarded_headers: bool,
     #[arg(long, env = "RECTO_CUPS_URL", default_value = "http://localhost:631", value_parser = parse_cups_url)]
     pub cups_url: Url,
+    /// CUPS's Unix socket, which lets administrators manage printers; unset or blank turns
+    /// printer administration off.
+    #[arg(long, env = "RECTO_CUPS_ADMIN_SOCKET", value_parser = parse_path)]
+    pub cups_admin_socket: Option<PathBuf>,
     #[arg(long, env = "RECTO_SCAN_OUTPUT_DIR", value_parser = parse_path)]
     pub scan_output_dir: Option<PathBuf>,
     #[arg(long, env = "RECTO_MAX_UPLOAD_SIZE", default_value_t = 50 * 1024 * 1024)]
@@ -127,6 +131,7 @@ impl Config {
         }
         for path in [
             &mut config.scan_output_dir,
+            &mut config.cups_admin_socket,
             &mut config.brand.brand_logo,
             &mut config.brand.brand_icon,
         ] {
@@ -359,6 +364,23 @@ mod tests {
         assert!(
             error.to_string().contains("RECTO_JOB_VISIBILITY"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn the_admin_socket_is_optional() {
+        assert_eq!(parse(&[]).unwrap().cups_admin_socket, None);
+        assert_eq!(
+            parse(&["--cups-admin-socket", ""])
+                .unwrap()
+                .cups_admin_socket,
+            None
+        );
+        assert_eq!(
+            parse(&["--cups-admin-socket", "/run/cups/cups.sock"])
+                .unwrap()
+                .cups_admin_socket,
+            Some(PathBuf::from("/run/cups/cups.sock"))
         );
     }
 

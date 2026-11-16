@@ -153,6 +153,7 @@ impl Harness {
         std::fs::create_dir_all(site.join("pkg")).unwrap();
         std::fs::write(site.join("pkg/recto.css"), STYLESHEET).unwrap();
         let state = AppState {
+            printer_admin: None,
             print: print.clone(),
             scan: scan.clone(),
             results: results.clone(),

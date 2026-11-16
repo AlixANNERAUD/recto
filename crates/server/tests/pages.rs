@@ -141,6 +141,7 @@ impl Harness {
         let site = dir.path().join("site");
         std::fs::create_dir_all(&site).unwrap();
         let state = AppState {
+            printer_admin: None,
             print,
             scan: scan.clone(),
             results: Arc::new(ResultStore::new(

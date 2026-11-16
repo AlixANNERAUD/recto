@@ -70,6 +70,36 @@ pub struct PrintRequest {
     pub options: crate::PrintOptions,
 }
 
+/// Where the driver of a new printer comes from.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Driver {
+    /// The printer describes itself (IPP Everywhere): CUPS queries it, so the address must
+    /// answer.
+    Everywhere,
+    /// A `ppd-name` from the list CUPS gives (`PrinterAdmin::drivers`).
+    Ppd(String),
+}
+
+/// A printer to add to CUPS.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NewPrinter {
+    /// The queue name.
+    pub name: String,
+    /// Where the printer is, such as `ipp://192.168.1.20/ipp/print`.
+    pub device_uri: String,
+    pub driver: Driver,
+    pub description: Option<String>,
+    pub location: Option<String>,
+}
+
+/// A driver CUPS can install.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DriverInfo {
+    /// The `ppd-name` to give back in [`Driver::Ppd`].
+    pub name: String,
+    pub make_and_model: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
