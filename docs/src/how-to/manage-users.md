@@ -79,7 +79,8 @@ on the Users page, so the last administrator cannot lock everyone out by mistake
 
 The **Groups** tab lists each group the identity provider sent, with its members. Groups are
 read-only in recto: they come from `RECTO_OIDC_GROUPS_CLAIM` at each sign-in (see
-[Set up single sign-on](sign-in.md#show-the-groups-from-the-provider)).
+[Set up single sign-on](sign-in.md#show-the-groups-from-the-provider)). To limit a printer or a
+scanner to groups, see [Let only some people in](restrict-access.md#limit-printers-and-scanners-to-groups).
 
 ## Regain access without an administrator
 

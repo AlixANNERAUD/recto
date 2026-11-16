@@ -94,3 +94,25 @@ If recto cannot read its records of who sent what, it shows people no jobs and r
 cancellations rather than guess. Administrators are not affected.
 
 Anyone who reaches CUPS directly still sees every job there: this setting limits recto only.
+
+## Limit printers and scanners to groups
+
+By default everyone signed in can use every printer and scanner. To limit one to some groups:
+
+1. Send groups from your provider (see [Groups](../reference/accounts.md#groups)). Groups come
+   from the provider's groups claim at each sign-in, and recto cannot edit them.
+2. Open **Administration**, then **Printers** or **Scanners**.
+3. Press **Change who may use it** on the device's row, choose **These groups**, tick the groups
+   and press **Save**.
+
+Then:
+
+- People outside the groups do not see the device on the Print, Printers or Scan pages, and
+  recto refuses it if they ask for it anyway.
+- Administrators can always use every device.
+- Choosing **These groups** with none ticked leaves the device to administrators only.
+- Choosing **Everyone** removes the rule.
+
+Rules are kept under the device's name. When a device is removed from CUPS or SANE, its rule
+stays, and the row is marked **Not found**: if the device comes back, it is limited again. Press
+**Forget** to drop the rule. The page lists the rules even when CUPS or SANE does not answer.

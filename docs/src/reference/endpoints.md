@@ -18,6 +18,8 @@ instead. A single sign-on user without the required claim, or disabled, is sent 
 | `/administration` | Redirects to `/administration/users`. Administrators only. |
 | `/administration/users` | Users: create local accounts, set passwords, disable users, grant administration. Administrators only. |
 | `/administration/groups` | Groups: the groups from the identity provider and their members. Administrators only. |
+| `/administration/printers` | Printers: who may use each printer. Administrators only. |
+| `/administration/scanners` | Scanners: who may use each scanner. Administrators only. |
 | `/sign-in` | The password form, and the single sign-on button when a provider is set. It redirects to `/auth/login` instead when a provider is set and local accounts are off, or no account has a password. |
 | `/no-access` | Shown to single sign-on users without the required claim, or disabled. |
 | `/auth/error` | Shown when sign-in fails. |
@@ -41,6 +43,8 @@ These work without JavaScript and accept only requests from recto's own pages (s
 | `POST /administration/users/{id}/administrator` | Grants or removes administration. |
 | `POST /administration/users/{id}/disabled` | Disables or enables a user. |
 | `POST /administration/users/{id}/password` | Sets a user's password. |
+| `POST /administration/printers/access` and `/administration/scanners/access` | Sets who may use a device. Fields: `device`, `access` (`everyone` or `groups`) and one `groups` field per group id; `groups` with none means administrators only. Redirects to the page with `?done=access`, or answers `400` with the page when the device is missing or a group is unknown. |
+| `POST /administration/printers/forget` and `/administration/scanners/forget` | Drops the rule of a device that is gone. Field: `device`. Redirects with `?done=forgotten`. |
 
 The administration pages and their forms answer `404`, with the not-found page, to anyone but an
 administrator. The account page and its form answer `404` to users without a password.
