@@ -94,7 +94,9 @@ docker compose exec cups lpadmin -p office -E -v ipp://192.168.1.60/ipp/print -m
 ```
 
 Then [add a scanner](https://alixanneraud.github.io/recto/how-to/add-scanner.html) and put recto
-[behind your reverse proxy](https://alixanneraud.github.io/recto/how-to/reverse-proxy.html).
+[behind your reverse proxy](https://alixanneraud.github.io/recto/how-to/reverse-proxy.html)
+(example files for nginx, Caddy, Traefik, Apache, HAProxy and Cloudflare Tunnel are in
+[`examples/proxy`](examples/proxy)).
 
 Images are published as `ghcr.io/alixanneraud/recto` once a release exists; until then, build
 from the checkout with `docker compose up -d --wait --build`.

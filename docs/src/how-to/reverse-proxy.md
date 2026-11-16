@@ -1,11 +1,42 @@
 # Run behind a reverse proxy
 
-recto serves plain HTTP. Put a reverse proxy with TLS in front of it, and set `RECTO_PUBLIC_URL`
-to the address people open through the proxy, such as `https://recto.example.org`. Sign-in
-redirects and the `Secure` flag of the session cookie depend on it.
+recto serves plain HTTP on port 8080. Put a reverse proxy with TLS in front of it, and set
+`RECTO_PUBLIC_URL` to the address people open through the proxy, such as
+`https://recto.example.org`. Sign-in redirects and the `Secure` flag of the session cookie depend
+on it. HTTPS is also required to [install recto as an app](install-app.md).
+
+```mermaid
+flowchart LR
+    B[Browser] -- HTTPS --> P[Reverse proxy]
+    P -- "HTTP, port 8080" --> R[recto]
+    R -- IPP --> C[CUPS]
+    R -- SANE --> S[Scanner]
+```
 
 recto must be at the root of its address: `https://recto.example.org` works,
 `https://example.org/recto` does not, and recto refuses to start with such a URL.
+
+## What every proxy must do
+
+- Terminate TLS, and redirect HTTP to HTTPS.
+- Keep the `Host` header the browser sent, and do not rewrite `Origin`. recto checks sign-in posts
+  against them and refuses the request when they do not match `RECTO_PUBLIC_URL`.
+- Wait at least 600 seconds for a response, so long scans finish (see
+  [Let long scans finish](#let-long-scans-finish)).
+- Accept request bodies up to `RECTO_MAX_UPLOAD_SIZE`, 50 MiB by default (see
+  [Let uploads through](#let-uploads-through)).
+- Cache nothing. Pages are per user, and `/sw.js` and `/manifest.webmanifest` are sent with
+  `Cache-Control: no-cache` so that browsers see a new version at once. This includes a CDN in
+  front of the proxy.
+- Replace `X-Forwarded-For` with the client's address, when you set
+  `RECTO_TRUST_FORWARDED_HEADERS` (see
+  [Count sign-in attempts per person](#count-sign-in-attempts-per-person)).
+- Optionally, check `GET /health` for a `200` answer.
+
+recto uses no WebSockets in production, so no upgrade rules are needed.
+
+The example files are in [`examples/proxy`](https://github.com/AlixANNERAUD/recto/tree/main/examples/proxy).
+Replace `recto.example.org` in them with your host name.
 
 ## Let long scans finish
 
@@ -13,6 +44,8 @@ A scan answers only once the whole batch is read, which can take minutes for a s
 feeder. Many proxies give up on a response after 60 seconds. Raise that limit for recto:
 
 - **nginx:** `proxy_read_timeout 600s;` (the default is 60 seconds).
+- **Apache:** `ProxyTimeout 600` (the default is the `Timeout` directive, 60 seconds).
+- **HAProxy:** `timeout server 600s` (and `timeout client 600s`).
 - **Caddy:** no limit by default.
 - **Traefik:** no limit by default, unless `forwardingTimeouts.responseHeaderTimeout` is set on
   the transport.
@@ -25,7 +58,9 @@ finished.** The scanner may still finish, but the result is lost.
 ## Let uploads through
 
 Files up to `RECTO_MAX_UPLOAD_SIZE` (50 MiB by default) are sent to recto in one request. nginx
-refuses bodies over 1 MiB by default: set `client_max_body_size` to at least that size.
+refuses bodies over 1 MiB by default: set `client_max_body_size` to at least that size. Apache
+has no limit unless `LimitRequestBody` is set. Cloudflare accepts 100 MB on its free and Pro
+plans.
 
 ## Count sign-in attempts per person
 
@@ -44,8 +79,10 @@ RECTO_TRUST_FORWARDED_HEADERS: "true"
 The proxy must **replace** any `X-Forwarded-For` the client sent, not add to it. Otherwise a
 client can send its own header with a new address at each attempt, and never be limited.
 
-- **nginx:** `proxy_set_header X-Forwarded-For $remote_addr;`, as in the example below. Not
+- **nginx:** `proxy_set_header X-Forwarded-For $remote_addr;`, as in the example. Not
   `$proxy_add_x_forwarded_for`, which keeps what the client sent.
+- **Apache:** `RequestHeader unset X-Forwarded-For`. mod_proxy then adds the client's address.
+- **HAProxy:** `http-request set-header X-Forwarded-For %[src]`.
 - **Caddy:** replaces it by default.
 - **Traefik:** replaces it by default, unless `forwardedHeaders.trustedIPs` or `insecure` is set
   on the entry point.
@@ -53,51 +90,142 @@ client can send its own header with a new address at each attempt, and never be 
 Leave the setting off when recto is reachable without the proxy, such as on its published port:
 anyone could then send the header.
 
-## Examples
+## nginx
 
-### Caddy
+File: `examples/proxy/nginx/recto.conf`. Put it in `/etc/nginx/conf.d/`, get a certificate with
+`certbot certonly --nginx -d recto.example.org`, then run `nginx -t` and reload.
+
+```nginx
+client_max_body_size 50m;
+proxy_request_buffering off;
+
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_read_timeout 600s;
+    proxy_buffering off;
+}
+```
+
+The file also redirects port 80 to HTTPS. `proxy_buffering off` and `proxy_request_buffering off`
+stream bodies instead of writing them to temporary files. To reach recto on the host, publish its
+port to the loopback address only (`127.0.0.1:8080:8080` under `ports`).
+
+## Caddy
+
+File: `examples/proxy/caddy/Caddyfile`. Caddy gets and renews the certificate and redirects HTTP
+by itself.
 
 ```text
 recto.example.org {
-	reverse_proxy recto:8080
+	request_body {
+		max_size 50MB
+	}
+	reverse_proxy recto:8080 {
+		flush_interval -1
+	}
 }
 ```
 
-### nginx
+Use `recto:8080` when Caddy runs in the same Compose project, `127.0.0.1:8080` otherwise.
 
-```nginx
-server {
-    listen 443 ssl;
-    server_name recto.example.org;
-    # ssl_certificate and ssl_certificate_key here.
+## Traefik
 
-    client_max_body_size 50m;
+File: `examples/proxy/traefik/compose.traefik.yml`, a Compose override that adds Traefik with
+Let's Encrypt and labels `recto`:
 
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host $host;
-        # With RECTO_TRUST_FORWARDED_HEADERS=true: the client's address, replacing its own header.
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_read_timeout 600s;
-    }
-}
+```sh
+docker compose -f compose.yml -f examples/proxy/traefik/compose.traefik.yml up -d --wait
 ```
 
-### Traefik
+Add `RECTO_HOST=recto.example.org` and `ACME_EMAIL=you@example.org` to `.env`, next to
+`RECTO_PUBLIC_URL`. The essential labels are:
 
 ```yaml
-  recto:
-    labels:
-      traefik.enable: "true"
-      traefik.http.routers.recto.rule: Host(`recto.example.org`)
-      traefik.http.routers.recto.tls.certresolver: letsencrypt
-      traefik.http.services.recto.loadbalancer.server.port: "8080"
+traefik.http.routers.recto.rule: Host(`recto.example.org`)
+traefik.http.routers.recto.entrypoints: websecure
+traefik.http.routers.recto.tls.certresolver: letsencrypt
+traefik.http.services.recto.loadbalancer.server.port: "8080"
 ```
 
-When the proxy reaches recto over the Compose network, you can remove the `ports` of the `recto`
-service, so recto is reachable only through the proxy.
+The override removes recto's published port (`ports: !reset []`, which needs Docker Compose 2.24
+or later), so recto is reachable only through Traefik, and it sets
+`RECTO_TRUST_FORWARDED_HEADERS`.
+
+## Apache
+
+File: `examples/proxy/apache/recto.conf`. Enable the modules with
+`a2enmod proxy proxy_http ssl headers rewrite`, then check with `apachectl -t`.
+
+```apache
+LimitRequestBody 52428800
+ProxyPreserveHost On
+RequestHeader unset X-Forwarded-For
+RequestHeader set X-Forwarded-Proto "https"
+ProxyTimeout 600
+ProxyPass        / http://127.0.0.1:8080/ timeout=600
+ProxyPassReverse / http://127.0.0.1:8080/
+```
+
+## HAProxy
+
+File: `examples/proxy/haproxy/haproxy.cfg`. HAProxy wants the certificate chain and the private
+key in one PEM file (see the comment in the file).
+
+```text
+defaults
+    mode http
+    timeout connect 5s
+    timeout client  600s
+    timeout server  600s
+
+frontend https
+    bind :443 ssl crt /etc/haproxy/certs/recto.example.org.pem alpn h2,http/1.1
+    http-request set-header X-Forwarded-For %[src]
+    http-request set-header X-Forwarded-Proto https
+    default_backend recto
+
+backend recto
+    server recto 127.0.0.1:8080 check
+    option httpchk
+    http-check send meth GET uri /health
+```
+
+## Cloudflare Tunnel
+
+File: `examples/proxy/cloudflared/config.yml`. Cloudflare terminates TLS, so recto needs no
+certificate and no open port.
+
+```yaml
+ingress:
+  - hostname: recto.example.org
+    service: http://localhost:8080
+  - service: http_status:404
+```
+
+Cloudflare cuts a request that has had no response after 100 seconds, and no setting on the free
+and Pro plans raises it: scan long batches in smaller stacks. Do not enable caching rules for
+`recto.example.org`.
 
 ## Check
 
-Open `RECTO_PUBLIC_URL`, sign in, and check that your browser shows a valid certificate. If
-sign-in loops or fails, see [Troubleshoot](troubleshoot.md#sign-in).
+1. Check the headers. Both `sw.js` and the page must say `no-cache` or `private`, and neither may
+   be cached by the proxy:
+
+   ```sh
+   curl -sI https://recto.example.org/sw.js | grep -i cache-control
+   curl -sI https://recto.example.org/health
+   ```
+
+   The first prints `cache-control: no-cache`, the second `HTTP/2 200`. Plain HTTP must answer
+   with a redirect to HTTPS: `curl -sI http://recto.example.org/`.
+2. Open `RECTO_PUBLIC_URL` and check that your browser shows a valid certificate, then sign in.
+   If sign-in loops or fails, see [Troubleshoot](troubleshoot.md#sign-in).
+3. Print a file close to `RECTO_MAX_UPLOAD_SIZE`. A `413` means the proxy's body limit is too low.
+4. Scan a long batch, or one that takes more than a minute. **The connection to recto was cut
+   before the scan finished** means the proxy's timeout is too short.
+5. If you set `RECTO_TRUST_FORWARDED_HEADERS`, enter a wrong password from two devices. Each
+   should be counted on its own (see [Password sign-in limit](../reference/accounts.md#password-sign-in-limit)).
+6. [Install recto as an app](install-app.md) on a phone or computer.

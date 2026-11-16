@@ -4,7 +4,8 @@ recto can be installed on a phone, tablet or computer. It then opens in its own 
 own icon, under the name and colors you set in [Brand recto](brand.md).
 
 Browsers install apps only from pages served over HTTPS, or from `localhost`. Put recto behind
-a reverse proxy with a certificate first (see [Run behind a reverse proxy](reverse-proxy.md)).
+a reverse proxy with a certificate first (see [Run behind a reverse proxy](reverse-proxy.md), which
+includes example files for the common proxies).
 
 ## Chrome and Edge, on a computer or Android
 

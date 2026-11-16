@@ -35,7 +35,8 @@ RECTO_PUBLIC_URL=https://recto.example.org
 ```
 
 `RECTO_PUBLIC_URL` is the address people open, through your reverse proxy (see
-[Run behind a reverse proxy](reverse-proxy.md)). Sign-in only works through that address.
+[Run behind a reverse proxy](reverse-proxy.md), which has ready-made nginx, Caddy, Traefik, Apache,
+HAProxy and Cloudflare Tunnel files). Sign-in only works through that address.
 
 To also sign in with an OpenID Connect provider, add `RECTO_OIDC_ISSUER` and
 `RECTO_OIDC_CLIENT_ID` (see [Set up single sign-on](sign-in.md)). To keep the database in

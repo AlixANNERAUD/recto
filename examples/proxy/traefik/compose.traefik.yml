@@ -1,0 +1,48 @@
+# Traefik in front of recto, with Let's Encrypt. Use it as an override of compose.yml:
+#
+#   docker compose -f compose.yml -f examples/proxy/traefik/compose.traefik.yml up -d --wait
+#
+# .env needs RECTO_PUBLIC_URL=https://recto.example.org, RECTO_HOST=recto.example.org and
+# ACME_EMAIL=you@example.org. Ports 80 and 443 must reach this host.
+services:
+  recto:
+    # Reset the port compose.yml publishes: recto is then reachable only through Traefik, so
+    # nobody can send its own X-Forwarded-For.
+    ports: !reset []
+    environment:
+      RECTO_TRUST_FORWARDED_HEADERS: "true"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.recto.rule: Host(`${RECTO_HOST:?set RECTO_HOST to the host name}`)
+      traefik.http.routers.recto.entrypoints: websecure
+      traefik.http.routers.recto.tls.certresolver: letsencrypt
+      traefik.http.services.recto.loadbalancer.server.port: "8080"
+
+  traefik:
+    image: traefik:v3.6
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      # Send every plain HTTP request to HTTPS.
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:?set ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      # Traefik sets no read timeout on responses by default, so long scans finish. Do not
+      # add entrypoints.*.transport.respondingTimeouts below 600s.
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Read-only: Traefik only watches the labels.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-certificates:/letsencrypt
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  traefik-certificates:

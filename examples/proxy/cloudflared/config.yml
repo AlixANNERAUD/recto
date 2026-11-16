@@ -1,0 +1,21 @@
+# Cloudflare Tunnel in front of recto. Cloudflare terminates TLS, so no certificate is needed
+# here, and recto's published port can stay closed to the network.
+#
+# Create the tunnel and its DNS record with:
+#   cloudflared tunnel login
+#   cloudflared tunnel create recto
+#   cloudflared tunnel route dns recto recto.example.org
+#
+# Cloudflare cuts a request that has no response after 100 seconds (error 524), and no setting
+# on the free and Pro plans raises it. A large scan batch can take longer: scan in smaller
+# stacks. Uploads are limited to 100 MB on those plans, above RECTO_MAX_UPLOAD_SIZE's default.
+tunnel: recto
+credentials-file: /etc/cloudflared/recto.json
+
+ingress:
+  - hostname: recto.example.org
+    service: http://localhost:8080
+    originRequest:
+      # Not the 100 seconds above: this is how long cloudflared waits for recto itself.
+      connectTimeout: 30s
+  - service: http_status:404

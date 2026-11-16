@@ -1,0 +1,18 @@
+# Caddy in front of recto. Caddy gets and renews the certificate by itself.
+# Replace recto.example.org. With recto in Compose, use recto:8080; on the same host,
+# 127.0.0.1:8080.
+
+recto.example.org {
+	# No upload limit is set by default; this one matches RECTO_MAX_UPLOAD_SIZE.
+	request_body {
+		max_size 50MB
+	}
+
+	reverse_proxy recto:8080 {
+		# Caddy keeps Host, sets X-Forwarded-Proto and replaces X-Forwarded-For (it only
+		# appends when trusted_proxies is set), as RECTO_TRUST_FORWARDED_HEADERS needs. It
+		# sets no response timeout, so long scans finish.
+		# Send data to the browser as it comes rather than in steps.
+		flush_interval -1
+	}
+}
