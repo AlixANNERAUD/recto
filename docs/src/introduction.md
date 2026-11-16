@@ -46,9 +46,10 @@ users and sessions live in a SQLite file on a volume, or in PostgreSQL.
   [Add a printer](how-to/add-printer.md)); recto lists what CUPS has.
 - **It does not keep scans.** A scan stays available for an hour, for its owner only, then it is
   deleted. Save it to a folder to keep it.
-- **It does not separate users.** Anyone signed in can use every printer and scanner, and see and
-  cancel every print job; administrators only manage accounts. recto is built for a household,
-  or a small team, that trusts itself.
+- **It does not separate users much.** By default anyone signed in can use every printer and
+  scanner, and see and cancel every print job. Administrators can limit a device to some groups,
+  and jobs can be kept private, but these limits apply in recto only. recto is built for a
+  household, or a small team, that trusts itself.
 
 ## How this documentation is organized
 

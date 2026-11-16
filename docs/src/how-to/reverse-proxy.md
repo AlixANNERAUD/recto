@@ -23,7 +23,7 @@ recto must be at the root of its address: `https://recto.example.org` works,
   against them and refuses the request when they do not match `RECTO_PUBLIC_URL`.
 - Wait at least 600 seconds for a response, so long scans finish (see
   [Let long scans finish](#let-long-scans-finish)).
-- Accept request bodies up to `RECTO_MAX_UPLOAD_SIZE`, 50 MiB by default (see
+- Accept request bodies a little above `RECTO_MAX_UPLOAD_SIZE`, 50 MiB by default (see
   [Let uploads through](#let-uploads-through)).
 - Cache nothing. Pages are per user, and `/sw.js` and `/manifest.webmanifest` are sent with
   `Cache-Control: no-cache` so that browsers see a new version at once. This includes a CDN in
@@ -57,10 +57,19 @@ finished.** The scanner may still finish, but the result is lost.
 
 ## Let uploads through
 
-Files up to `RECTO_MAX_UPLOAD_SIZE` (50 MiB by default) are sent to recto in one request. nginx
-refuses bodies over 1 MiB by default: set `client_max_body_size` to at least that size. Apache
-has no limit unless `LimitRequestBody` is set. Cloudflare accepts 100 MB on its free and Pro
-plans.
+Files up to `RECTO_MAX_UPLOAD_SIZE` (50 MiB by default) are sent to recto in one request, along
+with the form's other fields. recto accepts a body up to that size plus 64 KiB, so set the
+proxy's limit a little above it, 51 MiB for the default (the examples do):
+
+- **nginx:** refuses bodies over 1 MiB by default: `client_max_body_size 51m;`.
+- **Apache:** limits bodies to 1 GiB by default since 2.4.54 (none before): `LimitRequestBody
+  53477376`.
+- **Caddy:** no limit by default; the example sets `max_size 51MiB`.
+- **HAProxy:** no limit by default.
+- **Traefik:** no limit by default, but its entry points stop reading a request after 60
+  seconds, which can cut a large upload on a slow connection: the example raises
+  `respondingTimeouts.readTimeout` to 600 seconds.
+- **Cloudflare:** accepts 100 MB on its free and Pro plans.
 
 ## Count sign-in attempts per person
 
@@ -86,6 +95,9 @@ client can send its own header with a new address at each attempt, and never be 
 - **Caddy:** replaces it by default.
 - **Traefik:** replaces it by default, unless `forwardedHeaders.trustedIPs` or `insecure` is set
   on the entry point.
+- **Cloudflare Tunnel:** appends the client's address to any `X-Forwarded-For` the client sent,
+  so a client can still pick the address recto reads. Leave `RECTO_TRUST_FORWARDED_HEADERS`
+  off behind it.
 
 Leave the setting off when recto is reachable without the proxy, such as on its published port:
 anyone could then send the header.
@@ -96,7 +108,7 @@ File: `examples/proxy/nginx/recto.conf`. Put it in `/etc/nginx/conf.d/`, get a c
 `certbot certonly --nginx -d recto.example.org`, then run `nginx -t` and reload.
 
 ```nginx
-client_max_body_size 50m;
+client_max_body_size 51m;
 proxy_request_buffering off;
 
 location / {
@@ -121,7 +133,7 @@ by itself.
 ```text
 recto.example.org {
 	request_body {
-		max_size 50MB
+		max_size 51MiB
 	}
 	reverse_proxy recto:8080 {
 		flush_interval -1
@@ -152,7 +164,9 @@ traefik.http.services.recto.loadbalancer.server.port: "8080"
 
 The override removes recto's published port (`ports: !reset []`, which needs Docker Compose 2.24
 or later), so recto is reachable only through Traefik, and it sets
-`RECTO_TRUST_FORWARDED_HEADERS`.
+`RECTO_TRUST_FORWARDED_HEADERS`. It also gives the `websecure` entry point 600 seconds to read a
+request (`--entrypoints.websecure.transport.respondingTimeouts.readTimeout=600s`), so a large
+upload on a slow connection is not cut after the default 60.
 
 ## Apache
 
@@ -160,7 +174,7 @@ File: `examples/proxy/apache/recto.conf`. Enable the modules with
 `a2enmod proxy proxy_http ssl headers rewrite`, then check with `apachectl -t`.
 
 ```apache
-LimitRequestBody 52428800
+LimitRequestBody 53477376
 ProxyPreserveHost On
 RequestHeader unset X-Forwarded-For
 RequestHeader set X-Forwarded-Proto "https"

@@ -32,8 +32,10 @@ services:
       - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:?set ACME_EMAIL}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
-      # Traefik sets no read timeout on responses by default, so long scans finish. Do not
-      # add entrypoints.*.transport.respondingTimeouts below 600s.
+      # Entry points stop reading a request after 60 seconds by default, which can cut a large
+      # upload on a slow connection. Traefik waits for responses without limit, so long scans
+      # finish.
+      - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=600s
     ports:
       - "80:80"
       - "443:443"

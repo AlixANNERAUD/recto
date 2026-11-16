@@ -7,14 +7,19 @@ against, and how.
 
 recto is built for a household, or a small team, that trusts itself:
 
-- **Everyone signed in is equal for printing and scanning.** Anyone who passes sign-in, and the
-  required claim when one is set, can use every printer and scanner, and see and cancel every
-  print job. With `RECTO_JOB_VISIBILITY=own`, jobs are private: people see and cancel only
-  their own, and administrators see all (see
-  [Keep jobs private](../how-to/restrict-access.md#keep-jobs-private)).
-- **Administrators manage accounts, nothing more.** They create local accounts, set passwords,
-  disable users and appoint other administrators. They cannot read passwords, and they cannot
-  act on their own account from the web page.
+- **Everyone signed in is equal for printing and scanning, by default.** Anyone who passes
+  sign-in, and the required claim when one is set, can use every printer and scanner, and see
+  and cancel every print job. An administrator can limit a device to some groups, which come
+  from the provider's groups claim (see
+  [Limit printers and scanners to groups](../how-to/restrict-access.md#limit-printers-and-scanners-to-groups)).
+  With `RECTO_JOB_VISIBILITY=own`, jobs are private: people see and cancel only their own, and
+  administrators see all (see [Keep jobs private](../how-to/restrict-access.md#keep-jobs-private)).
+- **These limits apply inside recto only.** Anyone who reaches CUPS or `saned` directly, from
+  your network, bypasses them: keep those services off networks you do not trust.
+- **Administrators manage accounts and device rules.** They create local accounts, set
+  passwords, disable users, appoint other administrators and limit devices to groups. They can
+  use every device and see every job. They cannot read passwords, and they cannot act on their
+  own account from the web page.
 - **Scans are private.** A scan result can only be reached by the person who made it, and only for
   an hour. Scans saved to a folder belong to that folder's readers.
 - **Whoever runs the server is above all of them.** The command line and the database give full

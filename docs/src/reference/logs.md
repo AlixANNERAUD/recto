@@ -29,6 +29,7 @@ only.
 | info | `session ended: the user is gone, disabled or signed out` | `user_id` |
 | info | `document sent to the printer` | `user`, `job` |
 | info | `job canceled` | `user`, `job` |
+| info | `device access changed`, `device access forgotten` | `by`, `device` |
 | info | `scan saved` | `user`, `path` |
 | info | `shutting down` | |
 | warn | `listing the scanners failed` | `error` |
@@ -40,8 +41,15 @@ only.
 | warn | `disabled user refused` | `subject` |
 | warn | `reading the user information failed` | `error` |
 | warn | `SANE could not start; scanning is off` | `error` |
+| warn | `listing the devices for the administration page failed` | `error` |
 | error | `starting the session failed` | `error` |
 | error | `password sign-in failed`, `changing a password failed`, `changing a user failed` | `error` |
+| error | `recording the job failed` | `error`, `job` |
+| error | `reading the job records failed` | `error`, and `job` when canceling |
+| error | `updating the job records failed` | `error` |
+| error | `reading the printer access rules failed`, `reading the scanner access rules failed` | `error` |
+| error | `saving the device access failed`, `forgetting the device access failed`, `loading the device rules failed` | `error` |
+| error | `listing the users failed`, `listing the groups failed` | `error` |
 
 Commands such as `recto create-administrator` write their messages as text.
 

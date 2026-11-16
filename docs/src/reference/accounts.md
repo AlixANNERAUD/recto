@@ -3,7 +3,8 @@
 recto keeps its users in its [database](configuration.md#database). A user signs in with a
 **local account**, a username and a password, or through **single sign-on** with an OpenID
 Connect provider. Some users are **administrators**. Every signed-in user can use every printer
-and scanner; being an administrator only adds the administration pages.
+and scanner unless an administrator limits it to some [groups](#groups); administrators always
+can, and they also reach the administration pages.
 
 ## Local accounts
 
@@ -62,14 +63,19 @@ recto does not link them.
 
 ## Administrators
 
-Administrators reach the **Administration** pages, at `/administration/users` and
-`/administration/groups`, where they:
+Administrators reach the **Administration** pages, at `/administration/users`,
+`/administration/groups`, `/administration/printers` and `/administration/scanners`, where they:
 
 - create local accounts, administrators or not;
 - set a new password for another user who has one;
 - disable and enable other users;
 - make other users administrators, or remove their administration;
-- see the groups and their members.
+- see the groups and their members;
+- limit printers and scanners to groups (see
+  [Limit printers and scanners to groups](../how-to/restrict-access.md#limit-printers-and-scanners-to-groups)).
+
+Administrators can use every printer and scanner, whatever its rule. With private jobs
+(`RECTO_JOB_VISIBILITY=own`), they still see and cancel every job.
 
 They cannot do any of this to their own account, so the last administrator cannot lock everyone
 out from the page. For everyone else, the administration pages answer as if they did not exist.
@@ -109,9 +115,12 @@ per key. The user's memberships are replaced by the groups read, and groups seen
 time are created. Groups are never deleted, even without members.
 
 Groups are read-only in recto. The Users page lists each user's groups, and the Groups page each
-group's members. They do not change what anyone may do in recto. If the UserInfo request
-fails, memberships are left as they are; with a provider without a UserInfo endpoint, a groups
-claim missing from the token means no groups.
+group's members. Groups decide who may use a printer or a scanner that an administrator limited
+to some of them (see
+[Limit printers and scanners to groups](../how-to/restrict-access.md#limit-printers-and-scanners-to-groups)).
+Local accounts belong to no group. If the UserInfo request fails, memberships are left as they
+are; with a provider without a UserInfo endpoint, a groups claim missing from the token means no
+groups.
 
 ## Disabled users
 

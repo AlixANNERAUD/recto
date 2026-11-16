@@ -90,8 +90,8 @@ account.
 
 ## Administrators
 
-Administrators only manage accounts: everyone signed in can use every printer and scanner, as
-before recto had accounts. The first administrator comes from the command line, which only
+Administrators manage accounts and decide which groups may use each printer and scanner; by
+default, everyone signed in can use every device, as before recto had accounts. The first administrator comes from the command line, which only
 whoever runs the server can use; later ones from the Users page, or from the provider's
 administrator claim.
 

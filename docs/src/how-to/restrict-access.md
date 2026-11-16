@@ -100,7 +100,8 @@ Anyone who reaches CUPS directly still sees every job there: this setting limits
 By default everyone signed in can use every printer and scanner. To limit one to some groups:
 
 1. Send groups from your provider (see [Groups](../reference/accounts.md#groups)). Groups come
-   from the provider's groups claim at each sign-in, and recto cannot edit them.
+   from the provider's groups claim at each sign-in, and recto cannot edit them. Local accounts
+   belong to no group: they cannot use a limited device unless they are administrators.
 2. Open **Administration**, then **Printers** or **Scanners**.
 3. Press **Change who may use it** on the device's row, choose **These groups**, tick the groups
    and press **Save**.
@@ -112,6 +113,11 @@ Then:
 - Administrators can always use every device.
 - Choosing **These groups** with none ticked leaves the device to administrators only.
 - Choosing **Everyone** removes the rule.
+- With `RECTO_JOB_VISIBILITY=all`, the Jobs page still lists the jobs of a printer someone
+  cannot use: the limit is on printing, not on seeing the queue.
+- A CUPS class is a device of its own. A class that holds a limited printer needs its own rule,
+  or people print to the printer through the class.
+- Anyone who reaches CUPS or SANE directly is not limited: the rules apply in recto only.
 
 Rules are kept under the device's name. When a device is removed from CUPS or SANE, its rule
 stays, and the row is marked **Not found**: if the device comes back, it is limited again. Press

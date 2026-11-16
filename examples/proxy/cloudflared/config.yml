@@ -9,6 +9,9 @@
 # Cloudflare cuts a request that has no response after 100 seconds (error 524), and no setting
 # on the free and Pro plans raises it. A large scan batch can take longer: scan in smaller
 # stacks. Uploads are limited to 100 MB on those plans, above RECTO_MAX_UPLOAD_SIZE's default.
+#
+# Cloudflare appends the client's address to any X-Forwarded-For the client sent, so leave
+# RECTO_TRUST_FORWARDED_HEADERS off behind it.
 tunnel: recto
 credentials-file: /etc/cloudflared/recto.json
 

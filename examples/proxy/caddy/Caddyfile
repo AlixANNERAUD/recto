@@ -3,9 +3,10 @@
 # 127.0.0.1:8080.
 
 recto.example.org {
-	# No upload limit is set by default; this one matches RECTO_MAX_UPLOAD_SIZE.
+	# No upload limit is set by default; this one is a little above RECTO_MAX_UPLOAD_SIZE
+	# (50 MiB by default), which recto accepts with 64 KiB of form fields on top.
 	request_body {
-		max_size 50MB
+		max_size 51MiB
 	}
 
 	reverse_proxy recto:8080 {

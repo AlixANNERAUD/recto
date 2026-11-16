@@ -11,7 +11,7 @@ instead. A single sign-on user without the required claim, or disabled, is sent 
 | Path | Page |
 | --- | --- |
 | `/` | Print: the print form and the chosen printer's status. |
-| `/printers` | Printers: every printer with its state and supplies. |
+| `/printers` | Printers: every printer the user may use, with its state and supplies. |
 | `/jobs` | Jobs: the print queue, with Cancel buttons. |
 | `/scan` | Scan: scanners, options, preview and results. Needs JavaScript. |
 | `/account` | Account: change your password. Only for users with a password, and with local accounts on. |
@@ -34,7 +34,7 @@ These work without JavaScript and accept only requests from recto's own pages (s
 | Method and path | Does |
 | --- | --- |
 | `POST /print` | Sends the uploaded file to a printer, then redirects to `/jobs`. |
-| `POST /jobs/{id}/cancel` | Cancels a job, then redirects to `/jobs`. |
+| `POST /jobs/{id}/cancel` | Cancels a job, then redirects to `/jobs`. With `RECTO_JOB_VISIBILITY=own`, a job the user may not see redirects to `/jobs?error=job_not_found`, as a missing one does. |
 | `GET /scan/results/{id}` | The result of a scan, for the preview image. |
 | `GET /scan/results/{id}/download` | The scan as a file download. |
 | `POST /scan/results/{id}/save` | Saves the scan into `RECTO_SCAN_OUTPUT_DIR`. |
@@ -43,7 +43,7 @@ These work without JavaScript and accept only requests from recto's own pages (s
 | `POST /administration/users/{id}/administrator` | Grants or removes administration. |
 | `POST /administration/users/{id}/disabled` | Disables or enables a user. |
 | `POST /administration/users/{id}/password` | Sets a user's password. |
-| `POST /administration/printers/access` and `/administration/scanners/access` | Sets who may use a device. Fields: `device`, `access` (`everyone` or `groups`) and one `groups` field per group id; `groups` with none means administrators only. Redirects to the page with `?done=access`, or answers `400` with the page when the device is missing or a group is unknown. |
+| `POST /administration/printers/access` and `/administration/scanners/access` | Sets who may use a device. Fields: `device`, `access` (`everyone` or `groups`) and one `groups` field per group id; `groups` with none means administrators only. Redirects to the page with `?done=access`. Answers `400` with the page when `device` or `access` is missing or a group is unknown, and `503` when the database fails. |
 | `POST /administration/printers/forget` and `/administration/scanners/forget` | Drops the rule of a device that is gone. Field: `device`. Redirects with `?done=forgotten`. |
 
 The administration pages and their forms answer `404`, with the not-found page, to anyone but an
