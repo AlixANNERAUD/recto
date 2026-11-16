@@ -45,7 +45,11 @@ use leptos_router::{
 };
 use pages::{
     account::AccountPage,
-    administration::{groups::GroupsPage, users::UsersPage},
+    administration::{
+        devices::{PrintersAdministrationPage, ScannersAdministrationPage},
+        groups::GroupsPage,
+        users::UsersPage,
+    },
     auth::{SignInErrorPage, SignedOutPage},
     jobs::JobsPage,
     no_access::NoAccessPage,
@@ -132,6 +136,8 @@ pub fn App() -> impl IntoView {
                 <Route path=path!("/account") view=AccountPage />
                 <Route path=path!("/administration/users") view=UsersPage />
                 <Route path=path!("/administration/groups") view=GroupsPage />
+                <Route path=path!("/administration/printers") view=PrintersAdministrationPage />
+                <Route path=path!("/administration/scanners") view=ScannersAdministrationPage />
                 <Route path=path!("/sign-in") view=SignInPage />
                 <Route path=path!("/no-access") view=NoAccessPage />
                 <Route path=path!("/offline") view=OfflinePage />

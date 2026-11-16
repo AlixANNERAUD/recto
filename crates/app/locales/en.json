@@ -190,6 +190,48 @@
       },
       "no_members": "No members",
       "disabled": "Disabled"
+    },
+    "printers": {
+      "tab": "Printers",
+      "document_title": "Printers · Administration",
+      "intro": "Choose who may print on each printer. A printer without a rule is open to everyone.",
+      "empty": "No printers",
+      "empty_body": "CUPS lists no printer, and no printer has a rule.",
+      "listing_failed": "CUPS did not answer, so only the printers with a rule are listed. Their rules can still be changed."
+    },
+    "scanners": {
+      "tab": "Scanners",
+      "document_title": "Scanners · Administration",
+      "intro": "Choose who may scan on each scanner. A scanner without a rule is open to everyone.",
+      "empty": "No scanners",
+      "empty_body": "SANE lists no scanner, and no scanner has a rule.",
+      "listing_failed": "SANE did not answer, so only the scanners with a rule are listed. Their rules can still be changed."
+    },
+    "devices": {
+      "load_failed": "The rules could not be loaded. Try again in a moment.",
+      "everyone": "Everyone",
+      "administrators_only": "Administrators only",
+      "groups": "Groups: {groups}",
+      "separator": ", ",
+      "not_found": "Not found",
+      "change": "Change who may use it",
+      "choose_everyone": "Everyone",
+      "choose_groups": "These groups",
+      "no_groups": "No groups yet. Without a group, only administrators can use it.",
+      "administrators_note": "Administrators can always use every device. With no group ticked, only they can.",
+      "save": "Save",
+      "forget": "Forget",
+      "forget_hint": "Drops the rule of a device that is gone. If it comes back, it is open to everyone.",
+      "done": {
+        "access": "The access was saved.",
+        "forgotten": "The rule was forgotten."
+      },
+      "errors": {
+        "no_device": "The form named no device.",
+        "no_access": "The form did not say who may use the device.",
+        "unknown_group": "A chosen group no longer exists. Nothing was saved.",
+        "unavailable": "The change could not be saved. Try again in a moment."
+      }
     }
   },
   "print": {

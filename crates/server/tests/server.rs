@@ -3041,3 +3041,200 @@ async fn access_fails_closed() {
     }
     assert!(harness.print.submitted().is_empty());
 }
+
+fn bureau() -> Printer {
+    Printer {
+        name: "Bureau / 2e étage".into(),
+        ..office()
+    }
+}
+
+impl Harness {
+    /// Signs in a user of these groups, and returns the id of the first.
+    async fn staff(&self, groups: &[&str]) -> i64 {
+        users::sign_in_with_identity(
+            &self.database,
+            &Identity {
+                issuer: "https://id.test/".into(),
+                subject: "staff-subject".into(),
+                preferred_username: Some("staff".into()),
+                groups: Some(groups.iter().map(|group| (*group).to_owned()).collect()),
+                ..Identity::default()
+            },
+        )
+        .await
+        .unwrap();
+        groups::Entity::find()
+            .filter(groups::Column::Name.eq(groups[0]))
+            .one(&self.database)
+            .await
+            .unwrap()
+            .expect("a group")
+            .id
+    }
+
+    async fn printer_rules(&self) -> std::collections::HashMap<String, Access> {
+        access::rules(&self.database, DeviceKind::Printer)
+            .await
+            .unwrap()
+    }
+}
+
+async fn device_harness() -> (Harness, String, i64) {
+    let harness = Harness::with(Setup {
+        printers: Some(vec![bureau()]),
+        ..Setup::default()
+    })
+    .await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    let staff = harness.staff(&["staff"]).await;
+    (harness, admin, staff)
+}
+
+#[tokio::test]
+async fn an_administrator_restricts_a_printer() {
+    let (harness, admin, staff) = device_harness().await;
+    let staff = staff.to_string();
+    let response = harness
+        .send(form(
+            "/administration/printers/access",
+            Some(&admin),
+            &[
+                ("device", "Bureau / 2e étage"),
+                ("access", "groups"),
+                ("groups", &staff),
+            ],
+        ))
+        .await;
+    assert_redirect(&response, "/administration/printers?done=access");
+    let rules = harness.printer_rules().await;
+    assert_eq!(rules.len(), 1);
+    assert_eq!(
+        rules["Bureau / 2e étage"],
+        Access::Groups(vec![staff.parse().unwrap()])
+    );
+}
+
+#[tokio::test]
+async fn groups_with_none_selected_mean_administrators_only() {
+    let (harness, admin, _) = device_harness().await;
+    let response = harness
+        .send(form(
+            "/administration/scanners/access",
+            Some(&admin),
+            &[("device", "net:scan-1"), ("access", "groups")],
+        ))
+        .await;
+    assert_redirect(&response, "/administration/scanners?done=access");
+    let rules = access::rules(&harness.database, DeviceKind::Scanner)
+        .await
+        .unwrap();
+    assert_eq!(rules["net:scan-1"], Access::Groups(vec![]));
+    assert!(harness.printer_rules().await.is_empty());
+}
+
+#[tokio::test]
+async fn everyone_removes_the_rule() {
+    let (harness, admin, staff) = device_harness().await;
+    access::set(
+        &harness.database,
+        DeviceKind::Printer,
+        "Bureau / 2e étage",
+        Access::Groups(vec![staff]),
+    )
+    .await
+    .unwrap();
+    let response = harness
+        .send(form(
+            "/administration/printers/access",
+            Some(&admin),
+            &[("device", "Bureau / 2e étage"), ("access", "everyone")],
+        ))
+        .await;
+    assert_redirect(&response, "/administration/printers?done=access");
+    assert!(harness.printer_rules().await.is_empty());
+}
+
+#[tokio::test]
+async fn an_unknown_group_is_refused() {
+    let (harness, admin, _) = device_harness().await;
+    for fields in [
+        vec![
+            ("device", "Bureau / 2e étage"),
+            ("access", "groups"),
+            ("groups", "99999"),
+        ],
+        vec![("device", "  "), ("access", "everyone")],
+    ] {
+        let response = harness
+            .send(form(
+                "/administration/printers/access",
+                Some(&admin),
+                &fields,
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let html = text(response).await;
+        assert!(html.contains("role=\"alert\""), "{html}");
+        assert!(harness.printer_rules().await.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn a_rule_for_a_missing_device_can_be_forgotten() {
+    let (harness, admin, _) = device_harness().await;
+    access::set(
+        &harness.database,
+        DeviceKind::Printer,
+        "gone",
+        Access::Groups(vec![]),
+    )
+    .await
+    .unwrap();
+    let response = harness
+        .send(form(
+            "/administration/printers/forget",
+            Some(&admin),
+            &[("device", "gone")],
+        ))
+        .await;
+    assert_redirect(&response, "/administration/printers?done=forgotten");
+    assert!(harness.printer_rules().await.is_empty());
+}
+
+#[tokio::test]
+async fn device_forms_need_an_administrator() {
+    let (harness, _, staff) = device_harness().await;
+    let plain = harness.sign_in("alice-subject", "alice").await;
+    let staff = staff.to_string();
+    access::set(
+        &harness.database,
+        DeviceKind::Printer,
+        "gone",
+        Access::Groups(vec![]),
+    )
+    .await
+    .unwrap();
+    for (uri, fields) in [
+        (
+            "/administration/printers/access",
+            vec![
+                ("device", "x"),
+                ("access", "groups"),
+                ("groups", &staff[..]),
+            ],
+        ),
+        ("/administration/printers/forget", vec![("device", "gone")]),
+        (
+            "/administration/scanners/access",
+            vec![("device", "x"), ("access", "groups")],
+        ),
+        ("/administration/scanners/forget", vec![("device", "x")]),
+    ] {
+        let response = harness.send(form(uri, Some(&plain), &fields)).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
+    let rules = harness.printer_rules().await;
+    assert_eq!(rules.len(), 1);
+    assert!(rules.contains_key("gone"));
+}

@@ -1,9 +1,11 @@
-//! The administration pages, for administrators only: `/administration/users` and
-//! `/administration/groups`, which `/administration` leads to. The server loads their data, checks that the user administers
+//! The administration pages, for administrators only: `/administration/users`,
+//! `/administration/groups`, `/administration/printers` and `/administration/scanners`, which
+//! `/administration` leads to. The server loads their data, checks that the user administers
 //! recto, and hands each page what it shows as a context; anyone else gets the not-found page,
 //! so the pages do not reveal that they exist. Every change is a plain form posted to the
 //! server, which works without JavaScript.
 
+pub mod devices;
 pub mod groups;
 pub mod users;
 
@@ -16,6 +18,8 @@ use crate::t;
 enum Section {
     Users,
     Groups,
+    Printers,
+    Scanners,
 }
 
 /// The links between the administration pages, as tabs under the page heading.
@@ -47,6 +51,8 @@ fn Sections(current: Section) -> impl IntoView {
             <ul class="flex gap-1 border-b">
                 {tab(Section::Users, "/administration/users", t!("administration.users.tab"))}
                 {tab(Section::Groups, "/administration/groups", t!("administration.groups.tab"))}
+                {tab(Section::Printers, "/administration/printers", t!("administration.printers.tab"))}
+                {tab(Section::Scanners, "/administration/scanners", t!("administration.scanners.tab"))}
             </ul>
         </nav>
     }

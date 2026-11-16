@@ -4,11 +4,12 @@
 //! once the user is known to administer recto.
 //!
 //! The forms are plain posts, so they work without JavaScript. An accepted one redirects to
-//! `/administration/users` with a notice; a refused one renders the Users page again with the
+//! page it came from with a notice; a refused one renders the Users page again with the
 //! problem, keeping what was typed except a password.
 
 use axum::{
     Extension, Form, Router,
+    body::Bytes,
     extract::{Path, Request, State},
     http::{StatusCode, Uri, request::Parts},
     middleware::{self, Next},
@@ -19,6 +20,10 @@ use leptos::prelude::provide_context;
 use recto_app::{
     pages::{
         administration::{
+            devices::{
+                DeviceAccess, DeviceKind as PageKind, DeviceRow, DevicesPageData, DevicesProblem,
+                GroupChoice, Notice as DeviceNotice,
+            },
             groups::{GroupMember, GroupRow, GroupsPageData},
             users::{NewUserDraft, Notice, UserRow, UsersPageData, UsersProblem, UsersRefusal},
         },
@@ -27,7 +32,9 @@ use recto_app::{
     state::{AppState, User},
 };
 use recto_domain::{
-    Error, Problem, groups,
+    Error, Problem,
+    access::{self, Access, DeviceKind},
+    groups,
     passwords::PasswordPolicy,
     users::{self, NewLocalUser, UserSummary},
 };
@@ -38,6 +45,8 @@ use crate::{session, state::AuthState};
 
 /// Where the Users page is, and where every form returns to.
 const USERS: &str = "/administration/users";
+const PRINTERS: &str = "/administration/printers";
+const SCANNERS: &str = "/administration/scanners";
 
 #[derive(Clone)]
 struct AdministrationState {
@@ -46,8 +55,8 @@ struct AdministrationState {
     policy: PasswordPolicy,
 }
 
-/// `GET /administration/users` and `/administration/groups`, `/administration` leading to the
-/// first, and the forms of the Users page.
+/// `GET /administration/users`, `/groups`, `/printers` and `/scanners`, `/administration`
+/// leading to the first, and the forms of the Users, Printers and Scanners pages.
 pub fn router(app: AppState, auth: &AuthState) -> Router {
     let state = AdministrationState {
         app,
@@ -64,6 +73,32 @@ pub fn router(app: AppState, auth: &AuthState) -> Router {
         .route("/administration/users/{id}/disabled", post(set_disabled))
         .route("/administration/users/{id}/password", post(set_password))
         .route("/administration/groups", get(groups_page))
+        .route(PRINTERS, get(printers_page))
+        .route(SCANNERS, get(scanners_page))
+        .route(
+            "/administration/printers/access",
+            post(|state, actor, parts, body| {
+                set_access(state, actor, parts, DeviceKind::Printer, body)
+            }),
+        )
+        .route(
+            "/administration/scanners/access",
+            post(|state, actor, parts, body| {
+                set_access(state, actor, parts, DeviceKind::Scanner, body)
+            }),
+        )
+        .route(
+            "/administration/printers/forget",
+            post(|state, actor, parts, body| {
+                forget(state, actor, parts, DeviceKind::Printer, body)
+            }),
+        )
+        .route(
+            "/administration/scanners/forget",
+            post(|state, actor, parts, body| {
+                forget(state, actor, parts, DeviceKind::Scanner, body)
+            }),
+        )
         // The last layer runs first: anonymous visitors are sent to sign in before the check.
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -371,4 +406,265 @@ async fn finish(
     };
     let refusal = UsersRefusal { problem, username };
     users_view(state, parts, status, Some(refusal), NewUserDraft::default()).await
+}
+
+fn page_kind(kind: DeviceKind) -> PageKind {
+    match kind {
+        DeviceKind::Printer => PageKind::Printer,
+        DeviceKind::Scanner => PageKind::Scanner,
+    }
+}
+
+/// `GET /administration/printers`.
+async fn printers_page(State(state): State<AdministrationState>, parts: Parts) -> Response {
+    devices_view(&state, parts, DeviceKind::Printer, StatusCode::OK, None).await
+}
+
+/// `GET /administration/scanners`.
+async fn scanners_page(State(state): State<AdministrationState>, parts: Parts) -> Response {
+    devices_view(&state, parts, DeviceKind::Scanner, StatusCode::OK, None).await
+}
+
+/// A Printers or Scanners page: the devices their service lists and the stored rules, so a
+/// rule stays manageable while the service is down or after its device is gone.
+async fn devices_view(
+    state: &AdministrationState,
+    mut parts: Parts,
+    kind: DeviceKind,
+    status: StatusCode,
+    refusal: Option<DevicesProblem>,
+) -> Response {
+    let listed: Result<Vec<(String, Option<String>)>, String> = match kind {
+        DeviceKind::Printer => state
+            .app
+            .print
+            .printers()
+            .await
+            .map_err(|error| error.to_string())
+            .map(|printers| {
+                printers
+                    .into_iter()
+                    .map(|printer| {
+                        let detail = [
+                            printer.description,
+                            printer.location,
+                            printer.make_and_model,
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .filter(|text| !text.trim().is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" · ");
+                        (
+                            printer.name,
+                            Some(detail).filter(|detail| !detail.is_empty()),
+                        )
+                    })
+                    .collect()
+            }),
+        DeviceKind::Scanner => state
+            .app
+            .scan
+            .scanners(false)
+            .await
+            .map_err(|error| error.to_string())
+            .map(|scanners| {
+                scanners
+                    .into_iter()
+                    .map(|scanner| {
+                        let detail = format!("{} {}", scanner.vendor, scanner.model);
+                        (
+                            scanner.id,
+                            Some(detail.trim().to_owned()).filter(|d| !d.is_empty()),
+                        )
+                    })
+                    .collect()
+            }),
+    };
+    if let Err(error) = &listed {
+        tracing::warn!(%error, "listing the devices for the administration page failed");
+    }
+    let listing_failed = listed.is_err();
+    let listed = listed.unwrap_or_default();
+
+    let rules = access::rules(&state.app.database, kind).await;
+    let groups = groups::list(&state.app.database).await;
+    let (devices, groups) = match (rules, groups) {
+        (Ok(mut rules), Ok(groups)) => {
+            let to_row = |name: String, detail, rule: Option<Access>, listed| DeviceRow {
+                name,
+                detail,
+                access: match rule {
+                    None | Some(Access::Everyone) => DeviceAccess::Everyone,
+                    Some(Access::Groups(ids)) => DeviceAccess::Groups(ids),
+                },
+                listed,
+            };
+            let mut rows: Vec<DeviceRow> = listed
+                .into_iter()
+                .map(|(name, detail)| {
+                    let rule = rules.remove(&name);
+                    to_row(name, detail, rule, true)
+                })
+                .collect();
+            let mut missing: Vec<_> = rules.into_iter().collect();
+            missing.sort_by(|first, second| first.0.cmp(&second.0));
+            rows.extend(
+                missing
+                    .into_iter()
+                    .map(|(name, rule)| to_row(name, None, Some(rule), false)),
+            );
+            let choices = groups
+                .into_iter()
+                .map(|(group, _)| GroupChoice {
+                    id: group.id,
+                    name: group.name,
+                })
+                .collect();
+            (Some(rows), choices)
+        }
+        (rules, groups) => {
+            if let Err(error) = rules {
+                tracing::error!(%error, "loading the device rules failed");
+            }
+            if let Err(error) = groups {
+                tracing::error!(%error, "listing the groups failed");
+            }
+            (None, vec![])
+        }
+    };
+    let status = if devices.is_none() && status == StatusCode::OK {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        status
+    };
+    if refusal.is_some() {
+        parts.uri = Uri::from_static(page_kind(kind).path());
+    }
+    let data = DevicesPageData {
+        kind: page_kind(kind),
+        devices,
+        groups,
+        listing_failed,
+        refusal,
+    };
+    render(&state.app, state.methods, parts, status, move || {
+        provide_context(data.clone());
+    })
+    .await
+}
+
+fn devices_done(kind: DeviceKind, notice: DeviceNotice) -> Response {
+    Redirect::to(&format!(
+        "{}?done={}",
+        page_kind(kind).path(),
+        notice.code()
+    ))
+    .into_response()
+}
+
+/// The first value of a field of a posted form.
+fn field(body: &[u8], name: &str) -> Option<String> {
+    url::form_urlencoded::parse(body)
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.into_owned())
+}
+
+/// What an access form asks for, or why it is refused.
+async fn requested_access(
+    state: &AdministrationState,
+    body: &[u8],
+) -> Result<(String, Access), (StatusCode, DevicesProblem)> {
+    let refused = |problem| (StatusCode::BAD_REQUEST, problem);
+    let device = field(body, "device")
+        .filter(|device| !device.trim().is_empty())
+        .ok_or(refused(DevicesProblem::NoDevice))?;
+    let rule = match field(body, "access").as_deref() {
+        Some("everyone") => Access::Everyone,
+        Some("groups") => {
+            // A value that is not a number names no group either.
+            let chosen: Vec<Option<i64>> = url::form_urlencoded::parse(body)
+                .filter(|(key, _)| key == "groups")
+                .map(|(_, value)| value.parse().ok())
+                .collect();
+            let known = groups::list(&state.app.database).await.map_err(|error| {
+                tracing::error!(%error, "listing the groups failed");
+                (StatusCode::SERVICE_UNAVAILABLE, DevicesProblem::Unavailable)
+            })?;
+            let chosen = chosen
+                .into_iter()
+                .map(|id| id.filter(|id| known.iter().any(|(group, _)| group.id == *id)))
+                .collect::<Option<Vec<i64>>>()
+                .ok_or(refused(DevicesProblem::UnknownGroup))?;
+            Access::Groups(chosen)
+        }
+        _ => return Err(refused(DevicesProblem::NoAccess)),
+    };
+    Ok((device, rule))
+}
+
+/// `POST /administration/{printers,scanners}/access` with `device`, `access=everyone|groups`
+/// and one `groups` field per ticked group (none: administrators only). The fields repeat, so
+/// the body is read directly rather than through `Form`.
+async fn set_access(
+    State(state): State<AdministrationState>,
+    Extension(actor): Extension<User>,
+    parts: Parts,
+    kind: DeviceKind,
+    body: Bytes,
+) -> Response {
+    let saved = match requested_access(&state, &body).await {
+        Ok((device, rule)) => access::set(&state.app.database, kind, &device, rule)
+            .await
+            .map(|()| device)
+            .map_err(|error| {
+                tracing::error!(%error, "saving the device access failed");
+                (StatusCode::SERVICE_UNAVAILABLE, DevicesProblem::Unavailable)
+            }),
+        Err(refusal) => Err(refusal),
+    };
+    match saved {
+        Ok(device) => {
+            tracing::info!(by = actor.username, device, "device access changed");
+            devices_done(kind, DeviceNotice::Access)
+        }
+        Err((status, problem)) => devices_view(&state, parts, kind, status, Some(problem)).await,
+    }
+}
+
+/// `POST /administration/{printers,scanners}/forget` with `device`: drops the rule of a device.
+async fn forget(
+    State(state): State<AdministrationState>,
+    Extension(actor): Extension<User>,
+    parts: Parts,
+    kind: DeviceKind,
+    body: Bytes,
+) -> Response {
+    let Some(device) = field(&body, "device").filter(|device| !device.trim().is_empty()) else {
+        return devices_view(
+            &state,
+            parts,
+            kind,
+            StatusCode::BAD_REQUEST,
+            Some(DevicesProblem::NoDevice),
+        )
+        .await;
+    };
+    match access::forget(&state.app.database, kind, &device).await {
+        Ok(()) => {
+            tracing::info!(by = actor.username, device, "device access forgotten");
+            devices_done(kind, DeviceNotice::Forgotten)
+        }
+        Err(error) => {
+            tracing::error!(%error, "forgetting the device access failed");
+            devices_view(
+                &state,
+                parts,
+                kind,
+                StatusCode::SERVICE_UNAVAILABLE,
+                Some(DevicesProblem::Unavailable),
+            )
+            .await
+        }
+    }
 }

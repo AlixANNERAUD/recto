@@ -1087,3 +1087,129 @@ async fn nothing_changes_without_rules() {
     );
     assert_eq!(scanner_ids(&harness, &plain).await, ["net:a", "net:b"]);
 }
+
+/// Signs in a single sign-on user made administrator by hand.
+async fn administrator(harness: &Harness, subject: &str, username: &str) -> String {
+    let cookie = harness.sign_in(subject, username).await;
+    let user = users::find_by_username(&harness.database, username)
+        .await
+        .unwrap()
+        .expect("a user");
+    users::set_administrator_from_command_line(&harness.database, user.id, true)
+        .await
+        .unwrap();
+    cookie
+}
+
+async fn group_id(harness: &Harness, name: &str) -> i64 {
+    groups::Entity::find()
+        .filter(groups::Column::Name.eq(name))
+        .one(&harness.database)
+        .await
+        .unwrap()
+        .expect("a group")
+        .id
+}
+
+#[tokio::test]
+async fn the_printers_page_lists_devices_and_their_access() {
+    let harness = Harness::new(vec![printer("open", false), printer("lab", false)], vec![]).await;
+    let admin = administrator(&harness, "admin-subject", "admin").await;
+    harness.sign_in_in("bob-subject", "bob", &["staff"]).await;
+    let staff = group_id(&harness, "staff").await;
+    access::set(
+        &harness.database,
+        DeviceKind::Printer,
+        "lab",
+        Access::Groups(vec![staff]),
+    )
+    .await
+    .unwrap();
+    access::set(
+        &harness.database,
+        DeviceKind::Printer,
+        "gone",
+        Access::Groups(vec![]),
+    )
+    .await
+    .unwrap();
+
+    let html = harness.page("/administration/printers", &admin).await;
+    let open = html.find(">open<").expect("the open printer");
+    let lab = html.find(">lab<").expect("the lab printer");
+    let gone = html.find(">gone<").expect("the missing printer");
+    assert!(open < lab && lab < gone, "{html}");
+    assert!(html[open..lab].contains("Everyone"), "{html}");
+    assert!(html[lab..gone].contains("staff"), "{html}");
+    assert!(
+        html[lab..gone].contains(r#"action="/administration/printers/access""#),
+        "{html}"
+    );
+    assert!(html[gone..].contains("Not found"), "{html}");
+    assert!(html[gone..].contains("Administrators only"), "{html}");
+    assert!(
+        html[gone..].contains(r#"action="/administration/printers/forget""#),
+        "{html}"
+    );
+    assert!(
+        !html[..gone].contains("/administration/printers/forget"),
+        "{html}"
+    );
+}
+
+#[tokio::test]
+async fn the_scanners_page_lists_scanners() {
+    let harness = Harness::scanning(vec![], vec![scanner("net:scan-1")]).await;
+    let admin = administrator(&harness, "admin-subject", "admin").await;
+    let html = harness.page("/administration/scanners", &admin).await;
+    assert!(html.contains("net:scan-1"), "{html}");
+    assert!(
+        html.contains(r#"action="/administration/scanners/access""#),
+        "{html}"
+    );
+}
+
+#[tokio::test]
+async fn device_pages_are_hidden_from_others() {
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    for uri in ["/administration/printers", "/administration/scanners"] {
+        let request = Request::get(uri)
+            .header(header::ACCEPT, "text/html")
+            .header(header::COOKIE, &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let response = harness.send(request).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+        assert!(!text(response).await.contains("kitchen"), "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn the_sections_link_every_page() {
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
+    let admin = administrator(&harness, "admin-subject", "admin").await;
+    let sections = [
+        "/administration/users",
+        "/administration/groups",
+        "/administration/printers",
+        "/administration/scanners",
+    ];
+    for current in sections {
+        // The main navigation marks the Administration entry as current on every page of it.
+        let page = harness.page(current, &admin).await;
+        let start = page.find("Administration sections").expect("the tabs");
+        let html = &page[start..];
+        for target in sections {
+            assert!(
+                html.contains(&format!(r#"href="{target}""#)),
+                "{current} {target}"
+            );
+            assert_eq!(
+                html.contains(&format!(r#"href="{target}" aria-current="page""#)),
+                target == current,
+                "{current} {target}"
+            );
+        }
+    }
+}

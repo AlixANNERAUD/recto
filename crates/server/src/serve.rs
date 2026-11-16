@@ -75,6 +75,8 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         "/sign-in",
         "/administration/users",
         "/administration/groups",
+        "/administration/printers",
+        "/administration/scanners",
     ];
     let routes = generate_route_list_with_exclusions(
         App,
