@@ -26,10 +26,15 @@ use recto_app::{
                 PRINTER_TEXT_MAX, Price, PriceRow, PrinterControls, PrinterTools,
             },
             groups::{GroupMember, GroupRow, GroupsPageData},
+            quotas::{
+                Choice, QuotasNotice, QuotasPageData, QuotasProblem, RuleDraft, RuleRow,
+                SubjectChoice,
+            },
             users::{NewUserDraft, Notice, UserRow, UsersPageData, UsersProblem, UsersRefusal},
         },
         sign_in::SignInMethods,
     },
+    quotas::Allowance,
     state::{AppState, Currency, User},
 };
 use recto_domain::{
@@ -38,6 +43,7 @@ use recto_domain::{
     groups,
     passwords::PasswordPolicy,
     prices::{self, Prices},
+    quotas::{self, Enforcement, Metric, NewRule, Period, Rule, Subject},
     users::{self, NewLocalUser, UserSummary},
 };
 use recto_printing::{AdminError, Driver, NewPrinter, PrinterAdmin, PrinterState};
@@ -50,6 +56,7 @@ use crate::{session, state::AuthState};
 const USERS: &str = "/administration/users";
 const PRINTERS: &str = "/administration/printers";
 const SCANNERS: &str = "/administration/scanners";
+const QUOTAS: &str = "/administration/quotas";
 
 #[derive(Clone)]
 struct AdministrationState {
@@ -58,8 +65,9 @@ struct AdministrationState {
     policy: PasswordPolicy,
 }
 
-/// `GET /administration/users`, `/groups`, `/printers` and `/scanners`, `/administration`
-/// leading to the first, and the forms of the Users, Printers and Scanners pages.
+/// `GET /administration/users`, `/groups`, `/printers`, `/scanners` and `/quotas`,
+/// `/administration` leading to the first, and the forms of the Users, Printers, Scanners and
+/// Quotas pages.
 pub fn router(app: AppState, auth: &AuthState) -> Router {
     let state = AdministrationState {
         app,
@@ -82,6 +90,13 @@ pub fn router(app: AppState, auth: &AuthState) -> Router {
         .route(&format!("{PRINTERS}/prices"), post(set_prices))
         .merge(device_forms(DeviceKind::Printer))
         .merge(device_forms(DeviceKind::Scanner))
+        .route(QUOTAS, get(quotas_page).post(create_rule))
+        .route("/administration/quotas/{id}", post(update_rule))
+        .route(
+            "/administration/quotas/{id}/enabled",
+            post(set_rule_enabled),
+        )
+        .route("/administration/quotas/{id}/delete", post(delete_rule))
         // The last layer runs first: anonymous visitors are sent to sign in before the check.
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -1222,6 +1237,346 @@ fn requested_prices(
                 decimals: currency.decimals,
             },
         )),
+    }
+}
+
+/// `GET /administration/quotas`.
+async fn quotas_page(State(state): State<AdministrationState>, parts: Parts) -> Response {
+    quotas_view(&state, parts, StatusCode::OK, None, None).await
+}
+
+/// The Quotas page, with the refusal of a form and what it held, if any.
+async fn quotas_view(
+    state: &AdministrationState,
+    mut parts: Parts,
+    status: StatusCode,
+    refusal: Option<QuotasProblem>,
+    draft: Option<(Option<i64>, RuleDraft)>,
+) -> Response {
+    let database = &state.app.database;
+    let currency = state.app.currency.clone();
+    let loaded = async {
+        let rules = quotas::rules(database).await?;
+        let groups = groups::list(database).await?;
+        let users = users::list(database).await?;
+        let mut rows = Vec::with_capacity(rules.len());
+        for rule in rules {
+            rows.push(rule_row(rule, None));
+        }
+        let groups: Vec<Choice> = groups
+            .into_iter()
+            .map(|(group, _)| Choice {
+                id: group.id,
+                name: group.name,
+            })
+            .collect();
+        let users: Vec<Choice> = users
+            .into_iter()
+            .map(|summary| Choice {
+                id: summary.user.id,
+                name: summary.user.username,
+            })
+            .collect();
+        Ok::<_, Error>((rows, groups, users))
+    }
+    .await;
+    let (rules, groups, users) = match loaded {
+        Ok((rules, groups, users)) => (Some(rules), groups, users),
+        Err(error) => {
+            tracing::error!(%error, "loading the quota rules failed");
+            (None, Vec::new(), Vec::new())
+        }
+    };
+    let status = if rules.is_none() && status == StatusCode::OK {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        status
+    };
+    // The printers to choose from: CUPS's, and those rules already name.
+    let mut printers: Vec<String> = match state.app.print.printers().await {
+        Ok(printers) => printers.into_iter().map(|printer| printer.name).collect(),
+        Err(error) => {
+            tracing::warn!(%error, "listing the printers for the quotas page failed");
+            Vec::new()
+        }
+    };
+    for rule in rules.iter().flatten() {
+        for printer in &rule.printers {
+            if !printers
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(printer))
+            {
+                printers.push(printer.clone());
+            }
+        }
+    }
+    printers.sort_by_key(|printer| printer.to_lowercase());
+    if refusal.is_some() {
+        parts.uri = Uri::from_static(QUOTAS);
+    }
+    let data = QuotasPageData {
+        rules,
+        groups,
+        users,
+        printers,
+        currency,
+        refusal,
+        draft,
+    };
+    render(&state.app, state.methods, parts, status, move || {
+        provide_context(data.clone());
+    })
+    .await
+}
+
+fn rule_row(rule: Rule, pool: Option<Allowance>) -> RuleRow {
+    RuleRow {
+        id: rule.id,
+        name: rule.name,
+        enabled: rule.enabled,
+        subject: match rule.subject {
+            Subject::Everyone => SubjectChoice::Everyone,
+            Subject::Group(id) => SubjectChoice::Group(id),
+            Subject::User(id) => SubjectChoice::User(id),
+            Subject::Pool(id) => SubjectChoice::Pool(id),
+        },
+        printers: rule.printers,
+        metric: rule.metric.into(),
+        period: rule.period.into(),
+        limit: rule.limit,
+        hard: rule.enforcement == Enforcement::Hard,
+        pool,
+    }
+}
+
+fn quotas_done(notice: QuotasNotice) -> Response {
+    Redirect::to(&format!("{QUOTAS}?done={}", notice.code())).into_response()
+}
+
+/// The status and the problem a refused quota form is shown with.
+fn quota_refused(error: Error, what: &str) -> (StatusCode, QuotasProblem) {
+    let problem = match error {
+        Error::Invalid(Problem::RuleNameEmpty) => QuotasProblem::NameEmpty,
+        Error::Invalid(Problem::RuleLimitNegative) => QuotasProblem::LimitNegative,
+        Error::Invalid(Problem::RollingDaysInvalid { maximum }) => {
+            QuotasProblem::RollingDaysInvalid { maximum }
+        }
+        Error::Invalid(Problem::SubjectNotFound) => QuotasProblem::SubjectNotFound,
+        Error::Invalid(Problem::PrinterNameEmpty | Problem::HolderMismatch) => {
+            QuotasProblem::InvalidForm
+        }
+        Error::Invalid(Problem::GrantNotPositive) => QuotasProblem::AmountInvalid,
+        Error::NotFound => return (StatusCode::NOT_FOUND, QuotasProblem::RuleNotFound),
+        error => {
+            tracing::error!(%error, "{what} failed");
+            return (StatusCode::SERVICE_UNAVAILABLE, QuotasProblem::Unavailable);
+        }
+    };
+    (StatusCode::BAD_REQUEST, problem)
+}
+
+/// What a rule form holds, as typed.
+fn rule_draft(body: &[u8]) -> RuleDraft {
+    RuleDraft {
+        name: field(body, "name").unwrap_or_default(),
+        // A checkbox: present when ticked.
+        enabled: field(body, "enabled").is_some(),
+        subject: text_field(body, "subject"),
+        printers: url::form_urlencoded::parse(body)
+            .filter(|(key, _)| key == "printers")
+            .map(|(_, value)| value.into_owned())
+            .collect(),
+        metric: text_field(body, "metric"),
+        period: text_field(body, "period"),
+        rolling_days: text_field(body, "rolling_days"),
+        limit: text_field(body, "limit"),
+        enforcement: text_field(body, "enforcement"),
+    }
+}
+
+/// The rule a form asks for, or why it is refused. The domain checks the rest.
+fn requested_rule(draft: &RuleDraft, currency: &Currency) -> Result<NewRule, QuotasProblem> {
+    let subject = match SubjectChoice::parse(&draft.subject).ok_or(QuotasProblem::InvalidForm)? {
+        SubjectChoice::Everyone => Subject::Everyone,
+        SubjectChoice::Group(id) => Subject::Group(id),
+        SubjectChoice::User(id) => Subject::User(id),
+        SubjectChoice::Pool(id) => Subject::Pool(id),
+    };
+    let metric = Metric::from_keyword(&draft.metric).ok_or(QuotasProblem::InvalidForm)?;
+    let rolling_days = match draft.period.as_str() {
+        "rolling" => Some(
+            draft
+                .rolling_days
+                .parse::<u16>()
+                .ok()
+                .filter(|days| (1..=quotas::MAX_ROLLING_DAYS).contains(days))
+                .ok_or(QuotasProblem::RollingDaysInvalid {
+                    maximum: quotas::MAX_ROLLING_DAYS,
+                })?,
+        ),
+        _ => None,
+    };
+    let period =
+        Period::from_keyword(&draft.period, rolling_days).ok_or(QuotasProblem::InvalidForm)?;
+    let enforcement =
+        Enforcement::from_keyword(&draft.enforcement).ok_or(QuotasProblem::InvalidForm)?;
+    let limit = match metric {
+        Metric::Cost => currency.parse_amount(&draft.limit),
+        // `-5` reads, so the domain can say it is negative.
+        _ => draft.limit.parse::<i64>().ok(),
+    };
+    let limit = match limit {
+        Some(limit) => limit,
+        None if draft.limit.starts_with('-') => return Err(QuotasProblem::LimitNegative),
+        None => return Err(QuotasProblem::LimitInvalid),
+    };
+    Ok(NewRule {
+        name: draft.name.clone(),
+        enabled: draft.enabled,
+        subject,
+        printers: draft.printers.clone(),
+        metric,
+        period,
+        limit,
+        enforcement,
+    })
+}
+
+/// `POST /administration/quotas`: creates a rule.
+async fn create_rule(
+    State(state): State<AdministrationState>,
+    Extension(actor): Extension<User>,
+    parts: Parts,
+    body: Bytes,
+) -> Response {
+    let draft = rule_draft(&body);
+    let created = match requested_rule(&draft, &state.app.currency) {
+        Ok(rule) => quotas::create(&state.app.database, rule)
+            .await
+            .map_err(|error| quota_refused(error, "creating a quota rule")),
+        Err(problem) => Err((StatusCode::BAD_REQUEST, problem)),
+    };
+    match created {
+        Ok(rule) => {
+            tracing::info!(by = actor.username, rule, "quota rule created");
+            quotas_done(QuotasNotice::Created)
+        }
+        Err((status, problem)) => {
+            quotas_view(&state, parts, status, Some(problem), Some((None, draft))).await
+        }
+    }
+}
+
+/// `POST /administration/quotas/{id}`: changes every field of a rule.
+async fn update_rule(
+    State(state): State<AdministrationState>,
+    Extension(actor): Extension<User>,
+    Path(rule): Path<i64>,
+    parts: Parts,
+    body: Bytes,
+) -> Response {
+    let draft = rule_draft(&body);
+    let updated = match requested_rule(&draft, &state.app.currency) {
+        Ok(new) => quotas::update(&state.app.database, rule, new)
+            .await
+            .map_err(|error| quota_refused(error, "changing a quota rule")),
+        Err(problem) => Err((StatusCode::BAD_REQUEST, problem)),
+    };
+    match updated {
+        Ok(()) => {
+            tracing::info!(by = actor.username, rule, "quota rule changed");
+            quotas_done(QuotasNotice::Saved)
+        }
+        Err((status, problem)) => {
+            quotas_view(
+                &state,
+                parts,
+                status,
+                Some(problem),
+                Some((Some(rule), draft)),
+            )
+            .await
+        }
+    }
+}
+
+/// `POST /administration/quotas/{id}/enabled` with `enabled=true|false`.
+async fn set_rule_enabled(
+    State(state): State<AdministrationState>,
+    Extension(actor): Extension<User>,
+    Path(rule): Path<i64>,
+    parts: Parts,
+    body: Bytes,
+) -> Response {
+    let Some(enabled) = field(&body, "enabled").and_then(|value| value.parse::<bool>().ok()) else {
+        return quotas_view(
+            &state,
+            parts,
+            StatusCode::BAD_REQUEST,
+            Some(QuotasProblem::InvalidForm),
+            None,
+        )
+        .await;
+    };
+    let database = &state.app.database;
+    let changed = async {
+        let current = quotas::rule(database, rule).await?;
+        let new = NewRule {
+            name: current.name,
+            enabled,
+            subject: current.subject,
+            printers: current.printers,
+            metric: current.metric,
+            period: current.period,
+            limit: current.limit,
+            enforcement: current.enforcement,
+        };
+        quotas::update(database, rule, new).await
+    }
+    .await;
+    match changed {
+        Ok(()) => {
+            tracing::info!(
+                by = actor.username,
+                rule,
+                enabled,
+                "quota rule enabled changed"
+            );
+            quotas_done(if enabled {
+                QuotasNotice::Enabled
+            } else {
+                QuotasNotice::Disabled
+            })
+        }
+        Err(error) => {
+            let (status, problem) = quota_refused(error, "changing a quota rule");
+            quotas_view(&state, parts, status, Some(problem), None).await
+        }
+    }
+}
+
+/// `POST /administration/quotas/{id}/delete` with `confirm=yes`: deletes a rule with its grants
+/// and resets.
+async fn delete_rule(
+    State(state): State<AdministrationState>,
+    Extension(actor): Extension<User>,
+    Path(rule): Path<i64>,
+    parts: Parts,
+    body: Bytes,
+) -> Response {
+    let deleted = if field(&body, "confirm").as_deref() == Some("yes") {
+        quotas::delete(&state.app.database, rule)
+            .await
+            .map_err(|error| quota_refused(error, "deleting a quota rule"))
+    } else {
+        Err((StatusCode::BAD_REQUEST, QuotasProblem::ConfirmMissing))
+    };
+    match deleted {
+        Ok(()) => {
+            tracing::info!(by = actor.username, rule, "quota rule deleted");
+            quotas_done(QuotasNotice::Deleted)
+        }
+        Err((status, problem)) => quotas_view(&state, parts, status, Some(problem), None).await,
     }
 }
 

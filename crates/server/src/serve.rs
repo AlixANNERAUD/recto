@@ -83,6 +83,7 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         "/administration/groups",
         "/administration/printers",
         "/administration/scanners",
+        "/administration/quotas",
     ];
     let routes = generate_route_list_with_exclusions(
         App,

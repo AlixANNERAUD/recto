@@ -307,6 +307,85 @@
         "unknown_group": "A chosen group no longer exists. Nothing was saved.",
         "unavailable": "The change could not be saved. Try again in a moment."
       }
+    },
+    "quotas": {
+      "tab": "Quotas",
+      "document_title": "Quotas · Administration",
+      "intro": "Rules limit what people print. A rule for everyone, a group or a user gives each person their own allowance; a pool rule is one budget a group shares. Rules apply to administrators too.",
+      "load_failed": "The rules could not be loaded. Try again in a moment.",
+      "empty": "No rules",
+      "empty_body": "Without rules, everyone prints as much as they like.",
+      "new": "New rule",
+      "create": "Create rule",
+      "save": "Save rule",
+      "change": "Change {rule}",
+      "disabled": "Disabled",
+      "enable": "Enable",
+      "disable": "Disable",
+      "confirm_delete": "Delete this rule and its grants and resets",
+      "delete": "Delete rule",
+      "limit": "{amount} {period}",
+      "all_printers": "{text}, on all printers",
+      "summary": "{text}, {enforcement}",
+      "hard": "hard",
+      "soft": "soft",
+      "subject": {
+        "everyone": "Everyone",
+        "group": "Each member of {group}",
+        "user": "{user}",
+        "pool": "{group} together"
+      },
+      "fields": {
+        "name": "Name",
+        "subject": "Applies to",
+        "groups": "Each member of a group",
+        "pools": "A group together (pool)",
+        "users": "One user",
+        "metric": "Counts",
+        "limit": "Limit",
+        "limit_hint": "A whole number, or an amount in {currency} for cost.",
+        "period": "Period",
+        "rolling_days": "Days of a rolling period",
+        "rolling_days_hint": "Only for a rolling period: 1 to 366.",
+        "printers": "Printers",
+        "printers_hint": "None ticked means every printer.",
+        "enforcement": "Over the limit",
+        "hard": "Hard: refuse the job",
+        "soft": "Soft: print and warn",
+        "enabled": "Enabled"
+      },
+      "adjust": {
+        "summary": "Grant extra or reset",
+        "amount": "Extra allowance",
+        "amount_count": "A whole number, until the period ends.",
+        "amount_cost": "An amount in {currency}, until the period ends.",
+        "reason": "Reason",
+        "reset_hint": "Usage before now stops counting.",
+        "grant": "Grant extra",
+        "reset": "Reset"
+      },
+      "done": {
+        "created": "The rule was created.",
+        "saved": "The rule was saved.",
+        "enabled": "The rule is enabled.",
+        "disabled": "The rule is disabled: it no longer limits anyone.",
+        "deleted": "The rule was deleted.",
+        "granted": "The extra allowance was granted.",
+        "reset": "The usage was reset."
+      },
+      "errors": {
+        "name_empty": "The rule needs a name.",
+        "limit_invalid": "The limit must be a whole number, or for cost an amount in {currency}.",
+        "limit_negative": "The limit cannot be negative.",
+        "rolling_days": "A rolling period lasts 1 to {maximum} days.",
+        "subject_not_found": "That group or user does not exist.",
+        "invalid_form": "The form was incomplete. Try again.",
+        "not_found": "That rule no longer exists.",
+        "confirm_missing": "Tick the box to confirm the deletion.",
+        "amount_invalid": "The extra allowance must be a whole number above 0, or for cost an amount in {currency} above 0.",
+        "reason_invalid": "Give a reason of 1 to 200 characters.",
+        "unavailable": "The change could not be saved. Try again in a moment."
+      }
     }
   },
   "print": {
