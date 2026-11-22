@@ -54,6 +54,7 @@ pub struct MockPrintService {
     impressions: Mutex<Vec<(i32, u32)>>,
     unavailable: Mutex<Option<String>>,
     refusal: Mutex<Option<String>>,
+    lost_answer: Mutex<Option<String>>,
 }
 
 /// A panicking test elsewhere must not hide the state from the assertions of this one.
@@ -101,6 +102,12 @@ impl MockPrintService {
     /// answers a job with an error.
     pub fn refuse_submissions(&self, reason: &str) {
         *lock(&self.refusal) = Some(reason.to_owned());
+    }
+
+    /// Makes `submit` queue the job and then fail with `PrintError::Unconfirmed(reason)`, as
+    /// when CUPS spooled the job and its answer was lost.
+    pub fn lose_answers(&self, reason: &str) {
+        *lock(&self.lost_answer) = Some(reason.to_owned());
     }
 
     pub fn submitted(&self) -> Vec<PrintRequest> {
@@ -162,7 +169,10 @@ impl PrintService for MockPrintService {
             cost: None,
         });
         lock(&self.submitted).push(request);
-        Ok(id)
+        match lock(&self.lost_answer).clone() {
+            Some(reason) => Err(PrintError::Unconfirmed(reason)),
+            None => Ok(id),
+        }
     }
 
     async fn jobs(&self) -> Result<Vec<Job>, PrintError> {

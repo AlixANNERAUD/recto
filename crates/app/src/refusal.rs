@@ -20,6 +20,8 @@ pub enum Refusal {
     JobNotFound,
     Unavailable,
     Refused,
+    /// The print request may have reached CUPS, which did not confirm it: the job may print.
+    Unconfirmed,
     /// A hard quota rule has too little left; the rule's id travels next to the code.
     Quota,
     /// Quota rules count pages and recto could not count the document's.
@@ -29,7 +31,7 @@ pub enum Refusal {
 }
 
 impl Refusal {
-    const ALL: [Refusal; 17] = [
+    const ALL: [Refusal; 18] = [
         Refusal::TooLarge,
         Refusal::NoFile,
         Refusal::EmptyFile,
@@ -44,6 +46,7 @@ impl Refusal {
         Refusal::JobNotFound,
         Refusal::Unavailable,
         Refusal::Refused,
+        Refusal::Unconfirmed,
         Refusal::Quota,
         Refusal::Uncountable,
         Refusal::CountingBusy,
@@ -66,6 +69,7 @@ impl Refusal {
             Refusal::JobNotFound => "job_not_found",
             Refusal::Unavailable => "unavailable",
             Refusal::Refused => "refused",
+            Refusal::Unconfirmed => "unconfirmed",
             Refusal::Quota => "quota",
             Refusal::Uncountable => "uncountable",
             Refusal::CountingBusy => "counting_busy",
@@ -93,6 +97,7 @@ impl Refusal {
             Refusal::JobNotFound => t!("print.errors.job_not_found"),
             Refusal::Unavailable => t!("print.errors.unavailable"),
             Refusal::Refused => t!("print.errors.refused"),
+            Refusal::Unconfirmed => t!("print.errors.unconfirmed"),
             Refusal::Quota => t!("print.errors.quota"),
             Refusal::Uncountable => t!("print.errors.uncountable"),
             Refusal::CountingBusy => t!("print.errors.counting_busy"),

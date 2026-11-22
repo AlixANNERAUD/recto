@@ -437,6 +437,7 @@
       "job_not_found": "That job no longer exists.",
       "unavailable": "The printing service is unavailable. Try again later.",
       "refused": "The printing service refused the request.",
+      "unconfirmed": "The printing service did not confirm the job. It may still print: check Jobs before you send it again.",
       "quota": "This job goes over a print quota.",
       "quota_rule": "This job needs more than you have left of “{rule}”: {left}.",
       "uncountable": "recto could not count the pages of this PDF, and your quotas count pages. Save it again as PDF and retry.",

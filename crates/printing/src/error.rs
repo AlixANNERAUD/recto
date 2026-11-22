@@ -17,6 +17,10 @@ pub enum PrintError {
     Refused(String),
     #[error("invalid page ranges: {0}")]
     InvalidPageRanges(String),
+    /// A print request reached CUPS, or may have, and no usable answer came back: CUPS may have
+    /// queued the job. Only submitting a job reports it.
+    #[error("printing service did not confirm the job: {0}")]
+    Unconfirmed(String),
 }
 
 /// Why a CUPS administration operation failed, in terms the interface can show.

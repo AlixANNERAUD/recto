@@ -702,6 +702,38 @@ async fn a_refused_job_is_refunded() {
 }
 
 #[tokio::test]
+async fn a_job_cups_may_have_queued_stays_counted() {
+    let harness = Harness::new().await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    harness.print.lose_answers("operation timed out");
+    let response = print(
+        &harness,
+        &cookie,
+        &[("printer", "office")],
+        Some(("report.pdf", PDF)),
+    )
+    .await;
+    assert_redirect(&response, "/?error=unconfirmed");
+    // CUPS has the job: the entry stays counted, for the poll and the sweep to settle.
+    assert_eq!(harness.print.submitted().len(), 1);
+    let rows = print_jobs::Entity::find()
+        .all(&harness.database)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(!rows[0].refunded && !rows[0].finished);
+    assert_eq!(rows[0].cups_job_id, None);
+    let response = harness
+        .send(page("/?error=unconfirmed", Some(&cookie)))
+        .await;
+    assert!(
+        text(response)
+            .await
+            .contains("The printing service did not confirm the job.")
+    );
+}
+
+#[tokio::test]
 async fn print_enforces_printer_capabilities() {
     let harness = Harness::new().await;
     let cookie = harness.sign_in("alice-subject", "alice").await;

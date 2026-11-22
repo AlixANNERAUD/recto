@@ -227,8 +227,19 @@ async fn submit_form(
     };
     let id = match state.print.submit(request).await {
         Ok(id) => id,
+        // CUPS may have queued the job and printed it: refunding it now would let it print for
+        // free. The entry stays counted, and the sweep refunds it if CUPS never shows it.
+        Err(PrintError::Unconfirmed(reason)) => {
+            tracing::warn!(
+                user = user.username,
+                entry = entry_id,
+                reason,
+                "the printing service did not confirm the job"
+            );
+            return Err(Refusal::Unconfirmed.into());
+        }
         Err(error) => {
-            // Nothing printed, so the job must not count.
+            // CUPS turned the job down or never got it: nothing prints, so it must not count.
             if let Some(entry_id) = entry_id
                 && let Err(error) = ledger::refund(&state.database, entry_id).await
             {
@@ -362,6 +373,7 @@ fn refusal(error: PrintError) -> Refusal {
     tracing::warn!(%error, "the printing service refused");
     match error {
         PrintError::Unavailable(_) => Refusal::Unavailable,
+        PrintError::Unconfirmed(_) => Refusal::Unconfirmed,
         PrintError::PrinterNotFound(_) => Refusal::PrinterNotFound,
         PrintError::JobNotFound(_) => Refusal::JobNotFound,
         PrintError::Refused(_) => Refusal::Refused,

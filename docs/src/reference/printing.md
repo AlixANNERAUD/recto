@@ -50,9 +50,13 @@ end of the document selects only the pages that exist.
 
 A refunded job stops counting. A job is refunded when:
 
-- CUPS refuses it.
-- CUPS never received it: the entry still has no CUPS job id after ten minutes, for example
-  because CUPS timed out while recto sent the job.
+- CUPS refuses it with an IPP error, or recto could not connect to CUPS to send it.
+- CUPS never received it: the entry still has no CUPS job id after ten minutes.
+
+When recto sent the job but got no usable answer, such as a timeout or a garbled reply, CUPS may
+have queued it. The job is not refunded at once, since it may print: the person reads "The
+printing service did not confirm the job. It may still print: check Jobs before you send it
+again.", and the entry waits for the ten-minute rule above.
 - It ends canceled or aborted, never reached the processing state and printed no impression.
 
 Every 30 seconds, while some jobs are not final, recto asks CUPS about them and records the final

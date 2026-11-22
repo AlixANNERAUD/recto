@@ -34,7 +34,7 @@ These work without JavaScript and accept only requests from recto's own pages (s
 
 | Method and path | Does |
 | --- | --- |
-| `POST /print` | Sends the uploaded file to a printer, then redirects to `/jobs?submitted=<id>`, with `&over=<rule id>,<rule id>` when the job went over soft quota rules. A refused job redirects to `/?error=<code>`: `quota` with `&rule=<id>` for a hard quota rule, `uncountable` or `counting_busy` when a quota needs the pages of a PDF recto could not count, `unavailable` when the quota rules cannot be read, or the database fails while a rule is enabled. See [Quotas](quotas.md). |
+| `POST /print` | Sends the uploaded file to a printer, then redirects to `/jobs?submitted=<id>`, with `&over=<rule id>,<rule id>` when the job went over soft quota rules. A refused job redirects to `/?error=<code>`: `quota` with `&rule=<id>` for a hard quota rule, `uncountable` or `counting_busy` when a quota needs the pages of a PDF recto could not count, `unavailable` when the quota rules cannot be read, or the database fails while a rule is enabled, `unconfirmed` when CUPS may have received the job but did not confirm it (the job stays counted and may print). See [Quotas](quotas.md). |
 | `POST /jobs/{id}/cancel` | Cancels a job, then redirects to `/jobs`. With `RECTO_JOB_VISIBILITY=own`, a job the user may not see redirects to `/jobs?error=job_not_found`, as a missing one does. |
 | `GET /scan/results/{id}` | The result of a scan, for the preview image. |
 | `GET /scan/results/{id}/download` | The scan as a file download. |

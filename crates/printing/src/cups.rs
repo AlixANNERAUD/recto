@@ -132,12 +132,28 @@ impl Cups {
         request: impl Into<IppRequestResponse>,
         timeout: Option<Duration>,
     ) -> Result<IppRequestResponse, PrintError> {
+        self.exchange(uri, request, timeout)
+            .await
+            .map_err(|failure| match failure {
+                Failure::Unsent(error) => error,
+                Failure::Unanswered(reason) => PrintError::Unavailable(reason),
+            })
+    }
+
+    /// Sends an IPP request and reads the answer, telling a request CUPS never got from one it
+    /// may have acted on.
+    async fn exchange(
+        &self,
+        uri: &Uri,
+        request: impl Into<IppRequestResponse>,
+        timeout: Option<Duration>,
+    ) -> Result<IppRequestResponse, Failure> {
         let request = request.into();
         let mut body = request.to_bytes().to_vec();
         request
             .into_payload()
             .read_to_end(&mut body)
-            .map_err(|error| PrintError::Unavailable(error.to_string()))?;
+            .map_err(|error| Failure::Unsent(PrintError::Unavailable(error.to_string())))?;
 
         let mut post = self
             .client
@@ -147,15 +163,34 @@ impl Cups {
         if let Some(timeout) = timeout {
             post = post.timeout(timeout);
         }
-        let response = post.send().await.map_err(transport_error)?;
+        let response = post.send().await.map_err(|error| {
+            // Only a connection that never opened is sure not to have carried the request: a
+            // timeout or a broken connection may come after CUPS read it.
+            if error.is_connect() || error.is_builder() {
+                Failure::Unsent(transport_error(error))
+            } else {
+                Failure::Unanswered(error_chain(&error))
+            }
+        })?;
         let status = response.status();
         if !status.is_success() {
-            return Err(http_status_error(status.as_u16()));
+            // A server error may come from a proxy that passed the request on.
+            return Err(if status.is_server_error() {
+                Failure::Unanswered(format!(
+                    "CUPS answered with HTTP status {}",
+                    status.as_u16()
+                ))
+            } else {
+                Failure::Unsent(http_status_error(status.as_u16()))
+            });
         }
-        let bytes = response.bytes().await.map_err(transport_error)?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| Failure::Unanswered(error_chain(&error)))?;
         IppParser::new(IppReader::new(Cursor::new(bytes.to_vec())))
             .parse()
-            .map_err(|error| PrintError::Unavailable(format!("unreadable CUPS answer: {error}")))
+            .map_err(|error| Failure::Unanswered(format!("unreadable CUPS answer: {error}")))
     }
 
     /// The name of the default printer, if CUPS has one.
@@ -242,9 +277,15 @@ impl PrintService for Cups {
         .attributes(request.options.to_attributes(request.format))
         .build()
         .map_err(refused)?;
+        // What follows sending may hide a job CUPS queued: the caller must not take it as a
+        // refusal.
         let response = self
-            .send_within(&uri, operation, Some(SUBMIT_TIMEOUT))
-            .await?;
+            .exchange(&uri, operation, Some(SUBMIT_TIMEOUT))
+            .await
+            .map_err(|failure| match failure {
+                Failure::Unsent(error) => error,
+                Failure::Unanswered(reason) => PrintError::Unconfirmed(reason),
+            })?;
         check(&response, || {
             PrintError::PrinterNotFound(request.printer.clone())
         })?;
@@ -252,7 +293,7 @@ impl PrintService for Cups {
             .attributes()
             .groups_of(DelimiterTag::JobAttributes)
             .find_map(|group| integer(group, "job-id"))
-            .ok_or_else(|| PrintError::Unavailable("CUPS did not return a job id".into()))
+            .ok_or_else(|| PrintError::Unconfirmed("CUPS did not return a job id".into()))
     }
 
     async fn jobs(&self) -> Result<Vec<Job>, PrintError> {
@@ -376,6 +417,14 @@ fn http_status_error(code: u16) -> PrintError {
         // A wrong Host header (missing `ServerAlias *` in cupsd.conf) is answered with a 400.
         code => PrintError::Unavailable(format!("CUPS answered with HTTP status {code}")),
     }
+}
+
+/// Why an IPP request failed.
+enum Failure {
+    /// CUPS never got the request, or answered it with an error.
+    Unsent(PrintError),
+    /// The request reached CUPS, or may have, and no usable answer came back.
+    Unanswered(String),
 }
 
 /// Network failures. The reason goes into the message so the banner is actionable.

@@ -602,3 +602,77 @@ async fn submitting_may_take_longer_than_other_requests() {
         Err(PrintError::Unavailable(_))
     ));
 }
+
+fn report() -> PrintRequest {
+    PrintRequest {
+        printer: "office".into(),
+        document: Bytes::from_static(b"%PDF-1.7\nhello"),
+        format: DocumentFormat::Pdf,
+        job_name: "report.pdf".into(),
+        user: "alice".into(),
+        options: PrintOptions::default(),
+    }
+}
+
+/// What submitting a job answers when CUPS responds with `answer`.
+async fn submitted_with(answer: ResponseTemplate) -> Result<i32, PrintError> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(answer)
+        .mount(&server)
+        .await;
+    cups(&server).submit(report()).await
+}
+
+#[tokio::test]
+async fn a_job_cups_may_have_queued_is_unconfirmed() {
+    // CUPS received the job, and what it answered cannot say whether it queued it.
+    let garbled = ResponseTemplate::new(200)
+        .insert_header("content-type", "application/ipp")
+        .set_body_bytes(b"\x02".to_vec());
+    let result = submitted_with(garbled).await;
+    assert!(
+        matches!(result, Err(PrintError::Unconfirmed(_))),
+        "{result:?}"
+    );
+    let without_id = submitted_with(ipp(StatusCode::SuccessfulOk, vec![])).await;
+    assert!(
+        matches!(without_id, Err(PrintError::Unconfirmed(_))),
+        "{without_id:?}"
+    );
+    let gateway = submitted_with(ResponseTemplate::new(502)).await;
+    assert!(
+        matches!(gateway, Err(PrintError::Unconfirmed(_))),
+        "{gateway:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_job_cups_turned_down_or_never_got_is_not_unconfirmed() {
+    let refused = submitted_with(ipp(
+        StatusCode::ClientErrorDocumentFormatNotSupported,
+        vec![],
+    ))
+    .await;
+    assert!(
+        matches!(refused, Err(PrintError::Refused(_))),
+        "{refused:?}"
+    );
+    let busy = submitted_with(ipp(StatusCode::ServerErrorBusy, vec![])).await;
+    assert!(matches!(busy, Err(PrintError::Unavailable(_))), "{busy:?}");
+    let bad_host = submitted_with(ResponseTemplate::new(400)).await;
+    assert!(
+        matches!(bad_host, Err(PrintError::Unavailable(_))),
+        "{bad_host:?}"
+    );
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let cups = Cups::new(Url::parse(&format!("http://127.0.0.1:{port}")).unwrap());
+    let unreachable = cups.submit(report()).await;
+    assert!(
+        matches!(unreachable, Err(PrintError::Unavailable(_))),
+        "{unreachable:?}"
+    );
+}

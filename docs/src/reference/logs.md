@@ -54,6 +54,7 @@ only.
 | warn | `printer administration is off` | `error` |
 | warn | `reading a job state failed` | `error`, `job` |
 | warn | `refunded ledger entries CUPS never received` | `count` |
+| warn | `the printing service did not confirm the job`: CUPS may have queued it, so its ledger entry stays counted | `user`, `entry`, `reason` |
 | warn | `listing the devices for the administration page failed` | `error` |
 | warn | `printer administration failed` | `error`, and `by` and `printer` for a printer form |
 | warn | `listing the printers for the quotas page failed`: the page offers the printers rules already name | `error` |
