@@ -41,15 +41,21 @@ below the totals. The range stays the same.
 Next to the tables, **Download** offers three CSV files for the range shown:
 
 - **Print jobs (CSV)**: every print job, one per line, with its document, options, counts,
-  cost and state. Refunded jobs are included and marked, so it is the whole record. Use it to
-  bill people, or to pivot by day or by document.
+  cost and state. Refunded jobs are included and marked, so it is the whole record. To bill
+  people, keep only the lines where `refunded` is `false` before you add up the cost; the
+  Usage page and **This table (CSV)** already leave refunded jobs out.
 - **Scans (CSV)**: every scan, one per line.
 - **This table (CSV)**: the table on the page, by user, group, printer or scanner, without the
   total line.
 
-Excel and LibreOffice Calc open them as they are, accents included. In a script, read them as
-UTF-8 with a byte order mark, such as `encoding="utf-8-sig"` in Python. The columns are in the
-[reports reference](../reference/reports.md#csv-files).
+LibreOffice Calc asks how to read the file: choose comma as the separator. Excel opens them
+as they are, accents included, when Windows uses a comma as its list separator, as in English.
+Where it uses a semicolon, as in French or German, Excel puts each line in one cell: open the
+file with **Data**, **From Text/CSV** instead, which detects the commas. Costs use a decimal
+point, so set the column's locale to English there if they don't read as numbers.
+
+In a script, read them as UTF-8 with a byte order mark, such as `encoding="utf-8-sig"` in
+Python. The columns are in the [reports reference](../reference/reports.md#csv-files).
 
 The files hold personal data: who printed which document, and when. Each download is logged
 with the administrator who made it.
@@ -58,7 +64,8 @@ with the administrator who made it.
 
 - **A job is missing.** Jobs that printed nothing (refused by CUPS, or cancelled before
   printing) are refunded and left out. The ledger export still lists them.
-- **Pages are 0 but there are jobs.** recto could not count the pages of some documents; they
-  are in the **Unknown pages** column.
+- **Pages are 0 but there are jobs.** recto could not count the pages of some documents. The
+  **Unknown pages** column counts those jobs (jobs, not pages), and they add nothing to the
+  page columns, the cost or the totals at the top.
 - **The page says the dates are wrong.** Both dates must be between 2000 and 2999, and **To**
   cannot be before **From**.
