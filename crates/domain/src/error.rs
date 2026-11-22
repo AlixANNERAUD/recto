@@ -59,6 +59,12 @@ pub enum Problem {
     RuleNameEmpty,
     #[error("the limit cannot be negative")]
     RuleLimitNegative,
+    #[error("the limit cannot be more than {maximum}")]
+    RuleLimitTooLarge { maximum: i64 },
+    /// Grants and resets were made in the rule's metric and for its windows: a rule that has
+    /// some keeps its metric and its kind of period.
+    #[error("a rule with adjustments keeps its metric and period")]
+    RuleAdjusted,
     #[error("a rolling period lasts 1 to {maximum} days")]
     RollingDaysInvalid { maximum: u16 },
     /// The group or user a rule or an adjustment names does not exist.
@@ -69,6 +75,8 @@ pub enum Problem {
     PrinterNameEmpty,
     #[error("the extra allowance must be more than 0")]
     GrantNotPositive,
+    #[error("the extra allowance cannot be more than {maximum}")]
+    GrantTooLarge { maximum: i64 },
     /// An adjustment is for the user of a personal rule, or for the group of a pool rule.
     #[error("the adjustment does not fit the rule")]
     HolderMismatch,

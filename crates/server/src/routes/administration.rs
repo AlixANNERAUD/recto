@@ -354,10 +354,13 @@ fn refused(error: Error) -> (StatusCode, UsersProblem) {
         Error::Invalid(
             problem @ (Problem::RuleNameEmpty
             | Problem::RuleLimitNegative
+            | Problem::RuleLimitTooLarge { .. }
+            | Problem::RuleAdjusted
             | Problem::RollingDaysInvalid { .. }
             | Problem::SubjectNotFound
             | Problem::PrinterNameEmpty
             | Problem::GrantNotPositive
+            | Problem::GrantTooLarge { .. }
             | Problem::HolderMismatch),
         ) => {
             tracing::error!(%problem, "changing a user failed");
@@ -1455,6 +1458,10 @@ fn quota_refused(error: Error, what: &str) -> (StatusCode, QuotasProblem) {
     let problem = match error {
         Error::Invalid(Problem::RuleNameEmpty) => QuotasProblem::NameEmpty,
         Error::Invalid(Problem::RuleLimitNegative) => QuotasProblem::LimitNegative,
+        Error::Invalid(Problem::RuleLimitTooLarge { maximum }) => {
+            QuotasProblem::LimitTooLarge { maximum }
+        }
+        Error::Invalid(Problem::RuleAdjusted) => QuotasProblem::RuleAdjusted,
         Error::Invalid(Problem::RollingDaysInvalid { maximum }) => {
             QuotasProblem::RollingDaysInvalid { maximum }
         }
@@ -1463,6 +1470,9 @@ fn quota_refused(error: Error, what: &str) -> (StatusCode, QuotasProblem) {
             QuotasProblem::InvalidForm
         }
         Error::Invalid(Problem::GrantNotPositive) => QuotasProblem::AmountInvalid,
+        Error::Invalid(Problem::GrantTooLarge { maximum }) => {
+            QuotasProblem::AmountTooLarge { maximum }
+        }
         Error::NotFound => return (StatusCode::NOT_FOUND, QuotasProblem::RuleNotFound),
         error => {
             tracing::error!(%error, "{what} failed");

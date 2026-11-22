@@ -232,6 +232,10 @@ impl Enforcement {
 /// The longest rolling period, in days: a leap year.
 pub const MAX_ROLLING_DAYS: u16 = 366;
 
+/// The largest limit or grant, in the metric's unit. Far above any real allowance, it keeps
+/// what is summed from limits, grants and the ledger well within 64 bits.
+pub const MAX_AMOUNT: i64 = 1_000_000_000;
+
 /// A stored value recto does not know: the row was written by another version or by hand.
 fn unreadable(rule: i64, what: &str) -> Error {
     Error::Database(DbErr::Custom(format!(
@@ -308,6 +312,11 @@ async fn validated(db: &impl ConnectionTrait, rule: NewRule) -> Result<NewRule> 
     }
     if rule.limit < 0 {
         return invalid(Problem::RuleLimitNegative);
+    }
+    if rule.limit > MAX_AMOUNT {
+        return invalid(Problem::RuleLimitTooLarge {
+            maximum: MAX_AMOUNT,
+        });
     }
     if let Period::Rolling(days) = rule.period
         && !(1..=MAX_ROLLING_DAYS).contains(&days)
@@ -388,7 +397,10 @@ pub async fn create(db: &DatabaseConnection, rule: NewRule) -> Result<i64> {
     Ok(row.id)
 }
 
-/// Changes every field of a rule. Its adjustments stay.
+/// Changes every field of a rule. Its adjustments stay, so a rule that has some keeps its metric
+/// and its kind of period ([`Problem::RuleAdjusted`]): a grant of pages would otherwise become
+/// an amount of money, and a grant would keep the expiry of another period. The days of a
+/// rolling period may change.
 pub async fn update(db: &DatabaseConnection, id: i64, rule: NewRule) -> Result<()> {
     let transaction = begin_write(db).await?;
     let row = quota_rules::Entity::find_by_id(id)
@@ -396,6 +408,15 @@ pub async fn update(db: &DatabaseConnection, id: i64, rule: NewRule) -> Result<(
         .await?
         .ok_or(Error::NotFound)?;
     let rule = validated(&transaction, rule).await?;
+    if (row.metric != rule.metric.keyword() || row.period != rule.period.keyword())
+        && quota_adjustments::Entity::find()
+            .filter(quota_adjustments::Column::RuleId.eq(id))
+            .one(&transaction)
+            .await?
+            .is_some()
+    {
+        return Err(Error::Invalid(Problem::RuleAdjusted));
+    }
     let mut row: quota_rules::ActiveModel = row.into();
     row.name = Set(rule.name);
     row.enabled = Set(rule.enabled);
@@ -475,7 +496,8 @@ fn holder_columns(holder: Holder) -> (Option<i64>, Option<i64>) {
     }
 }
 
-/// Gives `holder` `amount` more of the rule for its current window (see [`grant_expiry`]).
+/// Gives `holder` `amount` more of the rule, at most [`MAX_AMOUNT`], for its current window
+/// (see [`grant_expiry`]).
 #[allow(clippy::too_many_arguments)]
 pub async fn grant(
     db: &impl ConnectionTrait,
@@ -489,6 +511,11 @@ pub async fn grant(
 ) -> Result<()> {
     if amount <= 0 {
         return Err(Error::Invalid(Problem::GrantNotPositive));
+    }
+    if amount > MAX_AMOUNT {
+        return Err(Error::Invalid(Problem::GrantTooLarge {
+            maximum: MAX_AMOUNT,
+        }));
     }
     let rule = adjusted(db, rule_id, holder).await?;
     let (user_id, group_id) = holder_columns(holder);

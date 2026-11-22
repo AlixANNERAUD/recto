@@ -16,11 +16,11 @@ Without an enabled rule, nothing is checked and nothing about quotas is shown.
 | Printers | CUPS printer names, compared without case, each kept once. None for every printer. |
 | Metric | What the rule counts: `pages`, `sheets`, `color_pages`, `mono_pages`, `jobs` or `cost`. |
 | Period | `day`, `week`, `month`, `quarter`, `year`, `rolling` with a number of days from 1 to 366, or `total`. See [Periods](#periods). |
-| Limit | A whole number, 0 or more, in the metric's unit. A cost is typed in `RECTO_CURRENCY`, such as `10.00`, and kept in the currency's smallest unit. |
+| Limit | A whole number, 0 to 1,000,000,000, in the metric's unit. A cost is typed in `RECTO_CURRENCY`, such as `10.00`, and kept in the currency's smallest unit. |
 | Enforcement | `hard` refuses a job that would go over; `soft` prints it with a warning. |
 
 A rule with no name, a limit that is not a whole number (for cost, not an amount in
-`RECTO_CURRENCY`), a negative limit, a rolling period outside 1 to 366 days, a group or user that
+`RECTO_CURRENCY`), a negative limit, a limit over 1,000,000,000, a rolling period outside 1 to 366 days, a group or user that
 does not exist, or an empty printer name is refused.
 
 ## Metrics
@@ -127,7 +127,7 @@ Each adjustment keeps a reason (1 to 200 characters), who made it and when.
 
 | Kind | Effect |
 | --- | --- |
-| Grant extra | Adds an amount, more than 0, to the limit until it expires: at the end of the window it was granted in for a calendar period, N days after it was granted for a `rolling` period, never for `total`. |
+| Grant extra | Adds an amount, more than 0 and at most 1,000,000,000, to the limit until it expires: at the end of the window it was granted in for a calendar period, N days after it was granted for a `rolling` period, never for `total`. |
 | Reset | Only jobs sent after it count toward the rule. The latest reset counts. Grants stay. |
 
 An adjustment of an `everyone` or `group` rule is for one person, not for everyone or the group.
@@ -137,7 +137,10 @@ matters.
 
 A reset is a moment, not an amount, so it stays exact on rolling periods, where earlier jobs age
 out one by one. Changing a rule keeps its adjustments, and a grant keeps the expiry it got when it
-was made. Deleting a rule deletes its adjustments.
+was made. So a rule with adjustments keeps its metric and its kind of period, since a grant of
+pages must not turn into an amount of money: such a change is refused with "This rule has grants
+or resets, so its metric and period cannot change. Create a new rule instead." Its other fields,
+the days of a rolling period included, still change. Deleting a rule deletes its adjustments.
 
 Personal adjustments are made on the **Users** page, pool adjustments on the **Quotas** page.
 

@@ -380,12 +380,15 @@
         "name_empty": "The rule needs a name.",
         "limit_invalid": "The limit must be a whole number, or for cost an amount in {currency}.",
         "limit_negative": "The limit cannot be negative.",
+        "limit_too_large": "The limit cannot be more than {maximum}.",
+        "rule_adjusted": "This rule has grants or resets, so its metric and period cannot change. Create a new rule instead.",
         "rolling_days": "A rolling period lasts 1 to {maximum} days.",
         "subject_not_found": "That group or user does not exist.",
         "invalid_form": "The form was incomplete. Try again.",
         "not_found": "That rule no longer exists.",
         "confirm_missing": "Tick the box to confirm the deletion.",
         "amount_invalid": "The extra allowance must be a whole number above 0, or for cost an amount in {currency} above 0.",
+        "amount_too_large": "The extra allowance cannot be more than {maximum}.",
         "reason_invalid": "Give a reason of 1 to 200 characters.",
         "unavailable": "The change could not be saved. Try again in a moment."
       }

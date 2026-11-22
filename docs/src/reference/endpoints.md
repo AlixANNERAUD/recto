@@ -44,7 +44,7 @@ These work without JavaScript and accept only requests from recto's own pages (s
 | `POST /administration/users/{id}/administrator` | Grants or removes administration. |
 | `POST /administration/users/{id}/disabled` | Disables or enables a user. |
 | `POST /administration/users/{id}/password` | Sets a user's password. |
-| `POST /administration/users/{id}/grant` | Grants the user extra of a quota rule until its current window ends. Fields: `rule` (the id of an `everyone` or `group` rule, or of a `user` rule for that user), `amount` (a whole number above 0; for a cost rule, an amount in `RECTO_CURRENCY` above 0) and `reason` (1 to 200 characters once trimmed). Redirects with `?done=quota_granted&user=<id>`. |
+| `POST /administration/users/{id}/grant` | Grants the user extra of a quota rule until its current window ends. Fields: `rule` (the id of an `everyone` or `group` rule, or of a `user` rule for that user), `amount` (a whole number above 0, at most 1000000000; for a cost rule, an amount in `RECTO_CURRENCY` above 0) and `reason` (1 to 200 characters once trimmed). Redirects with `?done=quota_granted&user=<id>`. |
 | `POST /administration/users/{id}/reset` | Resets the user's usage of a quota rule: only later jobs count. Fields: `rule` and `reason`, as for a grant. Redirects with `?done=quota_reset&user=<id>`. |
 | `POST /administration/printers/access` and `/administration/scanners/access` | Sets who may use a device. Fields: `device`, `access` (`everyone` or `groups`) and one `groups` field per group id; `groups` with none means administrators only. Redirects to the page with `?done=access`. Answers `400` with the page when `device` or `access` is missing or a group is unknown, and `503` when the database fails. |
 | `POST /administration/printers/forget` and `/administration/scanners/forget` | Drops the rule of a device that is gone, and for a printer its prices. Field: `device`. Redirects with `?done=forgotten`. |
@@ -53,8 +53,8 @@ These work without JavaScript and accept only requests from recto's own pages (s
 | `POST /administration/printers/describe` | Sets the description and location, an empty one clearing it. Fields: `printer`, `description`, `location`, the last two up to 1023 characters each, without control characters. Redirects with `?done=described`. |
 | `POST /administration/printers/default`, `/pause`, `/resume`, `/accept` and `/reject` | Makes the printer the default, pauses or resumes it, makes it accept or turn away jobs. Field: `printer`. Redirects with `?done=default`, `paused`, `resumed`, `accepting` or `rejecting`. |
 | `POST /administration/printers/remove` | Removes a printer from CUPS and forgets its access rule and prices. Fields: `printer` and `confirm=yes`. Redirects with `?done=removed`. |
-| `POST /administration/quotas` | Creates a quota rule. Fields: `name`; `enabled=true` for an enabled rule, absent for a disabled one; `subject` (`everyone`, `group:<id>`, `user:<id>` or `pool:<id>`); one `printers` field per printer name, none for every printer; `metric` (`pages`, `sheets`, `color_pages`, `mono_pages`, `jobs` or `cost`); `period` (`day`, `week`, `month`, `quarter`, `year`, `rolling` or `total`); `rolling_days` (1 to 366, for `rolling` only); `limit` (a whole number, 0 or more; for `cost`, an amount in `RECTO_CURRENCY`); `enforcement` (`hard` or `soft`). Redirects with `?done=created`. |
-| `POST /administration/quotas/{id}` | Changes a rule. The same fields. Its grants and resets stay. Redirects with `?done=saved`. |
+| `POST /administration/quotas` | Creates a quota rule. Fields: `name`; `enabled=true` for an enabled rule, absent for a disabled one; `subject` (`everyone`, `group:<id>`, `user:<id>` or `pool:<id>`); one `printers` field per printer name, none for every printer; `metric` (`pages`, `sheets`, `color_pages`, `mono_pages`, `jobs` or `cost`); `period` (`day`, `week`, `month`, `quarter`, `year`, `rolling` or `total`); `rolling_days` (1 to 366, for `rolling` only); `limit` (a whole number, 0 to 1000000000; for `cost`, an amount in `RECTO_CURRENCY`); `enforcement` (`hard` or `soft`). Redirects with `?done=created`. |
+| `POST /administration/quotas/{id}` | Changes a rule. The same fields. Its grants and resets stay, so a rule that has some keeps its `metric` and `period`, apart from the days of a rolling one. Redirects with `?done=saved`. |
 | `POST /administration/quotas/{id}/enabled` | Enables or disables a rule. Field: `enabled` (`true` or `false`). Redirects with `?done=enabled` or `disabled`. |
 | `POST /administration/quotas/{id}/delete` | Deletes a rule, with its grants and resets. Field: `confirm=yes`. Redirects with `?done=deleted`. |
 | `POST /administration/quotas/{id}/grant` and `/reset` | Grants extra to, or resets, the group of a pool rule. Fields as for a user's grant and reset, without `rule`. Redirects with `?done=granted` or `reset`. |
@@ -67,9 +67,9 @@ confirmation, or a change CUPS declined; `409` when adding a name CUPS already h
 CUPS refused recto or could not reach the printer; `503` when CUPS did not answer.
 
 A refused quota form, grant or reset renders its page again with the reason: `400` for an empty
-name, a limit that is not a number or not an amount, a negative limit, rolling days outside 1 to
-366, a group or user that does not exist, a deletion without `confirm=yes`, an extra allowance
-not above 0, a reason empty or over 200 characters, or a field the page never offers, such as a
+name, a limit that is not a number or not an amount, a negative limit or one over 1000000000, a
+change of metric or period of a rule with grants or resets, rolling days outside 1 to 366, a group or user that does not exist, a deletion without `confirm=yes`, an extra allowance
+not above 0 or over 1000000000, a reason empty or over 200 characters, or a field the page never offers, such as a
 grant of another user's rule, of a pool rule through a user's address, or of a rule that is not
 a pool through the Quotas page; `404` for a rule that does not exist; `503` when the database
 fails. A refused rule form keeps what was typed, and the form of the rule it changes is open.

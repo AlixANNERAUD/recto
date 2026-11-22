@@ -448,6 +448,10 @@ async fn invalid_rules_are_refused_with_the_draft_kept() {
         (vec![("limit", "-1")], "The limit cannot be negative."),
         (vec![("limit", "many")], "The limit must be a whole number"),
         (
+            vec![("limit", "1000000001")],
+            "The limit cannot be more than 1000000000.",
+        ),
+        (
             vec![("metric", "cost"), ("limit", "0.001")],
             "The limit must be a whole number",
         ),
@@ -654,6 +658,57 @@ async fn a_grant_raises_what_is_left_until_the_window_ends() {
         html.contains("7 of 5 pages used this month, plus 3 pages granted"),
         "{html}"
     );
+}
+
+#[tokio::test]
+async fn an_adjusted_rule_keeps_its_metric_and_grants_are_capped() {
+    let harness = Harness::new().await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    harness.sign_in("alice-subject", "alice").await;
+    let alice_id = harness.user_id("alice").await;
+    let rule = harness.rule(monthly_pages(5, Enforcement::Hard)).await;
+    let grant = format!("/administration/users/{alice_id}/grant");
+    let granting = |amount: &'static str| {
+        form(
+            &grant,
+            Some(&admin),
+            &[
+                ("rule", &rule.to_string()),
+                ("amount", amount),
+                ("reason", "Exam week"),
+            ],
+        )
+    };
+
+    let response = harness.send(granting("1000000001")).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let html = text(response).await;
+    assert!(
+        html.contains("The extra allowance cannot be more than 1000000000."),
+        "{html}"
+    );
+    assert!(adjustments(&harness).await.is_empty());
+    let response = harness.send(granting("3")).await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+    // The grant is in pages: the rule cannot start counting money.
+    let response = harness
+        .send(form(
+            &format!("/administration/quotas/{rule}"),
+            Some(&admin),
+            &rule_form(&[("metric", "cost"), ("limit", "5")]),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let html = text(response).await;
+    assert!(
+        html.contains(
+            "This rule has grants or resets, so its metric and period cannot change. Create a new rule instead."
+        ),
+        "{html}"
+    );
+    let kept = quotas::rule(&harness.database, rule).await.unwrap();
+    assert_eq!((kept.metric, kept.period), (Metric::Pages, Period::Month));
 }
 
 #[tokio::test]

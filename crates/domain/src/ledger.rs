@@ -36,6 +36,11 @@ pub struct Prices {
     pub sheet: i64,
 }
 
+/// The most any count of one job can be. A job counting more is past any limit already, and
+/// the cap keeps the ledger's sums within 64 bits: millions of such jobs in one window would be
+/// needed to overflow them.
+pub const MAX_COUNT: i64 = 1_000_000_000_000;
+
 /// The counts of a job. `document_pages` are the pages the job prints once its page ranges are
 /// applied, `None` when unknown; pages and sheets then stay unknown and cost nothing.
 pub fn counts(
@@ -56,18 +61,19 @@ pub fn counts(
     };
     let document_pages = i64::from(document_pages);
     let copies = i64::from(copies);
-    let pages = document_pages * copies;
+    let pages = document_pages.saturating_mul(copies).min(MAX_COUNT);
     let per_copy = if two_sided {
         (document_pages + 1) / 2
     } else {
         document_pages
     };
-    let sheets = per_copy * copies;
+    let sheets = per_copy.saturating_mul(copies).min(MAX_COUNT);
     let (color_pages, mono_pages) = if color { (pages, 0) } else { (0, pages) };
     let cost = mono_pages
         .saturating_mul(prices.mono_page)
         .saturating_add(color_pages.saturating_mul(prices.color_page))
-        .saturating_add(sheets.saturating_mul(prices.sheet));
+        .saturating_add(sheets.saturating_mul(prices.sheet))
+        .min(MAX_COUNT);
     Counts {
         pages: Some(pages),
         sheets: Some(sheets),
@@ -250,6 +256,26 @@ mod tests {
             color_mode: "color".to_owned(),
             counts: counts(Some(5), 2, true, true, Prices::default()),
         }
+    }
+
+    #[test]
+    fn counts_are_capped() {
+        let dear = Prices {
+            mono_page: i64::MAX,
+            color_page: i64::MAX,
+            sheet: i64::MAX,
+        };
+        let most = counts(Some(u32::MAX), u32::MAX, false, true, dear);
+        assert_eq!(
+            most,
+            Counts {
+                pages: Some(MAX_COUNT),
+                sheets: Some(MAX_COUNT),
+                color_pages: Some(MAX_COUNT),
+                mono_pages: Some(0),
+                cost: MAX_COUNT,
+            }
+        );
     }
 
     #[test]

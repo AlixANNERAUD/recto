@@ -49,7 +49,8 @@ shows on no other page.
 
 A change applies at once, to what people already printed in the current window too: recto
 counts from its record of every job, not from a counter. Raise a monthly limit on the 20th and
-people have more left right away.
+people have more left right away. Once a rule has grants or resets, its metric and period stay:
+to count something else, create a new rule and disable or delete the old one.
 
 ## What people see
 

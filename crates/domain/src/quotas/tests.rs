@@ -288,6 +288,108 @@ async fn invalid_rules_are_refused() {
 }
 
 #[tokio::test]
+async fn limits_and_grants_are_capped() {
+    let db = crate::testing::database().await;
+    let alice = person(&db, "alice", &[]).await;
+    let now = utc("2026-11-17T10:00:00Z");
+    let refused = |result: Result<i64>| match result {
+        Err(Error::Invalid(problem)) => problem,
+        other => panic!("{other:?}"),
+    };
+    let rule = |limit| new_rule(Subject::Everyone, Metric::Pages, Period::Month, limit);
+    assert_eq!(
+        refused(create(&db, rule(MAX_AMOUNT + 1)).await),
+        Problem::RuleLimitTooLarge {
+            maximum: MAX_AMOUNT
+        }
+    );
+    let id = create(&db, rule(MAX_AMOUNT)).await.unwrap();
+    assert!(matches!(
+        update(&db, id, rule(i64::MAX)).await,
+        Err(Error::Invalid(Problem::RuleLimitTooLarge { .. }))
+    ));
+    assert!(matches!(
+        grant(
+            &db,
+            id,
+            Holder::User(alice),
+            MAX_AMOUNT + 1,
+            "",
+            alice,
+            now,
+            TZ
+        )
+        .await,
+        Err(Error::Invalid(Problem::GrantTooLarge {
+            maximum: MAX_AMOUNT
+        }))
+    ));
+    // The most there can be still sums without overflowing.
+    for _ in 0..3 {
+        grant(&db, id, Holder::User(alice), MAX_AMOUNT, "", alice, now, TZ)
+            .await
+            .unwrap();
+    }
+    let rule = super::rule(&db, id).await.unwrap();
+    let standing = standing(&db, &rule, alice, now, TZ).await.unwrap();
+    assert_eq!(standing.granted, 3 * MAX_AMOUNT);
+    assert_eq!(standing.left, 4 * MAX_AMOUNT);
+}
+
+#[tokio::test]
+async fn an_adjusted_rule_keeps_its_metric_and_period() {
+    let db = crate::testing::database().await;
+    let alice = person(&db, "alice", &[]).await;
+    let now = utc("2026-11-17T10:00:00Z");
+    let pages = new_rule(Subject::Everyone, Metric::Pages, Period::Rolling(7), 10);
+    let id = create(&db, pages.clone()).await.unwrap();
+    // Before any adjustment, anything may change.
+    let cost = NewRule {
+        metric: Metric::Cost,
+        period: Period::Month,
+        ..pages.clone()
+    };
+    update(&db, id, cost).await.unwrap();
+    update(&db, id, pages.clone()).await.unwrap();
+
+    reset(&db, id, Holder::User(alice), "", alice, now)
+        .await
+        .unwrap();
+    for changed in [
+        NewRule {
+            metric: Metric::Cost,
+            ..pages.clone()
+        },
+        NewRule {
+            period: Period::Month,
+            ..pages.clone()
+        },
+    ] {
+        assert!(
+            matches!(
+                update(&db, id, changed.clone()).await,
+                Err(Error::Invalid(Problem::RuleAdjusted))
+            ),
+            "{changed:?}"
+        );
+    }
+    // The rest still changes, the days of a rolling period included.
+    let changed = NewRule {
+        name: "Weekly-ish".into(),
+        period: Period::Rolling(14),
+        limit: 20,
+        enabled: false,
+        ..pages
+    };
+    update(&db, id, changed).await.unwrap();
+    let rule = super::rule(&db, id).await.unwrap();
+    assert_eq!(
+        (rule.metric, rule.period, rule.limit),
+        (Metric::Pages, Period::Rolling(14), 20)
+    );
+}
+
+#[tokio::test]
 async fn usage_counts_the_window_after_the_latest_reset_minus_grants() {
     let db = crate::testing::database().await;
     let alice = person(&db, "alice", &[]).await;

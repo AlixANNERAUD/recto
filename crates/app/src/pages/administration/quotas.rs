@@ -153,6 +153,11 @@ pub enum QuotasProblem {
     /// The limit is not a whole number, or not an amount in the currency for cost.
     LimitInvalid,
     LimitNegative,
+    LimitTooLarge {
+        maximum: i64,
+    },
+    /// The rule has grants or resets, and the form changes its metric or its kind of period.
+    RuleAdjusted,
     RollingDaysInvalid {
         maximum: u16,
     },
@@ -164,6 +169,9 @@ pub enum QuotasProblem {
     ConfirmMissing,
     /// An extra allowance that is not more than 0, or not an amount.
     AmountInvalid,
+    AmountTooLarge {
+        maximum: i64,
+    },
     /// A reason that is empty or longer than 200 characters.
     ReasonInvalid,
     /// The database failed.
@@ -180,6 +188,13 @@ impl QuotasProblem {
             ),
             QuotasProblem::LimitNegative => {
                 t!("administration.quotas.errors.limit_negative").to_owned()
+            }
+            QuotasProblem::LimitTooLarge { maximum } => tf!(
+                "administration.quotas.errors.limit_too_large",
+                maximum = maximum
+            ),
+            QuotasProblem::RuleAdjusted => {
+                t!("administration.quotas.errors.rule_adjusted").to_owned()
             }
             QuotasProblem::RollingDaysInvalid { maximum } => {
                 tf!(
@@ -200,6 +215,10 @@ impl QuotasProblem {
             QuotasProblem::AmountInvalid => tf!(
                 "administration.quotas.errors.amount_invalid",
                 currency = currency.code.clone()
+            ),
+            QuotasProblem::AmountTooLarge { maximum } => tf!(
+                "administration.quotas.errors.amount_too_large",
+                maximum = maximum
             ),
             QuotasProblem::ReasonInvalid => {
                 t!("administration.quotas.errors.reason_invalid").to_owned()
