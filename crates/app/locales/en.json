@@ -426,7 +426,13 @@
       "empty": "Nothing was printed or scanned in this range.",
       "empty_body": "Choose another range above.",
       "invalid_dates": "Enter two dates between 2000 and 2999, the second on or after the first.",
-      "load_failed": "The usage could not be loaded. Try again in a moment."
+      "load_failed": "The usage could not be loaded. Try again in a moment.",
+      "download": {
+        "title": "Download",
+        "print_jobs": "Print jobs (CSV)",
+        "scans": "Scans (CSV)",
+        "totals": "This table (CSV)"
+      }
     }
   },
   "print": {

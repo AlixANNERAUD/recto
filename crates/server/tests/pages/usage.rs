@@ -359,3 +359,239 @@ async fn an_empty_range_says_so() {
     );
     assert!(!html.contains("<table"), "{html}");
 }
+
+/// A CSV export as the user: the status, the headers and the body.
+async fn export(
+    harness: &Harness,
+    file: &str,
+    query: &str,
+    cookie: &str,
+) -> (StatusCode, axum::http::HeaderMap, String) {
+    let request = Request::get(format!("/administration/usage/{file}?{query}"))
+        .header(header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap();
+    let response = harness.send(request).await;
+    let status = response.status();
+    let headers = response.headers().clone();
+    (status, headers, text(response).await)
+}
+
+const RANGE: &str = "from=2026-11-01&to=2026-11-30";
+
+#[tokio::test]
+async fn the_ledger_exports_as_csv() {
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
+    let admin = administrator(&harness, "admin-subject", "admin").await;
+    harness.sign_in("alice-subject", "alice").await;
+    let at = "2026-11-17T10:00:00Z";
+    let color = harness
+        .printed("alice", "lab", "b.pdf", Some(2), true, at)
+        .await;
+    let unknown = harness
+        .printed("alice", "office", "scan, final.pdf", None, false, at)
+        .await;
+    let refunded = harness
+        .printed("alice", "office", "=HYPERLINK(\"x\")", Some(1), false, at)
+        .await;
+    ledger::refund(&harness.database, refunded).await.unwrap();
+    harness
+        .printed(
+            "alice",
+            "office",
+            "december.pdf",
+            Some(1),
+            false,
+            "2026-12-01T00:00:00Z",
+        )
+        .await;
+
+    let (status, headers, body) = export(&harness, "print-jobs.csv", RANGE, &admin).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(headers[header::CONTENT_TYPE], "text/csv; charset=utf-8");
+    assert_eq!(
+        headers[header::CONTENT_DISPOSITION],
+        r#"attachment; filename="print-jobs-2026-11-01-2026-11-30.csv""#
+    );
+    assert_eq!(headers[header::CACHE_CONTROL], "private, no-store");
+    let lines: Vec<&str> = body.split("\r\n").collect();
+    assert_eq!(
+        lines[0],
+        "\u{feff}id,submitted_at,username,printer,document_name,document_format,document_pages,\
+         copies,sides,color_mode,pages,sheets,color_pages,mono_pages,cost,currency,state,\
+         refunded,cups_job_id"
+    );
+    assert_eq!(
+        lines[1],
+        format!(
+            "{color},2026-11-17T10:00:00+00:00,alice,lab,b.pdf,application/pdf,2,1,one-sided,\
+             color,2,2,2,0,0.66,EUR,pending,false,"
+        )
+    );
+    assert_eq!(
+        lines[2],
+        format!(
+            "{unknown},2026-11-17T10:00:00+00:00,alice,office,\"scan, final.pdf\",\
+             application/pdf,,1,one-sided,monochrome,,,,,0.00,EUR,pending,false,"
+        )
+    );
+    assert_eq!(
+        lines[3],
+        format!(
+            "{refunded},2026-11-17T10:00:00+00:00,alice,office,\"'=HYPERLINK(\"\"x\"\")\",\
+             application/pdf,1,1,one-sided,monochrome,1,1,0,1,0.05,EUR,pending,true,"
+        )
+    );
+    assert_eq!(lines[4], "");
+    assert_eq!(lines.len(), 5, "{body}");
+}
+
+#[tokio::test]
+async fn scans_export_as_csv() {
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
+    let admin = administrator(&harness, "admin-subject", "admin").await;
+    harness.sign_in("alice-subject", "alice").await;
+    let alice = harness.user_id("alice").await;
+    let at = "2026-11-17T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
+    let mut ids = Vec::new();
+    for result in ["first", "second"] {
+        let scan = NewScan {
+            user_id: Some(alice),
+            username: "alice".into(),
+            scanner: "mock:0".into(),
+            result_id: Some(result.into()),
+            source: Source::Web,
+            format: "pdf".into(),
+            pages: 3,
+        };
+        ids.push(scans::record(&harness.database, scan, at).await.unwrap());
+    }
+    scans::mark_saved(&harness.database, alice, "first")
+        .await
+        .unwrap();
+    let anonymous = harness.scanned(None, 2, "2026-11-18T10:00:00Z").await;
+
+    let (status, headers, body) = export(&harness, "scans.csv", RANGE, &admin).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        headers[header::CONTENT_DISPOSITION],
+        r#"attachment; filename="scans-2026-11-01-2026-11-30.csv""#
+    );
+    assert_eq!(
+        body,
+        format!(
+            "\u{feff}id,scanned_at,source,username,scanner,pages,format,saved\r\n\
+             {},2026-11-17T10:00:00+00:00,web,alice,mock:0,3,pdf,true\r\n\
+             {},2026-11-17T10:00:00+00:00,web,alice,mock:0,3,pdf,false\r\n\
+             {anonymous},2026-11-18T10:00:00+00:00,escl,,mock:0,2,pdf,false\r\n",
+            ids[0], ids[1]
+        )
+    );
+}
+
+#[tokio::test]
+async fn totals_export_the_chosen_breakdown() {
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
+    let admin = administrator(&harness, "admin-subject", "admin").await;
+    harness
+        .sign_in_in("alice-subject", "alice", &["design"])
+        .await;
+    let at = "2026-11-17T10:00:00Z";
+    harness
+        .printed("alice", "office", "a.pdf", Some(3), false, at)
+        .await;
+    harness
+        .printed("alice", "lab", "b.pdf", Some(2), true, at)
+        .await;
+    harness.scanned(Some("alice"), 4, at).await;
+    harness.scanned(None, 2, at).await;
+
+    let (status, headers, body) = export(&harness, "totals.csv", RANGE, &admin).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        headers[header::CONTENT_DISPOSITION],
+        r#"attachment; filename="usage-by-user-2026-11-01-2026-11-30.csv""#
+    );
+    assert_eq!(
+        body,
+        "\u{feff}username,display_name,jobs,pages,sheets,color_pages,mono_pages,cost,currency,\
+         uncounted_jobs,scans,scanned_pages,saved_scans\r\n\
+         alice,alice,2,5,5,2,3,0.81,EUR,0,1,4,0\r\n\
+         ,anonymous,0,0,0,0,0,0.00,EUR,0,1,2,0\r\n"
+    );
+
+    let by = |table: &str| format!("{RANGE}&by={table}");
+    let (_, _, body) = export(&harness, "totals.csv", &by("group"), &admin).await;
+    assert_eq!(
+        body,
+        "\u{feff}group,jobs,pages,sheets,color_pages,mono_pages,cost,currency,uncounted_jobs,\
+         scans,scanned_pages,saved_scans\r\n\
+         design,2,5,5,2,3,0.81,EUR,0,1,4,0\r\n"
+    );
+    let (_, _, body) = export(&harness, "totals.csv", &by("printer"), &admin).await;
+    assert_eq!(
+        body,
+        "\u{feff}printer,jobs,pages,sheets,color_pages,mono_pages,cost,currency,uncounted_jobs\r\n\
+         office,1,3,3,0,3,0.15,EUR,0\r\n\
+         lab,1,2,2,2,0,0.66,EUR,0\r\n"
+    );
+    let (_, headers, body) = export(&harness, "totals.csv", &by("scanner"), &admin).await;
+    assert_eq!(
+        headers[header::CONTENT_DISPOSITION],
+        r#"attachment; filename="usage-by-scanner-2026-11-01-2026-11-30.csv""#
+    );
+    assert_eq!(
+        body,
+        "\u{feff}scanner,scans,scanned_pages,saved_scans\r\nmock:0,2,6,0\r\n"
+    );
+    let (_, _, body) = export(&harness, "totals.csv", &by("bogus"), &admin).await;
+    assert!(body.starts_with("\u{feff}username,display_name,"), "{body}");
+}
+
+#[tokio::test]
+async fn exports_are_for_administrators_only() {
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
+    let alice = harness.sign_in("alice-subject", "alice").await;
+    for file in ["print-jobs.csv", "scans.csv", "totals.csv"] {
+        let (status, _, body) = export(&harness, file, RANGE, &alice).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{file}");
+        assert!(!body.contains("username"), "{file}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn exports_refuse_invalid_dates() {
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
+    let admin = administrator(&harness, "admin-subject", "admin").await;
+    for file in ["print-jobs.csv", "scans.csv", "totals.csv"] {
+        for query in [
+            "from=2026-11-02&to=2026-11-01",
+            "from=9999-12-31&to=9999-12-31",
+            "from=2026-11-01",
+        ] {
+            let (status, headers, body) = export(&harness, file, query, &admin).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{file} {query}");
+            let content_type = headers[header::CONTENT_TYPE].to_str().unwrap();
+            assert!(content_type.starts_with("text/plain"), "{file} {query}");
+            assert!(
+                body.contains("Enter two dates between 2000 and 2999"),
+                "{file} {query}: {body}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_page_links_the_exports() {
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
+    let admin = administrator(&harness, "admin-subject", "admin").await;
+    let html = harness
+        .page(&format!("{NOVEMBER}&by=printer"), &admin)
+        .await;
+    for file in ["print-jobs.csv", "scans.csv", "totals.csv"] {
+        let link = format!(
+            r#"href="/administration/usage/{file}?from=2026-11-01&amp;to=2026-11-30&amp;by=printer""#
+        );
+        assert!(html.contains(&link), "{file}: {html}");
+    }
+}

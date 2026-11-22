@@ -40,6 +40,16 @@ pub fn save_disabled(locale: Locale) -> &'static str {
     t!("scan.errors.save_disabled", locale = locale)
 }
 
+/// Why a usage export refused its range.
+pub fn invalid_usage_dates(locale: Locale) -> &'static str {
+    t!("administration.usage.invalid_dates", locale = locale)
+}
+
+/// Why a usage export failed: the database did.
+pub fn usage_unavailable(locale: Locale) -> &'static str {
+    t!("administration.usage.load_failed", locale = locale)
+}
+
 /// What went wrong while scanning or storing a scan, readable by the user. `name` is the app's
 /// name.
 pub fn scan_error(error: &ScanError, name: &str, locale: Locale) -> String {

@@ -8,7 +8,9 @@ use leptos::prelude::*;
 use super::{Section, Sections, page_data};
 use crate::{
     NotFound,
-    components::ui::{Alert, ButtonVariant, Card, Empty, Field, INPUT, Tone, button_class},
+    components::ui::{
+        Alert, ButtonVariant, Card, Empty, Field, INPUT, Tone, button_class, small_button_class,
+    },
     currency::Currency,
     layout::Layout,
     quotas::Metric,
@@ -143,6 +145,12 @@ pub fn usage_href(from: &str, to: &str, by: Breakdown) -> String {
     format!("{USAGE}?from={from}&to={to}&by={}", by.keyword())
 }
 
+/// The address of an export (`print-jobs.csv`, `scans.csv` or `totals.csv`) for a range and a
+/// table.
+pub fn export_href(file: &str, from: &str, to: &str, by: Breakdown) -> String {
+    format!("{USAGE}/{file}?from={from}&to={to}&by={}", by.keyword())
+}
+
 /// What the anonymous network scans are called in the user table.
 pub fn anonymous_label() -> &'static str {
     t!("administration.usage.anonymous")
@@ -179,7 +187,10 @@ pub fn UsagePage() -> impl IntoView {
             }
             .into_any(),
             Some(report) => view! {
-                <Tables from=data.from.clone() to=data.to.clone() by />
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <Tables from=data.from.clone() to=data.to.clone() by />
+                    <Downloads from=data.from.clone() to=data.to.clone() by />
+                </div>
                 <Total report=report.clone() currency=data.currency.clone() />
                 <UsageTable rows=report.rows by currency=data.currency.clone() />
             }
@@ -256,6 +267,35 @@ fn Tables(from: String, to: String, by: Breakdown) -> impl IntoView {
         <nav aria-label=t!("administration.usage.tables")>
             <ul class="flex flex-wrap gap-2">{links}</ul>
         </nav>
+    }
+}
+
+/// Links to the CSV files of the range: the ledger, the scan log and the table shown.
+#[component]
+fn Downloads(from: String, to: String, by: Breakdown) -> impl IntoView {
+    let links = [
+        ("print-jobs.csv", t!("administration.usage.download.print_jobs")),
+        ("scans.csv", t!("administration.usage.download.scans")),
+        ("totals.csv", t!("administration.usage.download.totals")),
+    ]
+    .into_iter()
+    .map(|(file, label)| {
+        view! {
+            <li>
+                <a href=export_href(file, &from, &to, by) class=small_button_class(ButtonVariant::Subtle)>
+                    {label}
+                </a>
+            </li>
+        }
+    })
+    .collect_view();
+    view! {
+        <div class="flex flex-wrap items-center gap-2">
+            <span id="usage-downloads" class="text-muted-foreground text-sm font-semibold">
+                {t!("administration.usage.download.title")}
+            </span>
+            <ul aria-labelledby="usage-downloads" class="flex flex-wrap gap-1">{links}</ul>
+        </div>
     }
 }
 

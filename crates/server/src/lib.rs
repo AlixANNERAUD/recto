@@ -8,6 +8,7 @@ compile_error!("the `dev-mocks` feature signs everyone in and is for debug build
 pub mod branding;
 pub mod commands;
 pub mod config;
+mod csv;
 #[cfg(any(test, all(feature = "dev-mocks", debug_assertions)))]
 pub mod dev;
 pub mod routes;

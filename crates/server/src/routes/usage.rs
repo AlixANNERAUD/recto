@@ -1,23 +1,29 @@
-//! The Usage administration page: what was printed and scanned over a range of days. It sits
-//! behind the administration router's layers, so anyone but an administrator gets 404.
+//! The Usage administration page, what was printed and scanned over a range of days, and its
+//! CSV exports. They sit behind the administration router's layers, so anyone but an
+//! administrator gets 404.
 
 use axum::{
-    Router,
+    Extension, Router,
     extract::{Query, State},
-    http::{StatusCode, Uri, request::Parts},
-    response::Response,
+    http::{HeaderValue, StatusCode, Uri, header, request::Parts},
+    response::{IntoResponse, Response},
     routing::get,
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use chrono_tz::Tz;
 use leptos::prelude::provide_context;
-use recto_app::pages::administration::usage::{
-    Breakdown, PrintTotals, Report, ScanTotals, USAGE, UsagePageData, UsageRow, anonymous_label,
+use recto_app::{
+    i18n, messages,
+    pages::administration::usage::{
+        Breakdown, PrintTotals, Report, ScanTotals, USAGE, UsagePageData, UsageRow, anonymous_label,
+    },
+    state::{Currency, User},
 };
 use recto_domain::reports::{self, Key, Range};
 use serde::Deserialize;
 
 use super::{administration::AdministrationState, render};
+use crate::csv;
 
 /// The query of the page and its exports.
 #[derive(Debug, Default, Deserialize)]
@@ -40,9 +46,20 @@ impl UsageQuery {
     }
 }
 
-/// `GET /administration/usage` and, later, its exports.
+/// `GET /administration/usage` and its exports `print-jobs.csv`, `scans.csv` and `totals.csv`.
 pub(super) fn router() -> Router<AdministrationState> {
-    Router::new().route(USAGE, get(usage_page))
+    let mut router = Router::new().route(USAGE, get(usage_page));
+    for file in [Export::PrintJobs, Export::Scans, Export::Totals] {
+        router = router.route(
+            &format!("{USAGE}/{}.csv", file.keyword()),
+            get(
+                move |State(state): State<AdministrationState>,
+                      Extension(actor): Extension<User>,
+                      parts: Parts| export(state, actor, parts, file),
+            ),
+        );
+    }
+    router
 }
 
 /// The range a query asks for: this month without dates, the local days `from` to `to`
@@ -173,6 +190,261 @@ async fn usage_page(State(state): State<AdministrationState>, parts: Parts) -> R
         provide_context(data.clone());
     })
     .await
+}
+
+/// The CSV files of the Usage page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Export {
+    /// Every ledger row of the range.
+    PrintJobs,
+    /// Every scan logged in the range.
+    Scans,
+    /// The rows of the table the page shows.
+    Totals,
+}
+
+impl Export {
+    fn keyword(self) -> &'static str {
+        match self {
+            Export::PrintJobs => "print-jobs",
+            Export::Scans => "scans",
+            Export::Totals => "totals",
+        }
+    }
+}
+
+/// The header line of a file.
+fn header_line(names: &[&str]) -> String {
+    let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
+    csv::line(&names)
+}
+
+/// An optional count: empty when unknown.
+fn count(value: Option<i64>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_default()
+}
+
+/// `GET /administration/usage/<file>.csv` with the page's query: the file, built in memory.
+/// Answers 400 with the message as text when the range cannot be read, and 503 when the
+/// database fails.
+async fn export(state: AdministrationState, actor: User, parts: Parts, file: Export) -> Response {
+    let locale = i18n::from_headers(&parts.headers);
+    let query = UsageQuery::of(&parts.uri);
+    let by = query.breakdown();
+    let tz = state.app.timezone;
+    let Ok((from, to, range)) = requested_range(&query, Utc::now(), tz) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            messages::invalid_usage_dates(locale),
+        )
+            .into_response();
+    };
+    let database = &state.app.database;
+    let currency = &state.app.currency;
+    let built = match file {
+        Export::PrintJobs => print_jobs_csv(database, range, tz, currency).await,
+        Export::Scans => scans_csv(database, range, tz).await,
+        Export::Totals => totals_csv(database, range, by, currency).await,
+    };
+    let body = match built {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::error!(%error, "exporting the usage failed");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                messages::usage_unavailable(locale),
+            )
+                .into_response();
+        }
+    };
+    let name = match file {
+        Export::Totals => format!("usage-by-{}-{from}-{to}.csv", by.keyword()),
+        _ => format!("{}-{from}-{to}.csv", file.keyword()),
+    };
+    // Personal data leaves recto: say who took which.
+    tracing::info!(
+        by = actor.username,
+        export = name,
+        from = %from,
+        to = %to,
+        "usage exported"
+    );
+    let mut response = body.into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/csv; charset=utf-8"),
+    );
+    // The name is made of recto's own words and dates, safe inside quotes.
+    if let Ok(value) = HeaderValue::from_str(&format!("attachment; filename=\"{name}\"")) {
+        headers.insert(header::CONTENT_DISPOSITION, value);
+    }
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+}
+
+/// Every ledger row of the range, refunded ones included.
+async fn print_jobs_csv(
+    database: &sea_orm::DatabaseConnection,
+    range: Range,
+    tz: Tz,
+    currency: &Currency,
+) -> recto_domain::Result<String> {
+    let mut body = String::from(csv::BOM);
+    body.push_str(&header_line(&[
+        "id",
+        "submitted_at",
+        "username",
+        "printer",
+        "document_name",
+        "document_format",
+        "document_pages",
+        "copies",
+        "sides",
+        "color_mode",
+        "pages",
+        "sheets",
+        "color_pages",
+        "mono_pages",
+        "cost",
+        "currency",
+        "state",
+        "refunded",
+        "cups_job_id",
+    ]));
+    for job in reports::print_entries(database, range).await? {
+        body.push_str(&csv::line(&[
+            job.id.to_string(),
+            job.submitted_at.with_timezone(&tz).to_rfc3339(),
+            csv::text(&job.username),
+            csv::text(&job.printer),
+            csv::text(&job.document_name),
+            csv::text(job.document_format.as_deref().unwrap_or_default()),
+            count(job.document_pages),
+            job.copies.to_string(),
+            csv::text(job.sides.as_deref().unwrap_or_default()),
+            csv::text(job.color_mode.as_deref().unwrap_or_default()),
+            count(job.pages),
+            count(job.sheets),
+            count(job.color_pages),
+            count(job.mono_pages),
+            currency.amount(job.cost),
+            csv::text(&currency.code),
+            csv::text(&job.state),
+            job.refunded.to_string(),
+            count(job.cups_job_id),
+        ]));
+    }
+    Ok(body)
+}
+
+/// Every scan logged in the range.
+async fn scans_csv(
+    database: &sea_orm::DatabaseConnection,
+    range: Range,
+    tz: Tz,
+) -> recto_domain::Result<String> {
+    let mut body = String::from(csv::BOM);
+    body.push_str(&header_line(&[
+        "id",
+        "scanned_at",
+        "source",
+        "username",
+        "scanner",
+        "pages",
+        "format",
+        "saved",
+    ]));
+    for scan in reports::scan_entries(database, range).await? {
+        body.push_str(&csv::line(&[
+            scan.id.to_string(),
+            scan.scanned_at.with_timezone(&tz).to_rfc3339(),
+            csv::text(&scan.source),
+            csv::text(&scan.username),
+            csv::text(&scan.scanner),
+            scan.pages.to_string(),
+            csv::text(&scan.format),
+            scan.saved.to_string(),
+        ]));
+    }
+    Ok(body)
+}
+
+/// The rows of the table `by`, in the page's order, without a total line, which would get in
+/// the way of a pivot.
+async fn totals_csv(
+    database: &sea_orm::DatabaseConnection,
+    range: Range,
+    by: Breakdown,
+    currency: &Currency,
+) -> recto_domain::Result<String> {
+    const PRINT: [&str; 8] = [
+        "jobs",
+        "pages",
+        "sheets",
+        "color_pages",
+        "mono_pages",
+        "cost",
+        "currency",
+        "uncounted_jobs",
+    ];
+    const SCAN: [&str; 3] = ["scans", "scanned_pages", "saved_scans"];
+    let names: &[&str] = match by {
+        Breakdown::User => &["username", "display_name"],
+        Breakdown::Group => &["group"],
+        Breakdown::Printer => &["printer"],
+        Breakdown::Scanner => &["scanner"],
+    };
+    let mut columns: Vec<&str> = names.to_vec();
+    if by != Breakdown::Scanner {
+        columns.extend(PRINT);
+    }
+    if by != Breakdown::Printer {
+        columns.extend(SCAN);
+    }
+    let mut body = String::from(csv::BOM);
+    body.push_str(&header_line(&columns));
+    for row in reports::rows(database, range, domain_breakdown(by)).await? {
+        let mut cells = match &row.key {
+            Key::User {
+                username,
+                display_name,
+                ..
+            } => vec![csv::text(username), csv::text(display_name)],
+            Key::Anonymous => vec![String::new(), "anonymous".to_owned()],
+            Key::Group { name, .. } | Key::Printer(name) | Key::Scanner(name) => {
+                vec![csv::text(name)]
+            }
+        };
+        if let Some(print) = row.print {
+            cells.extend([
+                print.jobs.to_string(),
+                print.pages.to_string(),
+                print.sheets.to_string(),
+                print.color_pages.to_string(),
+                print.mono_pages.to_string(),
+                currency.amount(print.cost),
+                csv::text(&currency.code),
+                print.uncounted.to_string(),
+            ]);
+        }
+        if let Some(scan) = row.scan {
+            cells.extend([
+                scan.scans.to_string(),
+                scan.pages.to_string(),
+                scan.saved.to_string(),
+            ]);
+        }
+        body.push_str(&csv::line(&cells));
+    }
+    Ok(body)
 }
 
 #[cfg(test)]
