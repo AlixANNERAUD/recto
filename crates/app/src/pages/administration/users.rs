@@ -416,14 +416,15 @@ fn UserTableRow(
             .quotas
             .iter()
             .map(|allowance| {
-                let used = allowance.used(&currency);
+                // One key, so that a language can order and punctuate the name and the usage.
+                let usage = tf!(
+                    "administration.users.quota_usage",
+                    rule = allowance.name.clone(),
+                    used = allowance.used(&currency)
+                );
                 view! {
                     <li class="grid gap-1">
-                        <span>
-                            <span class="font-medium">{allowance.name.clone()}</span>
-                            ": "
-                            {used}
-                        </span>
+                        <span>{usage}</span>
                         <Adjust
                             action=format!("/administration/users/{id}")
                             prefix=format!("user-{id}-rule-{}", allowance.rule)

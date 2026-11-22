@@ -712,7 +712,10 @@ async fn a_grant_raises_what_is_left_until_the_window_ends() {
     harness.used("alice", 5).await;
 
     let html = harness.html("/administration/users", &admin).await;
-    assert!(html.contains("5 of 5 pages used this month"), "{html}");
+    assert!(
+        html.contains("Monthly pages: 5 of 5 pages used this month"),
+        "{html}"
+    );
     let response = harness
         .send(form(
             &format!("/administration/users/{alice_id}/grant"),
