@@ -22,6 +22,13 @@ const ZERO_DECIMAL: [&str; 16] = [
     "XAF", "XOF", "XPF",
 ];
 
+impl Default for Currency {
+    /// Euros, the default of `RECTO_CURRENCY`.
+    fn default() -> Self {
+        Self::new("EUR")
+    }
+}
+
 impl Currency {
     /// The largest amount [`Currency::parse_amount`] accepts, in major units: far above any
     /// price, and far below where minor units overflow.

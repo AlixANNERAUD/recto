@@ -1,21 +1,28 @@
-//! `/administration/users`: every user, how they sign in, and the forms that create a local
-//! user, grant or remove administration, disable or enable a user, and set a new password.
+//! `/administration/users`: every user, how they sign in, what they used of each quota rule
+//! that applies to them, and the forms that create a local user, grant or remove
+//! administration, disable or enable a user, set a new password, and grant extra or reset a
+//! quota.
 //! The server answers an accepted form with `/administration/users?done=<notice>&user=<id>`
 //! and a refused one by rendering this page again with its [`UsersRefusal`].
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_query_map;
 
-use super::{Section, Sections, page_data};
+use super::{
+    Section, Sections, page_data,
+    quotas::{Adjust, QuotasProblem},
+};
 use crate::{
     NotFound,
     components::ui::{
         Alert, Badge, ButtonVariant, Card, Field, INPUT, LABEL, Tone, button_class,
         small_button_class,
     },
+    currency::Currency,
     display::{iso_time, relative_time, unix_now},
     layout::Layout,
     pages::sign_in::SignInMethods,
+    quotas::Allowance,
     t, tf,
 };
 
@@ -36,6 +43,8 @@ pub struct UserRow {
     pub is_disabled: bool,
     /// In seconds since the Unix epoch.
     pub last_sign_in: Option<i64>,
+    /// What the user used of each enabled personal rule that applies to them, by rule id.
+    pub quotas: Vec<Allowance>,
 }
 
 /// What the server hands the page.
@@ -46,6 +55,7 @@ pub struct UsersPageData {
     pub refusal: Option<UsersRefusal>,
     /// What the New local user form shows: after a refusal, what was typed but the password.
     pub draft: NewUserDraft,
+    pub currency: Currency,
 }
 
 /// The New local user form's fields, without the password, which never comes back.
@@ -79,12 +89,14 @@ pub enum UsersProblem {
     OwnAccount,
     AdministratorFromClaim,
     UserNotFound,
+    /// A Grant extra or Reset form was refused.
+    Quota(QuotasProblem),
     /// The database failed.
     Unavailable,
 }
 
 impl UsersRefusal {
-    fn message(&self) -> String {
+    fn message(&self, currency: &Currency) -> String {
         let message = match self.problem {
             UsersProblem::UsernameInvalid => {
                 t!("administration.errors.username_invalid").to_owned()
@@ -102,6 +114,7 @@ impl UsersRefusal {
                 t!("administration.errors.from_claim").to_owned()
             }
             UsersProblem::UserNotFound => t!("administration.errors.not_found").to_owned(),
+            UsersProblem::Quota(problem) => problem.message(currency),
             UsersProblem::Unavailable => t!("administration.errors.unavailable").to_owned(),
         };
         match &self.username {
@@ -125,16 +138,20 @@ pub enum Notice {
     Disabled,
     Enabled,
     PasswordSet,
+    QuotaGranted,
+    QuotaReset,
 }
 
 impl Notice {
-    const ALL: [Notice; 6] = [
+    const ALL: [Notice; 8] = [
         Notice::Created,
         Notice::Granted,
         Notice::Removed,
         Notice::Disabled,
         Notice::Enabled,
         Notice::PasswordSet,
+        Notice::QuotaGranted,
+        Notice::QuotaReset,
     ];
 
     /// The value of the `done` query parameter.
@@ -146,6 +163,8 @@ impl Notice {
             Notice::Disabled => "disabled",
             Notice::Enabled => "enabled",
             Notice::PasswordSet => "password_set",
+            Notice::QuotaGranted => "quota_granted",
+            Notice::QuotaReset => "quota_reset",
         }
     }
 
@@ -161,6 +180,8 @@ impl Notice {
             Notice::Disabled => tf!("administration.done.disabled", username = username),
             Notice::Enabled => tf!("administration.done.enabled", username = username),
             Notice::PasswordSet => tf!("administration.done.password_set", username = username),
+            Notice::QuotaGranted => tf!("administration.done.quota_granted", username = username),
+            Notice::QuotaReset => tf!("administration.done.quota_reset", username = username),
         }
     }
 }
@@ -183,7 +204,12 @@ pub fn UsersPage() -> impl IntoView {
     let methods = SignInMethods::current();
     let local_accounts = methods.is_some_and(|methods| methods.password);
     let minimum = methods.map_or(0, |methods| methods.password_minimum_length);
-    let alert = if let Some(message) = data.refusal.as_ref().map(UsersRefusal::message) {
+    let currency = data.currency.clone();
+    let alert = if let Some(message) = data
+        .refusal
+        .as_ref()
+        .map(|refusal| refusal.message(&currency))
+    {
         Some(view! { <Alert tone=Tone::Danger>{message}</Alert> }.into_any())
     } else {
         data.users
@@ -193,7 +219,7 @@ pub fn UsersPage() -> impl IntoView {
     };
     let create = local_accounts.then(|| view! { <NewUser draft=data.draft.clone() minimum /> });
     let list = match data.users {
-        Some(users) => view! { <UserTable users me local_accounts minimum /> }.into_any(),
+        Some(users) => view! { <UserTable users me local_accounts minimum currency /> }.into_any(),
         None => view! {
             <Alert tone=Tone::Danger>{t!("administration.users.load_failed")}</Alert>
         }
@@ -310,12 +336,30 @@ fn label(text: &'static str) -> impl IntoView + use<> {
 /// the actions are in reach without scrolling. The ARIA roles keep the table's meaning for
 /// screen readers, which some browsers drop once the elements no longer display as a table.
 #[component]
-fn UserTable(users: Vec<UserRow>, me: i64, local_accounts: bool, minimum: usize) -> impl IntoView {
+fn UserTable(
+    users: Vec<UserRow>,
+    me: i64,
+    local_accounts: bool,
+    minimum: usize,
+    currency: Currency,
+) -> impl IntoView {
     let now = unix_now();
+    // Without rules the column would be empty for everyone.
+    let quotas = users.iter().any(|user| !user.quotas.is_empty());
     let rows = users
         .into_iter()
-        .map(|user| view! { <UserTableRow user me local_accounts minimum now /> })
+        .map(|user| {
+            let currency = currency.clone();
+            view! { <UserTableRow user me local_accounts minimum now quotas currency /> }
+        })
         .collect_view();
+    let quotas_head = quotas.then(|| {
+        view! {
+            <th role="columnheader" scope="col" class=HEAD>
+                {t!("administration.users.columns.quotas")}
+            </th>
+        }
+    });
     view! {
         <section class="bg-card overflow-hidden rounded-lg border shadow-[0_1px_2px_rgba(0,0,0,0.08)]">
             // Positioned, so the visually hidden heading of the last column stays inside it too.
@@ -341,6 +385,7 @@ fn UserTable(users: Vec<UserRow>, me: i64, local_accounts: bool, minimum: usize)
                             <th role="columnheader" scope="col" class=HEAD>
                                 {t!("administration.users.columns.last_sign_in")}
                             </th>
+                            {quotas_head}
                             <th role="columnheader" scope="col" class=format!("{HEAD} pr-4 md:pr-6")>
                                 <span class="sr-only">{t!("administration.users.columns.actions")}</span>
                             </th>
@@ -362,7 +407,41 @@ fn UserTableRow(
     local_accounts: bool,
     minimum: usize,
     now: i64,
+    quotas: bool,
+    currency: Currency,
 ) -> impl IntoView {
+    let id = user.id;
+    let usage = quotas.then(|| {
+        let lines = user
+            .quotas
+            .iter()
+            .map(|allowance| {
+                let used = allowance.used(&currency);
+                view! {
+                    <li class="grid gap-1">
+                        <span>
+                            <span class="font-medium">{allowance.name.clone()}</span>
+                            ": "
+                            {used}
+                        </span>
+                        <Adjust
+                            action=format!("/administration/users/{id}")
+                            prefix=format!("user-{id}-rule-{}", allowance.rule)
+                            metric=allowance.metric
+                            currency=currency.clone()
+                            rule=allowance.rule
+                        />
+                    </li>
+                }
+            })
+            .collect_view();
+        view! {
+            <td role="cell" class=CELL>
+                {label(t!("administration.users.columns.quotas"))}
+                <ul class="grid gap-2">{lines}</ul>
+            </td>
+        }
+    });
     let groups = if user.groups.is_empty() {
         view! { <span class="text-muted-foreground">{t!("administration.users.no_groups")}</span> }
             .into_any()
@@ -448,6 +527,7 @@ fn UserTableRow(
                 {label(t!("administration.users.columns.last_sign_in"))}
                 {last_sign_in}
             </td>
+            {usage}
             <td role="cell" class=format!("{CELL} col-span-2 md:pr-6")>{actions}</td>
         </tr>
     }

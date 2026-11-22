@@ -120,7 +120,8 @@
         "sign_in": "Sign-in",
         "status": "Status",
         "last_sign_in": "Last sign-in",
-        "actions": "Actions"
+        "actions": "Actions",
+        "quotas": "Quotas"
       },
       "no_groups": "None",
       "groups_separator": ", ",
@@ -164,7 +165,9 @@
       "removed": "{username} is no longer an administrator.",
       "disabled": "{username} is disabled and was signed out.",
       "enabled": "{username} can sign in again.",
-      "password_set": "The password of {username} was set, and {username} was signed out everywhere."
+      "password_set": "The password of {username} was set, and {username} was signed out everywhere.",
+      "quota_granted": "Extra was granted to {username}.",
+      "quota_reset": "The usage of {username} was reset."
     },
     "errors": {
       "about": "{username}: {message}",

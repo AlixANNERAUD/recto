@@ -43,7 +43,7 @@ use recto_domain::{
     groups,
     passwords::PasswordPolicy,
     prices::{self, Prices},
-    quotas::{self, Enforcement, Metric, NewRule, Period, Rule, Subject},
+    quotas::{self, Enforcement, Holder, Metric, NewRule, Period, Rule, Subject},
     users::{self, NewLocalUser, UserSummary},
 };
 use recto_printing::{AdminError, Driver, NewPrinter, PrinterAdmin, PrinterState};
@@ -83,6 +83,54 @@ pub fn router(app: AppState, auth: &AuthState) -> Router {
         )
         .route("/administration/users/{id}/disabled", post(set_disabled))
         .route("/administration/users/{id}/password", post(set_password))
+        .route(
+            "/administration/users/{id}/grant",
+            post(
+                |State(state): State<AdministrationState>,
+                 Extension(actor): Extension<User>,
+                 Path(id): Path<i64>,
+                 parts: Parts,
+                 Form(fields): Form<AdjustFields>| {
+                    adjust_user(state, actor, id, parts, fields, true)
+                },
+            ),
+        )
+        .route(
+            "/administration/users/{id}/reset",
+            post(
+                |State(state): State<AdministrationState>,
+                 Extension(actor): Extension<User>,
+                 Path(id): Path<i64>,
+                 parts: Parts,
+                 Form(fields): Form<AdjustFields>| {
+                    adjust_user(state, actor, id, parts, fields, false)
+                },
+            ),
+        )
+        .route(
+            "/administration/quotas/{id}/grant",
+            post(
+                |State(state): State<AdministrationState>,
+                 Extension(actor): Extension<User>,
+                 Path(id): Path<i64>,
+                 parts: Parts,
+                 Form(fields): Form<AdjustFields>| {
+                    adjust_pool(state, actor, id, parts, fields, true)
+                },
+            ),
+        )
+        .route(
+            "/administration/quotas/{id}/reset",
+            post(
+                |State(state): State<AdministrationState>,
+                 Extension(actor): Extension<User>,
+                 Path(id): Path<i64>,
+                 parts: Parts,
+                 Form(fields): Form<AdjustFields>| {
+                    adjust_pool(state, actor, id, parts, fields, false)
+                },
+            ),
+        )
         .route("/administration/groups", get(groups_page))
         .route(PRINTERS, get(printers_page))
         .route(SCANNERS, get(scanners_page))
@@ -163,7 +211,14 @@ async fn users_view(
     draft: NewUserDraft,
 ) -> Response {
     let users = match users::list(&state.app.database).await {
-        Ok(users) => Some(users.into_iter().map(user_row).collect()),
+        Ok(users) => {
+            let mut rows: Vec<UserRow> = users.into_iter().map(user_row).collect();
+            if let Err(error) = add_usage(state, &mut rows).await {
+                // The users still show, without their usage.
+                tracing::error!(%error, "reading the quota usage failed");
+            }
+            Some(rows)
+        }
         Err(error) => {
             tracing::error!(%error, "listing the users failed");
             None
@@ -182,6 +237,7 @@ async fn users_view(
         users,
         refusal,
         draft,
+        currency: state.app.currency.clone(),
     };
     render(&state.app, state.methods, parts, status, move || {
         provide_context(data.clone());
@@ -203,7 +259,40 @@ fn user_row(summary: UserSummary) -> UserRow {
         administrator_from_claim: user.administrator_from_claim,
         is_disabled: user.is_disabled,
         last_sign_in: user.last_sign_in_at.map(|time| time.timestamp()),
+        quotas: Vec::new(),
     }
+}
+
+/// Fills in what each user used of the enabled personal rules that apply to them on any
+/// printer. Pools are the group's, so the Quotas page shows them.
+async fn add_usage(state: &AdministrationState, rows: &mut [UserRow]) -> Result<(), Error> {
+    let database = &state.app.database;
+    let rules = quotas::rules(database).await?;
+    if !rules.iter().any(|rule| rule.enabled) {
+        return Ok(());
+    }
+    // A name no printer has picks the rules for every printer; each printer a rule names picks
+    // its own.
+    let mut printers = vec![String::new()];
+    printers.extend(rules.iter().flat_map(|rule| rule.printers.iter().cloned()));
+    let now = chrono::Utc::now();
+    for row in rows.iter_mut() {
+        let groups = access::group_ids_of(database, row.id).await?;
+        let mut applicable = std::collections::BTreeMap::new();
+        for printer in &printers {
+            for rule in quotas::applicable(&rules, row.id, &groups, printer) {
+                if !matches!(rule.subject, Subject::Pool(_)) {
+                    applicable.insert(rule.id, rule);
+                }
+            }
+        }
+        for rule in applicable.values() {
+            let standing =
+                quotas::standing(database, rule, row.id, now, state.app.timezone).await?;
+            row.quotas.push(Allowance::from(&standing));
+        }
+    }
+    Ok(())
 }
 
 /// `GET /administration/groups`.
@@ -1259,9 +1348,17 @@ async fn quotas_view(
         let rules = quotas::rules(database).await?;
         let groups = groups::list(database).await?;
         let users = users::list(database).await?;
+        let now = chrono::Utc::now();
         let mut rows = Vec::with_capacity(rules.len());
         for rule in rules {
-            rows.push(rule_row(rule, None));
+            // A pool's standing does not depend on whom it is read for.
+            let pool = match rule.subject {
+                Subject::Pool(_) => Some(Allowance::from(
+                    &quotas::standing(database, &rule, 0, now, state.app.timezone).await?,
+                )),
+                _ => None,
+            };
+            rows.push(rule_row(rule, pool));
         }
         let groups: Vec<Choice> = groups
             .into_iter()
@@ -1576,6 +1673,188 @@ async fn delete_rule(
             tracing::info!(by = actor.username, rule, "quota rule deleted");
             quotas_done(QuotasNotice::Deleted)
         }
+        Err((status, problem)) => quotas_view(&state, parts, status, Some(problem), None).await,
+    }
+}
+
+/// The longest reason an adjustment keeps, in characters.
+const MAX_REASON: usize = 200;
+
+/// Grants extra (`amount` typed in the rule's unit) or resets (`None`) a rule for `holder`, and
+/// logs it. Returns the amount granted in the rule's unit.
+async fn adjust(
+    state: &AdministrationState,
+    actor: &User,
+    rule_id: i64,
+    holder: Holder,
+    amount: Option<String>,
+    reason: &str,
+) -> Result<(), (StatusCode, QuotasProblem)> {
+    let reason = reason.trim();
+    if reason.is_empty() || reason.chars().count() > MAX_REASON {
+        return Err((StatusCode::BAD_REQUEST, QuotasProblem::ReasonInvalid));
+    }
+    let database = &state.app.database;
+    let rule = quotas::rule(database, rule_id)
+        .await
+        .map_err(|error| quota_refused(error, "adjusting a quota"))?;
+    let now = chrono::Utc::now();
+    let (user, group) = match holder {
+        Holder::User(id) => (Some(id), None),
+        Holder::Group(id) => (None, Some(id)),
+    };
+    match amount {
+        Some(text) => {
+            let amount = match rule.metric {
+                Metric::Cost => state.app.currency.parse_amount(&text),
+                _ => text.trim().parse::<i64>().ok(),
+            }
+            .filter(|amount| *amount > 0)
+            .ok_or((StatusCode::BAD_REQUEST, QuotasProblem::AmountInvalid))?;
+            quotas::grant(
+                database,
+                rule_id,
+                holder,
+                amount,
+                reason,
+                actor.id,
+                now,
+                state.app.timezone,
+            )
+            .await
+            .map_err(|error| quota_refused(error, "granting extra"))?;
+            tracing::info!(
+                by = actor.username,
+                rule = rule_id,
+                user,
+                group,
+                amount,
+                "quota granted"
+            );
+        }
+        None => {
+            quotas::reset(database, rule_id, holder, reason, actor.id, now)
+                .await
+                .map_err(|error| quota_refused(error, "resetting a quota"))?;
+            tracing::info!(
+                by = actor.username,
+                rule = rule_id,
+                user,
+                group,
+                "quota reset"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct AdjustFields {
+    rule: String,
+    amount: Option<String>,
+    reason: String,
+}
+
+/// `POST /administration/users/{id}/grant` with `rule`, `amount` and `reason`, and
+/// `/administration/users/{id}/reset` with `rule` and `reason`.
+async fn adjust_user(
+    state: AdministrationState,
+    actor: User,
+    user_id: i64,
+    parts: Parts,
+    fields: AdjustFields,
+    grant: bool,
+) -> Response {
+    let adjusted = match fields.rule.trim().parse::<i64>() {
+        Ok(rule) => {
+            let amount = if grant {
+                Some(fields.amount.unwrap_or_default())
+            } else {
+                None
+            };
+            adjust(
+                &state,
+                &actor,
+                rule,
+                Holder::User(user_id),
+                amount,
+                &fields.reason,
+            )
+            .await
+        }
+        Err(_) => Err((StatusCode::BAD_REQUEST, QuotasProblem::InvalidForm)),
+    };
+    match adjusted {
+        Ok(()) => done(
+            if grant {
+                Notice::QuotaGranted
+            } else {
+                Notice::QuotaReset
+            },
+            user_id,
+        ),
+        Err((status, problem)) => {
+            // The user being gone is what the form meets, more than a mismatch.
+            let username = match users::find_by_id(&state.app.database, user_id).await {
+                Ok(user) => user.map(|user| user.username),
+                Err(_) => None,
+            };
+            let problem = match (problem, &username) {
+                (QuotasProblem::SubjectNotFound, None) => UsersProblem::UserNotFound,
+                (problem, _) => UsersProblem::Quota(problem),
+            };
+            let refusal = UsersRefusal { problem, username };
+            users_view(
+                &state,
+                parts,
+                status,
+                Some(refusal),
+                NewUserDraft::default(),
+            )
+            .await
+        }
+    }
+}
+
+/// `POST /administration/quotas/{id}/grant` with `amount` and `reason`, and `/reset` with
+/// `reason`: for the group of a pool rule.
+async fn adjust_pool(
+    state: AdministrationState,
+    actor: User,
+    rule: i64,
+    parts: Parts,
+    fields: AdjustFields,
+    grant: bool,
+) -> Response {
+    let adjusted = match quotas::rule(&state.app.database, rule).await {
+        Ok(found) => match found.subject {
+            Subject::Pool(group) => {
+                let amount = if grant {
+                    Some(fields.amount.unwrap_or_default())
+                } else {
+                    None
+                };
+                adjust(
+                    &state,
+                    &actor,
+                    rule,
+                    Holder::Group(group),
+                    amount,
+                    &fields.reason,
+                )
+                .await
+            }
+            _ => Err((StatusCode::BAD_REQUEST, QuotasProblem::InvalidForm)),
+        },
+        Err(error) => Err(quota_refused(error, "adjusting a quota")),
+    };
+    match adjusted {
+        Ok(()) => quotas_done(if grant {
+            QuotasNotice::Granted
+        } else {
+            QuotasNotice::Reset
+        }),
         Err((status, problem)) => quotas_view(&state, parts, status, Some(problem), None).await,
     }
 }

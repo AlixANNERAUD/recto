@@ -601,3 +601,220 @@ async fn quotas_need_an_administrator() {
     assert_eq!(rules.len(), 1);
     assert!(rules[0].enabled);
 }
+
+async fn adjustments(harness: &Harness) -> Vec<recto_entity::quota_adjustments::Model> {
+    recto_entity::quota_adjustments::Entity::find()
+        .all(&harness.database)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_grant_raises_what_is_left_until_the_window_ends() {
+    let harness = Harness::new().await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    let alice = harness.sign_in("alice-subject", "alice").await;
+    let alice_id = harness.user_id("alice").await;
+    let rule = harness.rule(monthly_pages(5, Enforcement::Hard)).await;
+    harness.used("alice", 5).await;
+
+    let html = harness.html("/administration/users", &admin).await;
+    assert!(html.contains("5 of 5 pages used this month"), "{html}");
+    let response = harness
+        .send(form(
+            &format!("/administration/users/{alice_id}/grant"),
+            Some(&admin),
+            &[
+                ("rule", &rule.to_string()),
+                ("amount", "3"),
+                ("reason", "Exam week"),
+            ],
+        ))
+        .await;
+    assert_redirect(
+        &response,
+        &format!("/administration/users?done=quota_granted&user={alice_id}"),
+    );
+    let rows = adjustments(&harness).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].amount, Some(3));
+    assert_eq!(rows[0].reason, "Exam week");
+    assert!(rows[0].expires_at.is_some());
+
+    let response = harness.print_pages(&alice, 2).await;
+    assert_redirect(&response, "/jobs?submitted=8");
+    let html = harness
+        .html(
+            &format!("/administration/users?done=quota_granted&user={alice_id}"),
+            &admin,
+        )
+        .await;
+    assert!(html.contains("Extra was granted to alice."), "{html}");
+    assert!(
+        html.contains("7 of 5 pages used this month, plus 3 pages granted"),
+        "{html}"
+    );
+}
+
+#[tokio::test]
+async fn a_reset_makes_earlier_usage_stop_counting() {
+    let harness = Harness::new().await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    let alice = harness.sign_in("alice-subject", "alice").await;
+    let alice_id = harness.user_id("alice").await;
+    let rule = harness.rule(monthly_pages(5, Enforcement::Hard)).await;
+    harness.used("alice", 5).await;
+
+    let response = harness
+        .send(form(
+            &format!("/administration/users/{alice_id}/reset"),
+            Some(&admin),
+            &[("rule", &rule.to_string()), ("reason", "New term")],
+        ))
+        .await;
+    assert_redirect(
+        &response,
+        &format!("/administration/users?done=quota_reset&user={alice_id}"),
+    );
+    let response = harness.print_pages(&alice, 2).await;
+    assert_redirect(&response, "/jobs?submitted=8");
+    let html = harness.html("/administration/users", &admin).await;
+    assert!(html.contains("2 of 5 pages used this month"), "{html}");
+}
+
+#[tokio::test]
+async fn a_pool_is_granted_and_reset_for_its_group() {
+    let harness = Harness::new().await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    let alice = harness
+        .member_of("alice-subject", "alice", &["design"])
+        .await;
+    let design = harness.group_id("design").await;
+    let rule = harness
+        .rule(NewRule {
+            name: "Design budget".into(),
+            subject: Subject::Pool(design),
+            ..monthly_pages(2, Enforcement::Hard)
+        })
+        .await;
+    harness.used("alice", 2).await;
+    let response = harness.print_pages(&alice, 1).await;
+    assert_redirect(&response, &format!("/?error=quota&rule={rule}"));
+
+    let path = format!("/administration/quotas/{rule}");
+    let response = harness
+        .send(form(
+            &format!("{path}/grant"),
+            Some(&admin),
+            &[("amount", "1"), ("reason", "Deadline")],
+        ))
+        .await;
+    assert_redirect(&response, "/administration/quotas?done=granted");
+    let rows = adjustments(&harness).await;
+    assert_eq!((rows[0].group_id, rows[0].user_id), (Some(design), None));
+    let response = harness.print_pages(&alice, 1).await;
+    assert_redirect(&response, "/jobs?submitted=8");
+    let html = harness.html("/administration/quotas", &admin).await;
+    assert!(
+        html.contains("3 of 2 pages used this month, plus 1 page granted"),
+        "{html}"
+    );
+
+    let response = harness
+        .send(form(
+            &format!("{path}/reset"),
+            Some(&admin),
+            &[("reason", "New month")],
+        ))
+        .await;
+    assert_redirect(&response, "/administration/quotas?done=reset");
+    let html = harness.html("/administration/quotas", &admin).await;
+    assert!(html.contains("0 of 2 pages used this month"), "{html}");
+
+    // Personal rules are adjusted on the Users page, not here.
+    let personal = harness.rule(monthly_pages(5, Enforcement::Hard)).await;
+    let response = harness
+        .send(form(
+            &format!("/administration/quotas/{personal}/reset"),
+            Some(&admin),
+            &[("reason", "No")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn adjustments_need_a_reason_and_a_valid_amount() {
+    let harness = Harness::new().await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    harness.sign_in("alice-subject", "alice").await;
+    let alice_id = harness.user_id("alice").await;
+    let pages = harness.rule(monthly_pages(5, Enforcement::Hard)).await;
+    let cost = harness
+        .rule(NewRule {
+            name: "Budget".into(),
+            metric: Metric::Cost,
+            ..monthly_pages(100, Enforcement::Hard)
+        })
+        .await;
+    let long = "x".repeat(201);
+    let grant = format!("/administration/users/{alice_id}/grant");
+    let reset = format!("/administration/users/{alice_id}/reset");
+    for (path, rule, amount, reason, message) in [
+        (
+            &grant,
+            pages,
+            "3",
+            "",
+            "Give a reason of 1 to 200 characters.",
+        ),
+        (&grant, pages, "3", long.as_str(), "Give a reason"),
+        (&reset, pages, "", "  ", "Give a reason"),
+        (&grant, pages, "0", "Why", "above 0"),
+        (&grant, pages, "1.5", "Why", "above 0"),
+        (&grant, cost, "abc", "Why", "above 0"),
+        (&grant, 999, "1", "Why", "That rule no longer exists."),
+    ] {
+        let response = harness
+            .send(form(
+                path,
+                Some(&admin),
+                &[
+                    ("rule", &rule.to_string()),
+                    ("amount", amount),
+                    ("reason", reason),
+                ],
+            ))
+            .await;
+        assert!(
+            response.status().is_client_error(),
+            "{path} {amount} {reason}"
+        );
+        let html = text(response).await;
+        assert!(html.contains(message), "{message}: {html}");
+    }
+    assert!(adjustments(&harness).await.is_empty());
+
+    // Cost is typed in the currency.
+    let response = harness
+        .send(form(
+            &grant,
+            Some(&admin),
+            &[
+                ("rule", &cost.to_string()),
+                ("amount", "0,50"),
+                ("reason", "Poster"),
+            ],
+        ))
+        .await;
+    assert_redirect(
+        &response,
+        &format!("/administration/users?done=quota_granted&user={alice_id}"),
+    );
+    assert_eq!(adjustments(&harness).await[0].amount, Some(50));
+    let html = harness.html("/administration/users", &admin).await;
+    assert!(
+        html.contains("0.00 EUR of 1.00 EUR used this month, plus 0.50 EUR granted"),
+        "{html}"
+    );
+}

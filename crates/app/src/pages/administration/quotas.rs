@@ -171,7 +171,7 @@ pub enum QuotasProblem {
 }
 
 impl QuotasProblem {
-    fn message(self, currency: &Currency) -> String {
+    pub(crate) fn message(self, currency: &Currency) -> String {
         match self {
             QuotasProblem::NameEmpty => t!("administration.quotas.errors.name_empty").to_owned(),
             QuotasProblem::LimitInvalid => tf!(
