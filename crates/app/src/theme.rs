@@ -89,11 +89,14 @@ pub fn current() -> Theme {
 #[component]
 pub fn ThemeSwitch() -> impl IntoView {
     let location = use_location();
-    let next = format!(
-        "{}{}",
-        location.pathname.get_untracked(),
-        location.search.get_untracked()
-    );
+    // The router's search has no leading `?` when the server renders the page.
+    let search = location.search.get_untracked();
+    let separator = if search.is_empty() || search.starts_with('?') {
+        ""
+    } else {
+        "?"
+    };
+    let next = format!("{}{separator}{search}", location.pathname.get_untracked());
     let current = current();
     let button = |theme: Theme, icon: IconKind, label: &'static str| {
         let pressed = current == theme;

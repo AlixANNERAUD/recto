@@ -762,6 +762,19 @@ async fn a_chosen_theme_is_rendered_by_the_server() {
 }
 
 #[tokio::test]
+async fn the_theme_switch_returns_to_the_same_query() {
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let html = harness.page("/jobs?submitted=7", &cookie).await;
+    assert!(
+        html.contains(r#"name="next" value="/jobs?submitted=7""#),
+        "{html}"
+    );
+    let html = harness.page("/jobs", &cookie).await;
+    assert!(html.contains(r#"name="next" value="/jobs""#), "{html}");
+}
+
+#[tokio::test]
 async fn a_junk_theme_cookie_renders_the_system_theme() {
     let harness = Harness::new(vec![kitchen()], vec![]).await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
