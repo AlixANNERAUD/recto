@@ -104,6 +104,8 @@ later. A disabled user's secret is not remembered, so enabling them again brings
 back at once. Over plain HTTP, recto refuses device passwords unless told otherwise
 (`RECTO_IPP_ALLOW_PLAIN`), as the password would cross the network in clear; behind a reverse
 proxy recto cannot see the hop to the device, and trusts the proxy as the sign-in form does.
+Connections from the server itself are always accepted, so a proxy on the same host makes every
+device look local: the check then holds only if that proxy serves devices over HTTPS alone.
 
 Wrong device passwords have **their own limit**, not the password sign-in one. Slowing guesses
 would gain nothing against a 160-bit secret, so the limit only keeps floods off the database: 30

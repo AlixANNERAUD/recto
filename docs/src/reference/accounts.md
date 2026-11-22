@@ -162,7 +162,13 @@ A device password does not expire. It stops working:
 
 Devices send their passwords only over HTTPS: recto refuses them with `403` when
 `RECTO_PUBLIC_URL` is `http://`, unless `RECTO_IPP_ALLOW_PLAIN=true`. Requests from the server
-itself (loopback) are always accepted.
+itself (loopback) are always accepted, whatever the public URL.
+
+That includes a reverse proxy on the same host as recto: every request it passes on comes from
+loopback, so recto accepts device passwords however the device reached the proxy. If such a
+proxy also serves plain `http://` to your network, a device can send its password in clear and
+recto cannot refuse it. Serve devices over HTTPS only at the proxy, or redirect `http://` to
+`https://` there.
 
 ### Device password limit
 
