@@ -132,8 +132,8 @@ again lets them sign in; it does not bring their sessions back.
 
 Computers and phones print and scan through recto with a **device password**, never with the
 account's password, which would otherwise sit in every device's keychain. Every user has them,
-single sign-on users included, as long as OS integration is on (`RECTO_OS_INTEGRATION=true`, the
-default). They are kept in the **Devices** section of the Account page, at `/account`:
+single sign-on users included, as long as OS integration is on (`RECTO_OS_INTEGRATION=true`; it
+is off by default). They are kept in the **Devices** section of the Account page, at `/account`:
 
 - **Create** one per device, with a name of 1 to 64 characters, such as `Work laptop`. recto
   draws a random password of 32 characters (letters `a` to `z` and digits `2` to `7`, 160 bits)

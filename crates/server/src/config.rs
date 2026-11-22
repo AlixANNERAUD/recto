@@ -81,11 +81,12 @@ pub struct Config {
     )]
     pub trust_forwarded_headers: bool,
     /// Computers and phones print and scan through recto with device passwords; `false`
-    /// removes their routes and the Account page's Devices section.
+    /// removes their routes and the Account page's Devices section. Off by default until the
+    /// device routes exist, so that nobody is handed device passwords that print nothing yet.
     #[arg(
         long,
         env = "RECTO_OS_INTEGRATION",
-        default_value = "true",
+        default_value = "false",
         value_parser = boolean("RECTO_OS_INTEGRATION"),
         action = ArgAction::Set
     )]
@@ -498,14 +499,15 @@ mod tests {
         assert!(!config.trust_forwarded_headers);
         assert_eq!(config.oidc_administrator_claim, None);
         assert_eq!(config.oidc_groups_claim, None);
-        assert!(config.os_integration);
+        // Off until the device routes exist: device passwords would print nothing yet.
+        assert!(!config.os_integration);
         assert!(!config.ipp_allow_plain);
     }
 
     #[test]
     fn os_integration_settings_are_booleans() {
-        let config = parse(&["--os-integration", "false", "--ipp-allow-plain", "true"]).unwrap();
-        assert!(!config.os_integration);
+        let config = parse(&["--os-integration", "true", "--ipp-allow-plain", "true"]).unwrap();
+        assert!(config.os_integration);
         assert!(config.ipp_allow_plain);
         for (option, variable) in [
             ("--os-integration", "RECTO_OS_INTEGRATION"),
