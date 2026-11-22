@@ -40,7 +40,7 @@ pub use crate::state::AuthState;
 use crate::{
     branding,
     config::Config,
-    routes::{administration, auth, password, print, pwa, scan},
+    routes::{administration, auth, devices, password, print, pwa, scan},
     session, state,
 };
 
@@ -97,6 +97,7 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
     let methods = auth.sign_in_methods();
     let context = move || provide_context(methods);
     let password = password::router(state.clone(), &auth);
+    let devices = devices::router(state.clone(), &auth);
     let administration = administration::router(state.clone(), &auth);
     let interface = Router::new()
         .route(
@@ -118,6 +119,7 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         .route("/health", get(|| async { "ok" }))
         .merge(auth::router().with_state(auth.clone()))
         .merge(password)
+        .merge(devices)
         .merge(pwa::router(branding, auth.secure_cookies))
         .merge(administration)
         .merge(interface)

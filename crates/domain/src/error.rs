@@ -80,6 +80,10 @@ pub enum Problem {
     /// An adjustment is for the user of a personal rule, or for the group of a pool rule.
     #[error("the adjustment does not fit the rule")]
     HolderMismatch,
+    #[error("the device name must be 1 to {maximum} characters")]
+    DeviceNameInvalid { maximum: usize },
+    #[error("a user has at most {maximum} device passwords")]
+    TooManyDevicePasswords { maximum: usize },
 }
 
 /// The result of a domain operation.

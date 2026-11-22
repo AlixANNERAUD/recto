@@ -14,7 +14,7 @@ instead. A single sign-on user without the required claim, or disabled, is sent 
 | `/printers` | Printers: every printer the user may use, with its state and supplies. |
 | `/jobs` | Jobs: the print queue, with Cancel buttons, and the pages and cost of each job to its owner and to administrators. `?submitted=<id>` confirms a job, with `&over=<id>,<id>` naming the soft quota rules it went over. |
 | `/scan` | Scan: scanners, options, preview and results. Needs JavaScript. |
-| `/account` | Account: change your password. Only for users with a password, and with local accounts on. |
+| `/account` | Account: change your password, for users with a password while local accounts are on, and keep your [device passwords](accounts.md#device-passwords), for everyone while `RECTO_OS_INTEGRATION` is on. `?changed=1` confirms a password change and `?done=revoked` a revoked device password. |
 | `/administration` | Redirects to `/administration/users`. Administrators only. |
 | `/administration/users` | Users: create local accounts, set passwords, disable users, grant administration, see each user's quota usage, grant extra and reset it. Administrators only. |
 | `/administration/groups` | Groups: the groups from the identity provider and their members. Administrators only. |
@@ -44,6 +44,8 @@ These work without JavaScript and accept only requests from recto's own pages (s
 | `GET /administration/usage/scans.csv` | Every logged scan of the range as CSV. Same query. Administrators only. |
 | `GET /administration/usage/totals.csv` | The table the page shows (`by`) as CSV, without the total line. Same query. Administrators only. The three answer `400` with the message as plain text when the dates cannot be read, and `503` when the database fails. |
 | `POST /account/password` | Changes your password, then redirects to `/account?changed=1`. Answers `400` with the page for a refused change, and `429` after too many password attempts (see [Password sign-in limit](accounts.md#password-sign-in-limit)). |
+| `POST /account/devices` | Creates a device password. Field: `name`, 1 to 64 characters once trimmed. Answers `200` with the Account page showing the new password once, with `Cache-Control: no-store`, never a redirect, so the password stays out of addresses and the history. Answers `400` with the page and the typed name for a name too short or too long, or a user who already has 20, and `503` when the database fails. |
+| `POST /account/devices/{id}/revoke` | Revokes one of your device passwords, then redirects to `/account?done=revoked`. Another user's, or one already revoked, gets `404`. |
 | `POST /administration/users` | Creates a local account. |
 | `POST /administration/users/{id}/administrator` | Grants or removes administration. |
 | `POST /administration/users/{id}/disabled` | Disables or enables a user. |
@@ -79,7 +81,10 @@ a pool through the Quotas page; `404` for a rule that does not exist; `503` when
 fails. A refused rule form keeps what was typed, and the form of the rule it changes is open.
 
 The administration pages and their forms answer `404`, with the not-found page, to anyone but an
-administrator. The account page and its form answer `404` to users without a password.
+administrator. The account page answers `404` to users it has nothing for: without a password,
+or with local accounts off, while `RECTO_OS_INTEGRATION` is off. The password form answers `404`
+to users without a password, and the device forms answer `404` while `RECTO_OS_INTEGRATION` is
+off.
 
 The Scan page and the live parts of the other pages call server functions under `/api/`. They
 are internal to the interface and may change between versions.

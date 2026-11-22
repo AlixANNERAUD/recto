@@ -53,6 +53,9 @@ pub struct AppState {
     pub timezone: chrono_tz::Tz,
     /// Reads the page count of uploaded PDFs, within bounds.
     pub page_counter: PageCounter,
+    /// Whether computers and phones print and scan through recto with device passwords
+    /// (`RECTO_OS_INTEGRATION`); without it, the Account page has no Devices section.
+    pub os_integration: bool,
 }
 
 /// The signed-in user of a request, read from the accounts database on every request, so that

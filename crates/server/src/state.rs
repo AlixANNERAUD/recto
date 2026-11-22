@@ -44,11 +44,15 @@ pub struct AuthState {
     /// Whether the client address of a password sign-in, which its rate limit counts attempts
     /// by, comes from the forwarded headers rather than from the connection.
     pub trust_forwarded_headers: bool,
+    /// Whether devices may send their passwords over plain HTTP although the public URL is
+    /// `http` (`RECTO_IPP_ALLOW_PLAIN`); see [`crate::device_auth::DeviceAuth::plain_allowed`].
+    pub ipp_allow_plain: bool,
 }
 
 impl AuthState {
     /// The sign-in state with the defaults of the configuration: local accounts on, passwords of
-    /// at least [`passwords::DEFAULT_MINIMUM_LENGTH`] characters, forwarded headers ignored.
+    /// at least [`passwords::DEFAULT_MINIMUM_LENGTH`] characters, forwarded headers ignored,
+    /// device passwords refused over plain HTTP.
     pub fn new(openid: Option<Arc<OpenId>>, public_url: Url, database: DatabaseConnection) -> Self {
         let secure_cookies = public_url.scheme() == "https";
         Self {
@@ -62,6 +66,7 @@ impl AuthState {
                 minimum_length: passwords::DEFAULT_MINIMUM_LENGTH,
             },
             trust_forwarded_headers: false,
+            ipp_allow_plain: false,
         }
     }
 
@@ -187,6 +192,7 @@ pub async fn build(
         currency: Currency::new(&config.currency),
         timezone: config.timezone,
         page_counter: PageCounter::default(),
+        os_integration: config.os_integration,
     };
     let openid = config
         .oidc_issuer
@@ -211,6 +217,7 @@ pub async fn build(
             minimum_length: config.password_minimum_length,
         },
         trust_forwarded_headers: config.trust_forwarded_headers,
+        ipp_allow_plain: config.ipp_allow_plain,
         ..AuthState::new(openid, config.public_url.clone(), database)
     };
     (state, auth)

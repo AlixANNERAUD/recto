@@ -4,11 +4,13 @@
 //! account rules, which sign-in and the administration pages share; [`access`] limits devices
 //! to groups; [`jobs`] records who submitted each print job, [`ledger`] what each counts for,
 //! [`prices`] what printers charge and [`quotas`] the limits on printing; [`scans`] logs every
-//! finished scan and [`reports`] sums both over a range; the `testing` module
+//! finished scan and [`reports`] sums both over a range; [`device_passwords`] are what computers
+//! and phones print and scan with; the `testing` module
 //! (behind the `testing` feature) gives tests a fresh, migrated database.
 
 pub mod access;
 pub mod database;
+pub mod device_passwords;
 pub mod error;
 pub mod groups;
 pub mod jobs;

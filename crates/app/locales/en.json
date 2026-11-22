@@ -104,6 +104,32 @@
       "too_long": "The new password must be at most {maximum} characters long.",
       "too_many": "Too many attempts. Wait a few seconds, then try again.",
       "unavailable": "The password could not be changed. Try again in a moment."
+    },
+    "devices": {
+      "title": "Devices",
+      "intro": "Computers and phones print and scan with a device password, never with your account's. Give each device its own, and revoke it when you stop using the device.",
+      "none": "You have no device passwords yet.",
+      "created_at": "Created {time}",
+      "last_used": "last used {time}",
+      "never_used": "never used",
+      "revoke": "Revoke",
+      "revoke_label": "Revoke the device password {name}",
+      "revoked": "The device password was revoked. The device using it can no longer print or scan.",
+      "name": "Device name",
+      "name_hint": "Such as Work laptop or Alice's phone.",
+      "create": "Create device password",
+      "created": {
+        "title": "Device password for {name}",
+        "once": "This password is shown only once. Copy it now: it cannot be shown again.",
+        "password": "Password",
+        "username": "Username",
+        "username_hint": "If the device also asks for a username, use this one."
+      },
+      "errors": {
+        "name_invalid": "The device name must be 1 to {maximum} characters long.",
+        "too_many": "You already have {maximum} device passwords. Revoke one you no longer use first.",
+        "unavailable": "The device passwords could not be changed. Try again in a moment."
+      }
     }
   },
   "administration": {

@@ -51,6 +51,7 @@ tracing-subscriber.workspace = true
 reqwest.workspace = true
 url.workspace = true
 rpassword.workspace = true
+data-encoding.workspace = true
 
 [dev-dependencies]
 recto-domain = { workspace = true, features = ["testing"] }

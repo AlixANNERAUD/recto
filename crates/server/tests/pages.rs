@@ -185,6 +185,7 @@ impl Harness {
             currency: Currency::new("EUR"),
             timezone: chrono_tz::UTC,
             page_counter: Default::default(),
+            os_integration: true,
         };
         let public_url = Url::parse(PUBLIC_URL).unwrap();
         let openid = OpenId::new(OpenIdSettings {

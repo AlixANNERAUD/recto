@@ -24,6 +24,8 @@ pub struct Model {
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
+    #[sea_orm(has_many = "super::device_passwords::Entity")]
+    DevicePasswords,
     #[sea_orm(has_many = "super::group_memberships::Entity")]
     GroupMemberships,
     #[sea_orm(has_many = "super::print_jobs::Entity")]
@@ -32,6 +34,12 @@ pub enum Relation {
     ScanJobs,
     #[sea_orm(has_many = "super::user_identities::Entity")]
     UserIdentities,
+}
+
+impl Related<super::device_passwords::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::DevicePasswords.def()
+    }
 }
 
 impl Related<super::group_memberships::Entity> for Entity {

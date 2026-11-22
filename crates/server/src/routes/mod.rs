@@ -2,6 +2,7 @@
 
 pub mod administration;
 pub mod auth;
+pub mod devices;
 pub mod password;
 pub mod print;
 pub mod pwa;

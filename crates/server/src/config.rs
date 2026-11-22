@@ -80,6 +80,26 @@ pub struct Config {
         action = ArgAction::Set
     )]
     pub trust_forwarded_headers: bool,
+    /// Computers and phones print and scan through recto with device passwords; `false`
+    /// removes their routes and the Account page's Devices section.
+    #[arg(
+        long,
+        env = "RECTO_OS_INTEGRATION",
+        default_value = "true",
+        value_parser = boolean("RECTO_OS_INTEGRATION"),
+        action = ArgAction::Set
+    )]
+    pub os_integration: bool,
+    /// Accept device passwords over plain HTTP although the public URL is `http`; loopback
+    /// clients always may.
+    #[arg(
+        long,
+        env = "RECTO_IPP_ALLOW_PLAIN",
+        default_value = "false",
+        value_parser = boolean("RECTO_IPP_ALLOW_PLAIN"),
+        action = ArgAction::Set
+    )]
+    pub ipp_allow_plain: bool,
     #[arg(long, env = "RECTO_CUPS_URL", default_value = "http://localhost:631", value_parser = parse_cups_url)]
     pub cups_url: Url,
     /// CUPS's Unix socket, which lets administrators manage printers; unset or blank turns
@@ -226,6 +246,16 @@ pub fn check_password_minimum_length(length: usize) -> Result<(), String> {
             "RECTO_PASSWORD_MINIMUM_LENGTH must be between 1 and {}, not {length}",
             passwords::MAXIMUM_LENGTH
         ))
+    }
+}
+
+/// `true` or `false`, refused with the name of the variable otherwise: clap's own parser names
+/// only the command line option.
+fn boolean(variable: &'static str) -> impl Fn(&str) -> Result<bool, String> + Clone {
+    move |value| match value.trim() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(format!("{variable} must be true or false, not {value}")),
     }
 }
 
@@ -468,6 +498,22 @@ mod tests {
         assert!(!config.trust_forwarded_headers);
         assert_eq!(config.oidc_administrator_claim, None);
         assert_eq!(config.oidc_groups_claim, None);
+        assert!(config.os_integration);
+        assert!(!config.ipp_allow_plain);
+    }
+
+    #[test]
+    fn os_integration_settings_are_booleans() {
+        let config = parse(&["--os-integration", "false", "--ipp-allow-plain", "true"]).unwrap();
+        assert!(!config.os_integration);
+        assert!(config.ipp_allow_plain);
+        for (option, variable) in [
+            ("--os-integration", "RECTO_OS_INTEGRATION"),
+            ("--ipp-allow-plain", "RECTO_IPP_ALLOW_PLAIN"),
+        ] {
+            let error = parse(&[option, "maybe"]).unwrap_err();
+            assert!(error.to_string().contains(variable), "{error}");
+        }
     }
 
     #[test]

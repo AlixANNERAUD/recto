@@ -73,14 +73,14 @@ fn is_administrator() -> bool {
     false
 }
 
-/// The name of the signed-in user, for the header, and whether they have an Account page: only
-/// a password can be changed there, so only users with one while local accounts are on.
+/// The name of the signed-in user, for the header, and whether they have an Account page: it
+/// changes a password, for users with one while local accounts are on, and holds device
+/// passwords, for everyone while OS integration is on.
 #[cfg(feature = "ssr")]
 fn user_name() -> Option<(String, bool)> {
     let user = crate::state::current_user()?;
-    let password =
-        crate::pages::sign_in::SignInMethods::current().is_some_and(|methods| methods.password);
-    Some((user.name, password && user.has_password))
+    let has_account = crate::pages::account::has_account_page(&user);
+    Some((user.name, has_account))
 }
 
 /// Pages render on the server only.

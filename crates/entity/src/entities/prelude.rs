@@ -2,6 +2,7 @@
 
 pub use super::device_access::Entity as DeviceAccess;
 pub use super::device_access_groups::Entity as DeviceAccessGroups;
+pub use super::device_passwords::Entity as DevicePasswords;
 pub use super::group_memberships::Entity as GroupMemberships;
 pub use super::groups::Entity as Groups;
 pub use super::print_jobs::Entity as PrintJobs;

@@ -65,6 +65,37 @@ a new address at each attempt and escape the limit (see
 Setting a user's password, or disabling them, ends all their sessions. Changing your own password
 on the Account page asks for the current one, and ends your other sessions.
 
+## Device passwords
+
+Computers and phones cannot follow a sign-in page, so they authenticate with
+[device passwords](../reference/accounts.md#device-passwords). A device password grants
+exactly what a printer or a scanner needs: sending print jobs as its owner, seeing and
+cancelling the jobs it sent, and scanning on the scanners its owner may use. It never opens a
+session, never reaches a web page and never changes the account: the sign-in form refuses it like
+any wrong password, and the device routes accept nothing else, not even the account's password.
+That keeps the account password out of device keychains, and makes revoking a lost phone a click
+that touches nothing else.
+
+Each is 160 random bits from the system's random source, shown once and stored as its SHA-256.
+A slow hash such as Argon2id protects passwords people choose, which can be guessed; a random
+secret of that size cannot, so a fast hash loses nothing, and lets a device that polls every few
+seconds authenticate with one database lookup. The database never holds the secret, and recto
+never logs it: log lines name the device password's id and name.
+
+Revoking a device password, or disabling its user, applies to the next request: nothing is
+cached. Over plain HTTP, recto refuses device passwords unless told otherwise
+(`RECTO_IPP_ALLOW_PLAIN`), as the password would cross the network in clear; behind a reverse
+proxy recto cannot see the hop to the device, and trusts the proxy as the sign-in form does.
+
+Wrong device passwords have **their own limit**, per connection address, not the password
+sign-in one. Slowing guesses would gain nothing against a 160-bit secret, so the limit only keeps
+floods off the database: 30 at once, then one a second, and right passwords never count. It is
+kept apart on purpose, departing from the first accounts design, which shared one limit: behind a
+proxy without trusted forwarded headers, or behind a school's NAT, every client has the same
+address, and one phone still polling with a revoked password would otherwise make password
+sign-in fail for everyone there. For the same reason it reads only the connection's address,
+never a forwarded header, which a device could write itself.
+
 ## Administrators
 
 The web page refuses an administrator's actions on their own account: disabling it, changing its

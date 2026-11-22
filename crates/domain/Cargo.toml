@@ -22,6 +22,9 @@ password-auth.workspace = true
 # Password hashing runs on the blocking thread pool.
 tokio.workspace = true
 tracing.workspace = true
+getrandom.workspace = true
+data-encoding.workspace = true
+sha2.workspace = true
 tempfile = { workspace = true, optional = true }
 
 [features]

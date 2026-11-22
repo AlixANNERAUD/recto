@@ -128,6 +128,42 @@ A disabled user cannot sign in: the password form answers as for a wrong passwor
 sign-on ends on **No access to recto**. Their sessions end at their next request. Enabling them
 again lets them sign in; it does not bring their sessions back.
 
+## Device passwords
+
+Computers and phones print and scan through recto with a **device password**, never with the
+account's password, which would otherwise sit in every device's keychain. Every user has them,
+single sign-on users included, as long as OS integration is on (`RECTO_OS_INTEGRATION=true`, the
+default). They are kept in the **Devices** section of the Account page, at `/account`:
+
+- **Create** one per device, with a name of 1 to 64 characters, such as `Work laptop`. recto
+  draws a random password of 32 characters (letters `a` to `z` and digits `2` to `7`, 160 bits)
+  and shows it once, with your username. Copy it then: it is stored only as its SHA-256 and
+  cannot be shown again. The page that shows it is not cached by the browser.
+- **Revoke** one when a device is lost, sold or no longer used. The device's next request is
+  refused.
+- Each user has at most 20. The list shows when each was created and last used, to within 5
+  minutes.
+
+A device sends its password as the password of HTTP Basic authentication, with any username:
+computers fill in their own login name, so recto ignores it. Capital letters are accepted. A
+device password cannot sign in to the web pages or change the account. It stops working at once
+when its user is disabled, and works again when they are enabled; deleting a user deletes their
+device passwords.
+
+Devices send their passwords only over HTTPS: recto refuses them with `403` when
+`RECTO_PUBLIC_URL` is `http://`, unless `RECTO_IPP_ALLOW_PLAIN=true`. Requests from the server
+itself (loopback) are always accepted.
+
+### Device password limit
+
+Wrong device passwords are counted per client address, separately from the
+[password sign-in limit](#password-sign-in-limit): a burst of 30, then one more every second.
+Beyond that, recto answers `429 Too Many Requests` with `Retry-After: 1`, without looking the
+password up. Right passwords never count, so a device that checks the printer every few seconds
+is never slowed down, and a phone still polling with a revoked password does not stop anyone
+from signing in with a password from the same address. The address is always the connection's,
+whatever `RECTO_TRUST_FORWARDED_HEADERS` says; an IPv6 client counts by its `/64` network.
+
 ## Sessions
 
 A sign-in starts a session, stored in the database, so restarts and upgrades do not sign anyone

@@ -91,6 +91,8 @@ struct Setup {
     printers: Option<Vec<Printer>>,
     /// Whether recto can administer CUPS: `Harness::admin` records what it was asked.
     managed: bool,
+    /// `RECTO_OS_INTEGRATION`, on by default.
+    os_integration: bool,
 }
 
 impl Default for Setup {
@@ -109,12 +111,15 @@ impl Default for Setup {
             jobs: None,
             printers: None,
             managed: false,
+            os_integration: true,
         }
     }
 }
 
 struct Harness {
     router: Router,
+    /// What the router was built with, for the device routes' authentication.
+    auth: AuthState,
     print: Arc<MockPrintService>,
     admin: Arc<MockPrinterAdmin>,
     scan: Arc<MockScannerService>,
@@ -180,6 +185,7 @@ impl Harness {
             currency: Currency::new("EUR"),
             timezone: chrono_tz::UTC,
             page_counter: Default::default(),
+            os_integration: setup.os_integration,
         };
         let public_url = Url::parse(setup.public_url).unwrap();
         let openid = setup.issuer.map(|issuer| {
@@ -204,7 +210,8 @@ impl Harness {
         };
         let sessions = auth.sessions.clone();
         Self {
-            router: router(state, auth),
+            router: router(state, auth.clone()),
+            auth,
             print,
             admin,
             scan,
@@ -1865,7 +1872,8 @@ async fn sign_in_routes_absent_without_local_accounts() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert!(session_cookie(response.headers()).is_none());
 
-    // A password is of no use without local accounts, so there is no Account page either.
+    // A password is of no use without local accounts, so the Account page has no password
+    // form, only the device passwords.
     let alice = harness.user_id("alice").await;
     let session = Session::new(None, Arc::new(harness.sessions.clone()), None);
     recto::session::sign_in(&session, alice, SignInMethod::Password)
@@ -1874,7 +1882,10 @@ async fn sign_in_routes_absent_without_local_accounts() {
     session.save().await.unwrap();
     let cookie = format!("recto_session={}", session.id().unwrap());
     let response = harness.send(page("/account", Some(&cookie))).await;
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    assert!(!html.contains("action=\"/account/password\""), "{html}");
+    assert!(html.contains("action=\"/account/devices\""), "{html}");
     let response = harness
         .send(form(
             "/account/password",
@@ -1987,7 +1998,12 @@ async fn changing_password_keeps_this_session_only() {
 
 #[tokio::test]
 async fn account_page_is_only_for_users_with_a_password() {
-    let harness = Harness::new().await;
+    // With OS integration on, everyone has device passwords there (see `devices`).
+    let harness = Harness::with(Setup {
+        os_integration: false,
+        ..Setup::default()
+    })
+    .await;
     let cookie = harness.sign_in("carol-subject", "carol").await;
     let response = harness.send(page("/", Some(&cookie))).await;
     assert!(!text(response).await.contains("href=\"/account\""));
@@ -4335,3 +4351,6 @@ async fn a_job_costs_the_prices_of_its_submission() {
 
 #[path = "server/quotas.rs"]
 mod quotas;
+
+#[path = "server/devices.rs"]
+mod devices;

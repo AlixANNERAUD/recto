@@ -28,6 +28,17 @@ pub struct ScanOutcome {
     pub can_save: bool,
 }
 
+/// A device password as the Account page lists it, never with its secret.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceRow {
+    pub id: i64,
+    pub name: String,
+    /// In seconds since the Unix epoch.
+    pub created_at: i64,
+    /// In seconds since the Unix epoch, accurate to a few minutes.
+    pub last_used_at: Option<i64>,
+}
+
 /// Where the signed-in user stands against the quota rules that apply to them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Allowances {
@@ -57,6 +68,13 @@ pub async fn list_jobs() -> Result<Vec<Job>, ServerFnError> {
 pub async fn my_quotas() -> Result<Allowances, ServerFnError> {
     let context = server::Context::new()?;
     context.my_quotas().await
+}
+
+/// The signed-in user's device passwords, newest first; none with OS integration off.
+#[server(endpoint = "my_device_passwords")]
+pub async fn my_device_passwords() -> Result<Vec<DeviceRow>, ServerFnError> {
+    let context = server::Context::new()?;
+    context.my_device_passwords().await
 }
 
 #[server(endpoint = "list_scanners")]
@@ -160,7 +178,7 @@ mod server {
         Selection,
     };
 
-    use super::{Allowances, ScanOutcome, visible};
+    use super::{Allowances, DeviceRow, ScanOutcome, visible};
     use crate::{
         i18n, messages,
         quotas::Allowance,
@@ -280,6 +298,29 @@ mod server {
                 allowances,
                 currency,
             })
+        }
+
+        /// The user's device passwords; none when OS integration is off.
+        pub async fn my_device_passwords(&self) -> Result<Vec<DeviceRow>, ServerFnError> {
+            if !self.state.os_integration {
+                return Ok(Vec::new());
+            }
+            let passwords =
+                recto_domain::device_passwords::list(&self.state.database, self.user.id)
+                    .await
+                    .map_err(|error| {
+                        tracing::error!(%error, "listing the device passwords failed");
+                        self.try_again()
+                    })?;
+            Ok(passwords
+                .into_iter()
+                .map(|password| DeviceRow {
+                    id: password.id,
+                    name: password.name,
+                    created_at: password.created_at.timestamp(),
+                    last_used_at: password.last_used_at.map(|time| time.timestamp()),
+                })
+                .collect())
         }
 
         /// What the user is told when the database cannot say what they may see or use: nothing
