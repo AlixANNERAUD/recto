@@ -75,8 +75,9 @@ sequenceDiagram
     Person->>recto: POST /print with the document
     Note over recto: counts the pages, applies copies,<br/>sides and color mode, prices the job
     recto->>Database: begin a write transaction
-    recto->>Database: read the rules
-    recto->>Database: lock the user, then each pool's group by id
+    recto->>Database: lock the user
+    recto->>Database: read the rules and the person's groups
+    recto->>Database: lock each pool's group by id
     recto->>Database: sum the usage in each window
     alt a hard rule has too little left
         recto->>Database: roll back
@@ -89,10 +90,12 @@ sequenceDiagram
             CUPS-->>recto: the job id
             recto->>Database: attach the job id
             recto-->>Person: the Jobs page, with any soft warning
-        else CUPS refuses
+        else CUPS refuses, or cannot be reached
             CUPS-->>recto: an error
             recto->>Database: refund the job
             recto-->>Person: CUPS's refusal
+        else CUPS does not answer in time
+            recto-->>Person: the job may still print
         end
     end
 ```
@@ -104,15 +107,19 @@ How the second job waits depends on the database:
   committed. The lock step does nothing there.
 - **PostgreSQL** runs at its default isolation, `READ COMMITTED`, where two transactions can read
   the same usage side by side. recto first locks rows with `SELECT ... FOR UPDATE`: the user's
-  row, which every job of the same person shares, then the row of each pool's group, which every
-  job charged to that pool shares. Jobs that share no budget share no row and do not wait for
+  row, which every job of the same person shares, before it reads the rules, then the row of each
+  pool's group, which every job charged to that pool shares. Jobs that share no budget share no row and do not wait for
   each other. The groups are locked in ascending order of id, so two jobs that meet several pools
   always queue on the same first row and cannot each hold a lock the other needs.
+
+The rules are read inside the transaction too. A job prepared while no rule was enabled is still
+checked when a rule is enabled before the job is written, rather than slipping through unchecked.
 
 The job is written before CUPS is asked, so a job can never print without being counted. The
 opposite mistake, a job counted that never printed, is the one recto can repair: a refusal from
 CUPS refunds the row at once, and a row that never received a CUPS job id, because recto stopped
-in between, is refunded after ten minutes.
+in between or CUPS never confirmed the job, is refunded after ten minutes. A job sent to CUPS
+without an answer is not refunded at once, since CUPS may have queued it and may print it.
 
 ## Failing closed
 

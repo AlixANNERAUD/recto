@@ -3,10 +3,11 @@
 
 use chrono::Utc;
 use recto_domain::{
+    database::begin_write,
     ledger::{self, NewEntry},
     quotas::{self, Enforcement, Metric, NewRule, Period, Subject},
 };
-use sea_orm::ConnectionTrait;
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ConnectionTrait};
 
 use super::*;
 
@@ -34,18 +35,7 @@ impl Harness {
         let user_id = self.user_id(username).await;
         ledger::insert(
             &self.database,
-            NewEntry {
-                user_id,
-                username: username.into(),
-                printer: "office".into(),
-                document_name: "earlier.pdf".into(),
-                document_format: "application/pdf".into(),
-                document_pages: Some(pages),
-                copies: 1,
-                sides: "one-sided".into(),
-                color_mode: "monochrome".into(),
-                counts: ledger::counts(Some(pages), 1, false, false, Prices::default()),
-            },
+            earlier(user_id, username, pages),
             Utc::now(),
         )
         .await
@@ -102,27 +92,112 @@ async fn a_hard_rule_refuses_and_names_what_is_left() {
     assert_redirect(&response, "/jobs?submitted=8");
 }
 
+/// A job of `pages` black-and-white pages on the office printer.
+fn earlier(user_id: i64, username: &str, pages: u32) -> NewEntry {
+    NewEntry {
+        user_id,
+        username: username.into(),
+        printer: "office".into(),
+        document_name: "earlier.pdf".into(),
+        document_format: "application/pdf".into(),
+        document_pages: Some(pages),
+        copies: 1,
+        sides: "one-sided".into(),
+        color_mode: "monochrome".into(),
+        counts: ledger::counts(Some(pages), 1, false, false, Prices::default()),
+    }
+}
+
+/// Whether `job` is still running after half a second: it waits for something.
+async fn waits<F: std::future::Future>(job: std::pin::Pin<&mut F>) -> bool {
+    tokio::time::timeout(Duration::from_millis(500), job)
+        .await
+        .is_err()
+}
+
 #[tokio::test]
-async fn racing_jobs_cannot_both_pass() {
+async fn a_job_waits_for_a_racing_one_and_counts_it() {
     let harness = Harness::new().await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
+    let alice = harness.user_id("alice").await;
     let rule = harness.rule(monthly_pages(1, Enforcement::Hard)).await;
 
-    let (first, second) = tokio::join!(
-        harness.print_pages(&cookie, 1),
-        harness.print_pages(&cookie, 1)
-    );
-    assert_eq!(harness.print.submitted().len(), 1);
-    let mut locations = [location(&first), location(&second)];
-    locations.sort();
-    assert_eq!(
-        locations,
-        [
-            format!("/?error=quota&rule={rule}"),
-            "/jobs?submitted=8".to_owned()
-        ]
-    );
+    // Another job of alice's is being checked: its transaction holds what hers must wait for.
+    let racing = begin_write(&harness.database).await.unwrap();
+    quotas::lock_subjects(&racing, alice, &[]).await.unwrap();
+    let job = harness.print_pages(&cookie, 1);
+    tokio::pin!(job);
+    assert!(waits(job.as_mut()).await, "the job did not wait");
+    ledger::insert(&racing, earlier(alice, "alice", 1), Utc::now())
+        .await
+        .unwrap();
+    racing.commit().await.unwrap();
+
+    // It checks after the other is counted, so it sees the last page gone.
+    assert_redirect(&job.await, &format!("/?error=quota&rule={rule}"));
+    assert!(harness.print.submitted().is_empty());
     assert_eq!(harness.ledger_rows().await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_rule_enabled_while_a_job_waits_applies_to_it() {
+    let harness = Harness::new().await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let alice = harness.user_id("alice").await;
+
+    // No rule is enabled when the job starts; one is, with its page used, before it is entered.
+    let racing = begin_write(&harness.database).await.unwrap();
+    quotas::lock_subjects(&racing, alice, &[]).await.unwrap();
+    let job = harness.print_pages(&cookie, 1);
+    tokio::pin!(job);
+    assert!(waits(job.as_mut()).await, "the job did not wait");
+    let now = Utc::now().fixed_offset();
+    let rule = recto_entity::quota_rules::ActiveModel {
+        name: Set("Monthly pages".into()),
+        enabled: Set(true),
+        subject_kind: Set("everyone".into()),
+        metric: Set("pages".into()),
+        period: Set("month".into()),
+        limit_value: Set(1),
+        enforcement: Set("hard".into()),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(&racing)
+    .await
+    .unwrap()
+    .id;
+    ledger::insert(&racing, earlier(alice, "alice", 1), Utc::now())
+        .await
+        .unwrap();
+    racing.commit().await.unwrap();
+
+    assert_redirect(&job.await, &format!("/?error=quota&rule={rule}"));
+    assert!(harness.print.submitted().is_empty());
+}
+
+#[tokio::test]
+async fn many_racing_jobs_never_go_over() {
+    let harness = Harness::new().await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    harness.rule(monthly_pages(3, Enforcement::Hard)).await;
+
+    let job = || harness.print_pages(&cookie, 1);
+    let (a, b, c, d, e, f) = tokio::join!(job(), job(), job(), job(), job(), job());
+    let printed = [a, b, c, d, e, f]
+        .iter()
+        .filter(|response| location(response).starts_with("/jobs?submitted="))
+        .count();
+    assert_eq!(printed, 3);
+    assert_eq!(harness.print.submitted().len(), 3);
+    let counted = harness
+        .ledger_rows()
+        .await
+        .iter()
+        .filter(|row| !row.refunded)
+        .count();
+    assert_eq!(counted, 3);
 }
 
 #[tokio::test]
@@ -221,6 +296,20 @@ async fn quotas_fail_closed() {
     let response = harness.print_pages(&cookie, 1).await;
     assert_redirect(&response, "/?error=unavailable");
     assert!(harness.print.submitted().is_empty());
+
+    // The rules read, and the check fails inside the transaction.
+    let harness = Harness::new().await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    harness.rule(monthly_pages(100, Enforcement::Hard)).await;
+    harness
+        .database
+        .execute_unprepared("DROP TABLE quota_adjustments")
+        .await
+        .unwrap();
+    let response = harness.print_pages(&cookie, 1).await;
+    assert_redirect(&response, "/?error=unavailable");
+    assert!(harness.print.submitted().is_empty());
+    assert!(harness.ledger_rows().await.is_empty());
 
     // Without rules, the ledger is best effort.
     let harness = Harness::new().await;

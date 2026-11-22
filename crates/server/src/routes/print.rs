@@ -134,11 +134,13 @@ async fn submit_form(
     if !usable.allows(&printer_name) {
         return Err(Refusal::PrinterNotFound.into());
     }
-    // Rules that cannot be read might be there: refused, like access rules.
-    let rules = quotas::rules(&state.database)
+    // Rules that cannot be read might be there: refused, like access rules. Whether they are
+    // enforced is decided again in the write transaction; this only prepares the job.
+    let enforced = quotas::rules(&state.database)
         .await
-        .map_err(closed("reading the quota rules"))?;
-    let enforced = rules.iter().any(|rule| rule.enabled);
+        .map_err(closed("reading the quota rules"))?
+        .iter()
+        .any(|rule| rule.enabled);
     let printer = state.print.printer(&printer_name).await.map_err(refusal)?;
     // CUPS ignores the case of printer names, so "LAB" reaches the printer "lab": its rule is
     // checked again under the name CUPS answered with.
@@ -154,34 +156,17 @@ async fn submit_form(
         DocumentFormat::Pdf => state.page_counter.count(document.clone()).await,
         DocumentFormat::Jpeg | DocumentFormat::Png => Ok(1),
     };
-    let groups = if enforced {
-        access::group_ids_of(&state.database, user.id)
-            .await
-            .map_err(closed("reading the groups of the user"))?
-    } else {
-        Vec::new()
-    };
-    let applicable = quotas::applicable(&rules, user.id, &groups, &printer.name);
-    // Only the jobs metric does without the pages; the others cannot be checked blind.
-    if let Err(uncounted) = document_pages
-        && applicable.iter().any(|rule| rule.metric != Metric::Jobs)
-    {
-        return Err(match uncounted {
-            Uncounted::Unreadable => Refusal::Uncountable,
-            Uncounted::Busy => Refusal::CountingBusy,
-        }
-        .into());
-    }
+    let uncounted = document_pages.err();
     let document_pages = document_pages.ok();
     let printed = document_pages.map(|pages| printed_pages(pages, options.page_ranges.as_ref()));
     // The cost is fixed now: a later price change leaves this job's cost alone.
-    let prices = match prices::get(&state.database, &printer.name).await {
-        Ok(prices) => prices,
+    let (prices, priced) = match prices::get(&state.database, &printer.name).await {
+        Ok(prices) => (prices, true),
         Err(error) if enforced => return Err(closed("reading the printer prices")(error).into()),
         // Without quota rules, prices that cannot be read must not stop printing.
         Err(error) => {
             tracing::error!(%error, "reading the printer prices failed");
-            Prices::default()
+            (Prices::default(), false)
         }
     };
     let counts = ledger::counts(
@@ -204,19 +189,12 @@ async fn submit_form(
         counts,
     };
     // Written before CUPS is asked, so a job cannot print without being counted.
-    let (entry_id, over) = if enforced {
-        let (entry_id, over) = enter_checked(state, user, &groups, entry).await?;
-        (Some(entry_id), over)
-    } else {
-        // Without rules, a ledger that cannot be written must not stop printing.
-        match ledger::insert(&state.database, entry, chrono::Utc::now()).await {
-            Ok(id) => (Some(id), Vec::new()),
-            Err(error) => {
-                tracing::error!(%error, "writing the ledger entry failed");
-                (None, Vec::new())
-            }
-        }
+    let prepared = Prepared {
+        enforced,
+        uncounted,
+        priced,
     };
+    let (entry_id, over) = enter(state, user, entry, prepared).await?;
     let request = PrintRequest {
         printer: printer.name,
         document,
@@ -261,29 +239,91 @@ async fn submit_form(
     Ok(Submitted { job: id, over })
 }
 
-/// Checks the job against the quota rules and enters it in the ledger, in one write
-/// transaction: a concurrent job of the same user or pool waits for this one to be counted.
-/// Returns the entry's id and the soft rules the job goes over.
-async fn enter_checked(
+/// What a job was prepared under, before its write transaction.
+struct Prepared {
+    /// Whether a rule was enabled when the job was prepared.
+    enforced: bool,
+    /// Why the pages are unknown, if they are.
+    uncounted: Option<Uncounted>,
+    /// Whether the prices were read; without them the cost is 0.
+    priced: bool,
+}
+
+/// Enters the job in the ledger, checked against the quota rules, in one write transaction: a
+/// concurrent job of the same user or pool waits for this one to be counted. Returns the entry's
+/// id, if it could be written, and the soft rules the job goes over.
+///
+/// Whether the rules are enforced is decided on the rules read inside the transaction, so a rule
+/// enabled while the job was prepared applies to it. With a rule enabled, any failure refuses
+/// the job. Without one, a ledger that cannot be written does not stop printing. A failure before
+/// the rules are read again is judged by the rules the job was prepared under.
+async fn enter(
     state: &AppState,
     user: &User,
-    groups: &[i64],
     entry: NewEntry,
-) -> Result<(i64, Vec<i64>), Rejected> {
-    let failed = closed("checking the print quotas");
-    let transaction = begin_write(&state.database)
+    prepared: Prepared,
+) -> Result<(Option<i64>, Vec<i64>), Rejected> {
+    let unchecked = |error: recto_domain::Error| {
+        if prepared.enforced {
+            Err(closed("checking the print quotas")(error).into())
+        } else {
+            tracing::error!(%error, "writing the ledger entry failed");
+            Ok((None, Vec::new()))
+        }
+    };
+    let transaction = match begin_write(&state.database).await {
+        Ok(transaction) => transaction,
+        Err(error) => return unchecked(error.into()),
+    };
+    // The user first, before the rules are read: on PostgreSQL, a job that waits here for a
+    // racing one reads the rules and the usage only once that one is committed.
+    if let Err(error) = quotas::lock_subjects(&transaction, user.id, &[]).await {
+        return unchecked(error);
+    }
+    let rules = match quotas::rules(&transaction).await {
+        Ok(rules) => rules,
+        Err(error) => return unchecked(error),
+    };
+    if !rules.iter().any(|rule| rule.enabled) {
+        let entered = async {
+            let id = ledger::insert(&transaction, entry, chrono::Utc::now()).await?;
+            transaction.commit().await?;
+            Ok::<_, recto_domain::Error>(id)
+        };
+        return match entered.await {
+            Ok(id) => Ok((Some(id), Vec::new())),
+            Err(error) => {
+                tracing::error!(%error, "writing the ledger entry failed");
+                Ok((None, Vec::new()))
+            }
+        };
+    }
+    let groups = access::group_ids_of(&transaction, user.id)
         .await
-        .map_err(|error| failed(error.into()))?;
+        .map_err(closed("reading the groups of the user"))?;
+    let applicable: Vec<Rule> = quotas::applicable(&rules, user.id, &groups, &entry.printer);
+    // Only the jobs metric does without the pages; the others cannot be checked blind.
+    if let Some(uncounted) = prepared.uncounted
+        && applicable.iter().any(|rule| rule.metric != Metric::Jobs)
+    {
+        return Err(match uncounted {
+            Uncounted::Unreadable => Refusal::Uncountable,
+            Uncounted::Busy => Refusal::CountingBusy,
+        }
+        .into());
+    }
+    // Prices that could not be read made the job free: not to be checked as such.
+    if !prepared.priced {
+        return Err(Refusal::Unavailable.into());
+    }
+    let failed = closed("checking the print quotas");
     let checked = async {
-        // Read again inside the transaction, so the pools locked are those checked.
-        let rules = quotas::rules(&transaction).await?;
-        let applicable: Vec<Rule> = quotas::applicable(&rules, user.id, groups, &entry.printer);
         quotas::lock_subjects(&transaction, user.id, &quotas::pool_groups(&applicable)).await?;
         let now = chrono::Utc::now();
         let verdict = quotas::check(
             &transaction,
             user.id,
-            groups,
+            &groups,
             &entry.printer,
             &entry.counts,
             now,
@@ -305,7 +345,7 @@ async fn enter_checked(
                 .await
                 .map_err(|error| failed(error.into()))?;
             Ok((
-                id,
+                Some(id),
                 warnings.iter().map(|standing| standing.rule.id).collect(),
             ))
         }

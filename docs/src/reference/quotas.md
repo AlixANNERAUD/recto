@@ -176,7 +176,9 @@ Otherwise such a job prints, with unknown counts.
 
 Quotas fail closed. When recto cannot read the rules, it refuses the job, since any of them might
 apply. With at least one enabled rule, it also refuses the job when it cannot read the person's
-groups or the printer's prices, or cannot check and record the job. The person reads "The
+groups or the printer's prices, or cannot check and record the job. Whether a rule is enabled is
+read again in the transaction that checks and records the job: a rule enabled while a job was
+being prepared applies to it. The person reads "The
 printing service is unavailable. Try again later.", and the log says why (see
 [Logs](logs.md#events)). Printing past a limit because the database was down would make every
 limit easy to bypass. The Print page then shows no **What you have left** section.
