@@ -112,6 +112,22 @@ async fn refused_device_forms_say_why() {
     // What was typed comes back.
     assert!(html.contains(&format!("value=\"{long}\"")), "{html}");
     assert!(secrets_in(&html).is_empty(), "{html}");
+    let response = harness
+        .send(form(
+            "/account/devices",
+            Some(&cookie),
+            &[("name", "Work\tlaptop")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let html = text(response).await;
+    assert!(
+        html.contains(
+            "The device name cannot contain line breaks, tabs or other control characters."
+        ),
+        "{html}"
+    );
+    assert!(!html.contains("1 to 64 characters"), "{html}");
 
     let carol = harness.user_id("carol").await;
     for number in 0..device_passwords::MAX_PER_USER {

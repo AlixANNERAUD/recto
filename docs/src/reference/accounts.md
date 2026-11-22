@@ -135,10 +135,10 @@ account's password, which would otherwise sit in every device's keychain. Every 
 single sign-on users included, as long as OS integration is on (`RECTO_OS_INTEGRATION=true`; it
 is off by default). They are kept in the **Devices** section of the Account page, at `/account`:
 
-- **Create** one per device, with a name of 1 to 64 characters, such as `Work laptop`. recto
-  draws a random password of 32 characters (letters `a` to `z` and digits `2` to `7`, 160 bits)
-  and shows it once, with your username. Copy it then: it is stored only as its SHA-256 and
-  cannot be shown again. The page that shows it is not cached by the browser.
+- **Create** one per device, with a name of 1 to 64 characters on one line, such as
+  `Work laptop`. recto draws a random password of 32 characters (letters `a` to `z` and digits
+  `2` to `7`, 160 bits) and shows it once, with your username. Copy it then: it is stored only
+  as its SHA-256 and cannot be shown again. The page that shows it is not cached by the browser.
 - **Revoke** one when a device is lost, sold or no longer used. The device's next request is
   refused.
 - Each user has at most 20. The list shows when each was created and last used, to within 5

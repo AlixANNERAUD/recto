@@ -82,6 +82,8 @@ pub enum Problem {
     HolderMismatch,
     #[error("the device name must be 1 to {maximum} characters")]
     DeviceNameInvalid { maximum: usize },
+    #[error("the device name cannot contain control characters such as line breaks or tabs")]
+    DeviceNameControl,
     #[error("a user has at most {maximum} device passwords")]
     TooManyDevicePasswords { maximum: usize },
 }

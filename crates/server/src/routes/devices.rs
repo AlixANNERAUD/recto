@@ -121,6 +121,9 @@ fn refused(error: Error) -> (StatusCode, DevicesProblem) {
             StatusCode::BAD_REQUEST,
             DevicesProblem::NameInvalid { maximum },
         ),
+        Error::Invalid(Problem::DeviceNameControl) => {
+            (StatusCode::BAD_REQUEST, DevicesProblem::NameControl)
+        }
         Error::Invalid(Problem::TooManyDevicePasswords { maximum }) => {
             (StatusCode::BAD_REQUEST, DevicesProblem::TooMany { maximum })
         }

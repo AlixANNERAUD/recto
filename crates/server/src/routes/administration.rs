@@ -381,6 +381,7 @@ fn refused(error: Error) -> (StatusCode, UsersProblem) {
             | Problem::GrantTooLarge { .. }
             | Problem::HolderMismatch
             | Problem::DeviceNameInvalid { .. }
+            | Problem::DeviceNameControl
             | Problem::TooManyDevicePasswords { .. }),
         ) => {
             tracing::error!(%problem, "changing a user failed");

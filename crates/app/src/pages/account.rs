@@ -90,6 +90,8 @@ pub enum DevicesProblem {
     NameInvalid {
         maximum: usize,
     },
+    /// The name has a line break, a tab or another control character.
+    NameControl,
     TooMany {
         maximum: usize,
     },
@@ -103,6 +105,7 @@ impl DevicesProblem {
             DevicesProblem::NameInvalid { maximum } => {
                 tf!("account.devices.errors.name_invalid", maximum = maximum)
             }
+            DevicesProblem::NameControl => t!("account.devices.errors.name_control").to_owned(),
             DevicesProblem::TooMany { maximum } => {
                 tf!("account.devices.errors.too_many", maximum = maximum)
             }

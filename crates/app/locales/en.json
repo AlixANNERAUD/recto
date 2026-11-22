@@ -127,6 +127,7 @@
       },
       "errors": {
         "name_invalid": "The device name must be 1 to {maximum} characters long.",
+        "name_control": "The device name cannot contain line breaks, tabs or other control characters.",
         "too_many": "You already have {maximum} device passwords. Revoke one you no longer use first.",
         "unavailable": "The device passwords could not be changed. Try again in a moment."
       }

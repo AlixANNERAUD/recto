@@ -62,7 +62,8 @@ pub struct DeviceUser {
 }
 
 /// Creates a device password for the user, named `name` once trimmed (1 to
-/// [`MAX_NAME_LENGTH`] characters, no control characters), and returns its secret. Refused with
+/// [`MAX_NAME_LENGTH`] characters, else [`Problem::DeviceNameInvalid`]; no control characters,
+/// else [`Problem::DeviceNameControl`]), and returns its secret. Refused with
 /// [`Problem::TooManyDevicePasswords`] when the user already has [`MAX_PER_USER`].
 pub async fn create(
     database: &(impl ConnectionTrait + TransactionTrait),
@@ -72,10 +73,13 @@ pub async fn create(
 ) -> Result<Created> {
     let name = name.trim();
     let length = name.chars().count();
-    if length == 0 || length > MAX_NAME_LENGTH || name.chars().any(char::is_control) {
+    if length == 0 || length > MAX_NAME_LENGTH {
         return Err(Error::Invalid(Problem::DeviceNameInvalid {
             maximum: MAX_NAME_LENGTH,
         }));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(Error::Invalid(Problem::DeviceNameControl));
     }
     let secret = new_secret();
     // Two creations at once must not both pass the count. On SQLite the write transaction
@@ -482,6 +486,16 @@ mod tests {
                 create(&database, alice, name, noon()).await,
                 Err(Error::Invalid(Problem::DeviceNameInvalid { .. }))
             ));
+        }
+        // Line breaks, tabs and other control characters have a reason of their own.
+        for name in ["Work\nlaptop", "Work\tlaptop", "Phone\u{7}"] {
+            assert!(
+                matches!(
+                    create(&database, alice, name, noon()).await,
+                    Err(Error::Invalid(Problem::DeviceNameControl))
+                ),
+                "{name:?}"
+            );
         }
         // Characters, not bytes.
         create(&database, alice, &"é".repeat(MAX_NAME_LENGTH), noon())
