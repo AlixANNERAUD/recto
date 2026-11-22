@@ -13,8 +13,8 @@ use std::collections::HashMap;
 
 use recto_entity::{device_passwords, user_identities, users};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait,
-    QueryFilter, QueryOrder, QuerySelect, TransactionSession, TransactionTrait,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, TransactionSession, TransactionTrait,
 };
 use sha2::{Digest, Sha256};
 
@@ -78,8 +78,16 @@ pub async fn create(
         }));
     }
     let secret = new_secret();
-    // In one transaction, so two creations at once cannot both pass the count.
+    // Two creations at once must not both pass the count. On SQLite the write transaction
+    // already runs alone; PostgreSQL's default isolation lets both read the same count, so the
+    // user's row is locked first, as the quota check does, and the second waits for the first.
     let transaction = begin_write(database).await?;
+    if transaction.get_database_backend() != DatabaseBackend::Sqlite {
+        users::Entity::find_by_id(user_id)
+            .lock_exclusive()
+            .one(&transaction)
+            .await?;
+    }
     let count = device_passwords::Entity::find()
         .filter(device_passwords::Column::UserId.eq(user_id))
         .count(&transaction)
@@ -591,6 +599,43 @@ mod tests {
                 .unwrap(),
             Lookup::Unknown
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_creations_stay_within_the_limit() {
+        let database = crate::testing::database().await;
+        let alice = user(&database, "alice", false).await;
+        for number in 1..MAX_PER_USER {
+            create(&database, alice, &format!("Device {number}"), noon())
+                .await
+                .unwrap();
+        }
+        // Open connections, so the creations start their transactions together.
+        let mut warm = Vec::new();
+        for _ in 0..6 {
+            warm.push(database.begin().await.unwrap());
+        }
+        drop(warm);
+        let start = std::sync::Arc::new(tokio::sync::Barrier::new(6));
+        let creations: Vec<_> = (0..6)
+            .map(|number| {
+                let (database, start) = (database.clone(), start.clone());
+                tokio::spawn(async move {
+                    start.wait().await;
+                    create(&database, alice, &format!("Racer {number}"), noon()).await
+                })
+            })
+            .collect();
+        let mut created = 0;
+        for creation in creations {
+            match creation.await.unwrap() {
+                Ok(_) => created += 1,
+                Err(Error::Invalid(Problem::TooManyDevicePasswords { .. })) => {}
+                Err(error) => panic!("{error}"),
+            }
+        }
+        assert_eq!(created, 1);
+        assert_eq!(list(&database, alice).await.unwrap().len(), MAX_PER_USER);
     }
 
     #[tokio::test]
