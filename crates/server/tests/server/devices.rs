@@ -257,3 +257,32 @@ async fn a_revoked_phone_does_not_block_sign_in() {
     // Password sign-in from the same address is untouched.
     harness.sign_in_with_password("alice", ALICE_PASSWORD).await;
 }
+
+#[tokio::test]
+async fn a_personal_address_never_leaves_its_secret_in_a_redirect() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let created = device_passwords::create(&harness.database, alice, "Phone", chrono::Utc::now())
+        .await
+        .unwrap();
+    let cookie = harness.sign_in_with_password("alice", ALICE_PASSWORD).await;
+    for secret in [created.secret.as_str(), &"a".repeat(32)] {
+        for uri in [
+            format!("/device/{secret}"),
+            format!("/device/{secret}/ipp/print"),
+            format!("/device/{secret}/eSCL/ScannerCapabilities?x=1"),
+        ] {
+            // A browser opening the address, signed in or not, and a device posting to it.
+            for request in [
+                page(&uri, None),
+                page(&uri, Some(&cookie)),
+                form(&uri, None, &[]),
+            ] {
+                let response = harness.send(request).await;
+                assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+                assert!(!response.headers().contains_key(header::LOCATION), "{uri}");
+                assert!(text(response).await.is_empty(), "{uri}");
+            }
+        }
+    }
+}

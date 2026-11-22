@@ -49,6 +49,7 @@ only.
 | warn | `marking the scan saved failed` | `error` |
 | warn | `sign-in refused`, `starting a sign-in failed` | `error` |
 | warn | `password sign-in refused` | `client`, `refusal` |
+| warn | `cross-site request refused` | `method`, `path`, with the secret of a personal device address shown as `<secret>` |
 | warn | `disabled user refused` | `subject` |
 | warn | `reading the user information failed` | `error` |
 | warn | `SANE could not start; scanning is off`, `SANE crashed while starting; scanning is off` | `error` |

@@ -2,7 +2,7 @@
 
 Every address requires a signed-in user except `/health`, the sign-in addresses (`/sign-in`,
 `/auth/*`, `/no-access`), `POST /theme`, `/brand/*`, `/manifest.webmanifest`, `/sw.js`,
-`/pwa.js`, `/offline` and the interface's static files. A page requested without a session redirects to `/sign-in?next=<path>`, which
+`/pwa.js`, `/offline`, `/device/*` and the interface's static files. A page requested without a session redirects to `/sign-in?next=<path>`, which
 brings the person back after signing in; forms, downloads and server functions answer `401`
 instead. A single sign-on user without the required claim, or disabled, is sent to `/no-access`.
 
@@ -85,6 +85,10 @@ administrator. The account page answers `404` to users it has nothing for: witho
 or with local accounts off, while `RECTO_OS_INTEGRATION` is off. The password form answers `404`
 to users without a password, and the device forms answer `404` while `RECTO_OS_INTEGRATION` is
 off.
+
+Personal device addresses, `/device/<secret>/...`, answer a bare `404` with no body to any
+method, signed in or not, until a device route matches: never the sign-in redirect, which would
+copy the secret into a `Location` header and the browser's history.
 
 The Scan page and the live parts of the other pages call server functions under `/api/`. They
 are internal to the interface and may change between versions.

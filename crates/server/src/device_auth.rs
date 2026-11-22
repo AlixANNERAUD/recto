@@ -173,6 +173,24 @@ fn counted_address(address: IpAddr) -> IpAddr {
     }
 }
 
+/// `path` as it may be logged: the secret of a personal address, `/device/<secret>/...`, is
+/// replaced by `<secret>`.
+pub fn loggable_path(path: &str) -> Cow<'_, str> {
+    let Some(rest) = path.strip_prefix(PERSONAL_PREFIX) else {
+        return Cow::Borrowed(path);
+    };
+    match rest.find('/').map_or(rest, |end| &rest[..end]) {
+        "" => Cow::Borrowed(path),
+        secret => Cow::Owned(format!(
+            "{PERSONAL_PREFIX}<secret>{}",
+            &rest[secret.len()..]
+        )),
+    }
+}
+
+/// Where personal addresses start.
+pub const PERSONAL_PREFIX: &str = "/device/";
+
 /// What device authentication needs.
 #[derive(Clone)]
 pub struct DeviceAuth {
@@ -443,6 +461,25 @@ mod tests {
         }
         assert!(!limiter.allow_at(second, start));
         assert!(limiter.allow_at("2001:db8:0:1::1".parse().unwrap(), start));
+    }
+
+    #[test]
+    fn logged_paths_hide_personal_secrets() {
+        let secret = "a".repeat(32);
+        for (path, logged) in [
+            (format!("/device/{secret}"), "/device/<secret>"),
+            (format!("/device/{secret}/"), "/device/<secret>/"),
+            (
+                format!("/device/{secret}/ipp/print"),
+                "/device/<secret>/ipp/print",
+            ),
+            ("/device/".to_owned(), "/device/"),
+            ("/account/devices".to_owned(), "/account/devices"),
+            ("/devices/abc".to_owned(), "/devices/abc"),
+            ("/".to_owned(), "/"),
+        ] {
+            assert_eq!(loggable_path(&path), logged, "{path}");
+        }
     }
 
     #[test]

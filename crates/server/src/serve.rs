@@ -13,7 +13,7 @@ use axum::{
     http::{HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{any, get, post},
 };
 use leptos::config::LeptosOptions;
 use leptos::prelude::provide_context;
@@ -40,6 +40,7 @@ pub use crate::state::AuthState;
 use crate::{
     branding,
     config::Config,
+    device_auth,
     routes::{administration, auth, devices, password, print, pwa, scan},
     session, state,
 };
@@ -68,7 +69,8 @@ pub fn leptos_options(config: &Config) -> LeptosOptions {
 /// `/health` (it touches neither CUPS nor the identity provider, so a container stays healthy
 /// while they are down), the sign-in addresses (`/sign-in`, the `/auth/*` routes and pages,
 /// `/no-access`), `POST /theme`, `/brand/*`, `/manifest.webmanifest`, `/sw.js`, `/pwa.js`,
-/// `/offline`, and the static files the fallback serves (see `fallback`). The
+/// `/offline`, the personal device addresses `/device/*` (a bare 404 for now), and the static
+/// files the fallback serves (see `fallback`). The
 /// `/administration` pages and forms need an administrator.
 ///
 /// Must be called inside a Tokio runtime: the sign-in rate limit forgets old clients in the
@@ -117,6 +119,10 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         .with_state(state);
     Router::new()
         .route("/health", get(|| async { "ok" }))
+        // Until a device route matches, a personal address is unknown: a bare 404, never the
+        // sign-in redirect or the not-found page of the fallback, which would carry the secret
+        // into a `Location` header or the browser's history.
+        .route("/device/{*rest}", any(|| async { StatusCode::NOT_FOUND }))
         .merge(auth::router().with_state(auth.clone()))
         .merge(password)
         .merge(devices)
@@ -169,7 +175,7 @@ async fn refuse_cross_site(
     }
     tracing::warn!(
         method = %request.method(),
-        path = request.uri().path(),
+        path = %device_auth::loggable_path(request.uri().path()),
         "cross-site request refused"
     );
     let locale = recto_app::i18n::from_headers(request.headers());
