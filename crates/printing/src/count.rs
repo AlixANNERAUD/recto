@@ -16,7 +16,7 @@ use crate::PageRanges;
 const MAX_INFLATED_STREAM: usize = 16 * 1024 * 1024;
 
 /// The deepest page tree counted, its root and pages included.
-const MAX_DEPTH: usize = 64;
+pub const MAX_DEPTH: usize = 64;
 
 /// The most pages a document may have and still be counted.
 pub const MAX_PAGES: u32 = 100_000;
