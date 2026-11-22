@@ -15,6 +15,10 @@ ignore = [
   # 0.39 cannot be used yet. Exploiting it needs a database file and its -wal written by a less
   # trusted party: recto only opens its own database, or a backup the operator restores.
   { id = "RUSTSEC-2026-0459", reason = "recto only opens its own database; upgrade once sqlx-sqlite allows libsqlite3-sys 0.39" },
+  # Unmaintained, not vulnerable. SeaORM and sqlx read and write times through chrono,
+  # and quota windows need chrono-tz's time zones; there is no maintained drop-in yet.
+  { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, with no known vulnerability; SeaORM depends on it" },
+  { id = "RUSTSEC-2026-0555", reason = "chrono-tz is unmaintained, with no known vulnerability; quota windows need its zones" },
 ]
 
 [licenses]
