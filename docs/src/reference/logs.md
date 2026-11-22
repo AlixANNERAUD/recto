@@ -77,6 +77,7 @@ only.
 | error | `reading the printer access rules failed`, `reading the scanner access rules failed` | `error` |
 | error | `saving the device access failed`, `forgetting the device access failed`, `loading the device rules failed` | `error` |
 | error | `listing the users failed`, `listing the groups failed` | `error` |
+| error | `loading the usage failed`: the Usage page shows the error instead of the tables | `error` |
 
 Commands such as `recto create-administrator` write their messages as text.
 

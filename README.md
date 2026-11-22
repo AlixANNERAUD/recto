@@ -62,6 +62,8 @@ Authentik and others), or both.
   preview the glass and drag to scan only part of it. Feeder batches become one PDF.
 - **Save to a folder** for Paperless-ngx or any folder watcher: files appear complete, and never
   overwrite one another.
+- **Usage reports**: who printed and scanned what over a range of days, by user, group, printer or
+  scanner, with CSV exports for a spreadsheet.
 - **Local accounts** with passwords hashed with Argon2id and rate-limited sign-in, created by
   **administrators** who also reset passwords and disable users from the web page.
 - **Single sign-on** with any OpenID Connect provider, optionally limited to a role or group, with

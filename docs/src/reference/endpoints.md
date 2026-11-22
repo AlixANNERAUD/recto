@@ -21,6 +21,7 @@ instead. A single sign-on user without the required claim, or disabled, is sent 
 | `/administration/printers` | Printers: who may use each printer, its prices, and, with printer management on, adding printers and managing each one. `?drivers=<words>` fills the Add form's driver list with up to 50 matching drivers. Administrators only. |
 | `/administration/scanners` | Scanners: who may use each scanner. Administrators only. |
 | `/administration/quotas` | Quotas: create, change, disable and delete quota rules, and grant extra to or reset a pool. Administrators only. |
+| `/administration/usage` | Usage: what was printed and scanned over a range, in total and by user, group, printer or scanner. `?from=YYYY-MM-DD&to=YYYY-MM-DD` sets the range, both days included, the current month without them; `&by=user`, `group`, `printer` or `scanner` the table. Answers `400` with the page and a message when the dates cannot be read (see [Reports](reports.md#range)), and `503` when the database fails. Administrators only. |
 | `/sign-in` | The password form, and the single sign-on button when a provider is set. It redirects to `/auth/login` instead when a provider is set and local accounts are off, or no account has a password. |
 | `/no-access` | Shown to single sign-on users without the required claim, or disabled. |
 | `/auth/error` | Shown when sign-in fails. |

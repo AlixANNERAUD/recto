@@ -27,6 +27,8 @@ with no drivers to install on each device.
   only part of it.
 - **Saves** scans to a folder, such as the consume folder of Paperless-ngx, without ever
   overwriting a file.
+- **Reports usage**: administrators see who printed and scanned what over a range of days, by
+  user, group, printer or scanner, and download it as CSV.
 - **Signs people in** with local accounts, a username and a password, or with your own OpenID
   Connect provider (Zitadel, Keycloak, Authentik and others), optionally only those with a given
   role or group. Administrators create the local accounts, reset passwords and disable users from
