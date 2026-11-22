@@ -70,19 +70,25 @@ the brand, so an upgrade or a new brand replaces it.
 
 ## State
 
-recto keeps little, and only its accounts on disk:
+recto keeps little, and only in its database on disk:
 
 | What | Where | Lifetime |
 | --- | --- | --- |
 | Users, groups, password hashes | the database | until deleted |
 | Sessions | the database | 12 hours without a request |
+| Who may use each printer and scanner | the database | until changed or forgotten |
+| Print job records: the ledger, with each job's owner, counts, cost and refund | the database | kept |
+| Printer prices | the database | until changed or forgotten |
+| Quota rules, their grants and resets | the database | until the rule is deleted |
 | Scan results | `/tmp/recto-scans` | 1 hour, or until recto restarts |
 | The scanner list | memory | until someone looks again |
 | Password sign-in attempts | memory | a few seconds, or until recto restarts |
 | Configuration | environment | the life of the process |
 
 Printers and jobs live in CUPS, and recto asks CUPS for them at every page load. The database
-holds only what CUPS and SANE cannot: who may sign in, and who is signed in. Keeping sessions
+holds only what CUPS and SANE cannot: who may sign in and who is signed in, who may use which
+device, and what each person printed, what it cost and what they may still print (see
+[How quotas work](quotas.md)). Keeping sessions
 there, rather than in memory, is what lets recto restart or upgrade without signing anyone out,
 and lets a password change or a disabled account end sessions at once.
 

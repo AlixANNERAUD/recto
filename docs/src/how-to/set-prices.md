@@ -32,7 +32,8 @@ Amounts are kept in the currency's smallest unit, so they take at most its decim
 
 - A job's cost is computed when it is sent, from the prices at that moment, and kept with the
   job. A new price applies to later jobs only.
-- A PDF whose pages recto cannot count costs 0.
+- A PDF whose pages recto cannot count costs 0. With a [quota](set-quotas.md) on pages or cost,
+  such a PDF is refused instead.
 - A job that printed nothing (refused by CUPS, or canceled before it started) is refunded: it
   stops counting.
 

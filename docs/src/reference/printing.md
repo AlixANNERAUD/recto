@@ -41,7 +41,8 @@ type, the printer, the copies, the sides and the color mode, and these counts:
 | Black and white pages | The other pages. |
 
 The pages of a PDF come from reading the file. When recto cannot read a PDF, it still prints it
-and records the counts as unknown, which is not the same as zero. A page range that goes past the
+and records the counts as unknown, which is not the same as zero, unless a quota rule needs them:
+then it refuses the job (see [Counting](quotas.md#counting)). A page range that goes past the
 end of the document selects only the pages that exist.
 
 ## Refunds
@@ -98,3 +99,7 @@ seconds while the page is visible.
 Queued, held, printing and stopped jobs have a **Cancel** button. A job whose owner CUPS hides is
 shown as **another user**. Jobs sent through recto show the sender's display name, from the record
 recto keeps of each job it submits; other jobs show the owner CUPS reports.
+
+A job shows the pages CUPS reports for it, when it reports any. For a job sent through recto, its
+owner and administrators see instead the pages recto counted for it, and its cost when it is
+above 0. Others see the count CUPS reports, and no cost.

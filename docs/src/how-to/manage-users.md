@@ -66,6 +66,22 @@ Press **Make administrator** or **Remove administration** on the person's row.
 Administration marked **From the identity provider** comes from the administrator claim, and has
 no button: change it in the provider. The next sign-in applies the change.
 
+## See usage and adjust quotas
+
+With [print quotas](set-quotas.md) set, a **Quotas** column shows, on each person's row, their
+usage of each enabled rule for everyone, their groups or them that applies to them, in its current
+window, such as "Monthly pages: 30 of 100 pages used this month", with ", plus 20 pages granted"
+when they have extra. Under each rule, **Grant extra or reset** opens two forms:
+
+- **Grant extra** gives the person more of that rule until its window ends. Type the **Extra
+  allowance** and a **Reason**.
+- **Reset** makes what the person printed so far stop counting toward that rule. Type a
+  **Reason**.
+
+The reason is required, up to 200 characters, and is kept with your name. Both are described in
+[Set print quotas](set-quotas.md#give-extra). A pool, shared by a group, is adjusted from its rule
+on the **Quotas** page instead.
+
 ## Change your own password
 
 When you sign in with a password, your name at the top of every page leads to your **Account**

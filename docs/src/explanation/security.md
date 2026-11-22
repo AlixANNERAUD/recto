@@ -15,7 +15,8 @@ recto is built for a household, or a small team, that trusts itself:
   With `RECTO_JOB_VISIBILITY=own`, jobs are private: people see and cancel only their own, and
   administrators see all (see [Keep jobs private](../how-to/restrict-access.md#keep-jobs-private)).
 - **These limits apply inside recto only.** Anyone who reaches CUPS or `saned` directly, from
-  your network, bypasses them: keep those services off networks you do not trust.
+  your network, bypasses them, print quotas included: keep those services off networks you do
+  not trust.
 - **Administrators manage accounts and device rules.** They create local accounts, set
   passwords, disable users, appoint other administrators and limit devices to groups. They can
   use every device and see every job. They cannot read passwords, and they cannot act on their

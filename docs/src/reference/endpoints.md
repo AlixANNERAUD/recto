@@ -10,16 +10,17 @@ instead. A single sign-on user without the required claim, or disabled, is sent 
 
 | Path | Page |
 | --- | --- |
-| `/` | Print: the print form and the chosen printer's status. |
+| `/` | Print: the print form, the chosen printer's status, and what the user has left of each quota rule that applies to them. `?error=<code>` shows why the last job was refused, with `&rule=<id>` for a quota. |
 | `/printers` | Printers: every printer the user may use, with its state and supplies. |
-| `/jobs` | Jobs: the print queue, with Cancel buttons. |
+| `/jobs` | Jobs: the print queue, with Cancel buttons, and the pages and cost of each job to its owner and to administrators. `?submitted=<id>` confirms a job, with `&over=<id>,<id>` naming the soft quota rules it went over. |
 | `/scan` | Scan: scanners, options, preview and results. Needs JavaScript. |
 | `/account` | Account: change your password. Only for users with a password, and with local accounts on. |
 | `/administration` | Redirects to `/administration/users`. Administrators only. |
-| `/administration/users` | Users: create local accounts, set passwords, disable users, grant administration. Administrators only. |
+| `/administration/users` | Users: create local accounts, set passwords, disable users, grant administration, see each user's quota usage, grant extra and reset it. Administrators only. |
 | `/administration/groups` | Groups: the groups from the identity provider and their members. Administrators only. |
 | `/administration/printers` | Printers: who may use each printer, its prices, and, with printer management on, adding printers and managing each one. `?drivers=<words>` fills the Add form's driver list with up to 50 matching drivers. Administrators only. |
 | `/administration/scanners` | Scanners: who may use each scanner. Administrators only. |
+| `/administration/quotas` | Quotas: create, change, disable and delete quota rules, and grant extra to or reset a pool. Administrators only. |
 | `/sign-in` | The password form, and the single sign-on button when a provider is set. It redirects to `/auth/login` instead when a provider is set and local accounts are off, or no account has a password. |
 | `/no-access` | Shown to single sign-on users without the required claim, or disabled. |
 | `/auth/error` | Shown when sign-in fails. |
@@ -33,7 +34,7 @@ These work without JavaScript and accept only requests from recto's own pages (s
 
 | Method and path | Does |
 | --- | --- |
-| `POST /print` | Sends the uploaded file to a printer, then redirects to `/jobs`. |
+| `POST /print` | Sends the uploaded file to a printer, then redirects to `/jobs?submitted=<id>`, with `&over=<rule id>,<rule id>` when the job went over soft quota rules. A refused job redirects to `/?error=<code>`: `quota` with `&rule=<id>` for a hard quota rule, `uncountable` or `counting_busy` when a quota needs the pages of a PDF recto could not count, `unavailable` when the quota rules cannot be read, or the database fails while a rule is enabled. See [Quotas](quotas.md). |
 | `POST /jobs/{id}/cancel` | Cancels a job, then redirects to `/jobs`. With `RECTO_JOB_VISIBILITY=own`, a job the user may not see redirects to `/jobs?error=job_not_found`, as a missing one does. |
 | `GET /scan/results/{id}` | The result of a scan, for the preview image. |
 | `GET /scan/results/{id}/download` | The scan as a file download. |
@@ -43,6 +44,8 @@ These work without JavaScript and accept only requests from recto's own pages (s
 | `POST /administration/users/{id}/administrator` | Grants or removes administration. |
 | `POST /administration/users/{id}/disabled` | Disables or enables a user. |
 | `POST /administration/users/{id}/password` | Sets a user's password. |
+| `POST /administration/users/{id}/grant` | Grants the user extra of a quota rule until its current window ends. Fields: `rule` (the id of an `everyone` or `group` rule, or of a `user` rule for that user), `amount` (a whole number above 0; for a cost rule, an amount in `RECTO_CURRENCY` above 0) and `reason` (1 to 200 characters once trimmed). Redirects with `?done=quota_granted&user=<id>`. |
+| `POST /administration/users/{id}/reset` | Resets the user's usage of a quota rule: only later jobs count. Fields: `rule` and `reason`, as for a grant. Redirects with `?done=quota_reset&user=<id>`. |
 | `POST /administration/printers/access` and `/administration/scanners/access` | Sets who may use a device. Fields: `device`, `access` (`everyone` or `groups`) and one `groups` field per group id; `groups` with none means administrators only. Redirects to the page with `?done=access`. Answers `400` with the page when `device` or `access` is missing or a group is unknown, and `503` when the database fails. |
 | `POST /administration/printers/forget` and `/administration/scanners/forget` | Drops the rule of a device that is gone, and for a printer its prices. Field: `device`. Redirects with `?done=forgotten`. |
 | `POST /administration/printers/prices` | Sets the prices of a printer. Fields: `printer`, `mono_page`, `color_page` and `sheet`, each an amount in `RECTO_CURRENCY` such as `0.05` or `0,05`, empty for 0, with at most the currency's decimals and at most 1,000,000. All 0 removes the prices. Redirects with `?done=prices`. Answers `400` with the page and the typed amounts when one is not such an amount or `printer` is missing, and `503` when the database fails. Works with printer management off. |
@@ -50,6 +53,11 @@ These work without JavaScript and accept only requests from recto's own pages (s
 | `POST /administration/printers/describe` | Sets the description and location, an empty one clearing it. Fields: `printer`, `description`, `location`, the last two up to 1023 characters each, without control characters. Redirects with `?done=described`. |
 | `POST /administration/printers/default`, `/pause`, `/resume`, `/accept` and `/reject` | Makes the printer the default, pauses or resumes it, makes it accept or turn away jobs. Field: `printer`. Redirects with `?done=default`, `paused`, `resumed`, `accepting` or `rejecting`. |
 | `POST /administration/printers/remove` | Removes a printer from CUPS and forgets its access rule and prices. Fields: `printer` and `confirm=yes`. Redirects with `?done=removed`. |
+| `POST /administration/quotas` | Creates a quota rule. Fields: `name`; `enabled=true` for an enabled rule, absent for a disabled one; `subject` (`everyone`, `group:<id>`, `user:<id>` or `pool:<id>`); one `printers` field per printer name, none for every printer; `metric` (`pages`, `sheets`, `color_pages`, `mono_pages`, `jobs` or `cost`); `period` (`day`, `week`, `month`, `quarter`, `year`, `rolling` or `total`); `rolling_days` (1 to 366, for `rolling` only); `limit` (a whole number, 0 or more; for `cost`, an amount in `RECTO_CURRENCY`); `enforcement` (`hard` or `soft`). Redirects with `?done=created`. |
+| `POST /administration/quotas/{id}` | Changes a rule. The same fields. Its grants and resets stay. Redirects with `?done=saved`. |
+| `POST /administration/quotas/{id}/enabled` | Enables or disables a rule. Field: `enabled` (`true` or `false`). Redirects with `?done=enabled` or `disabled`. |
+| `POST /administration/quotas/{id}/delete` | Deletes a rule, with its grants and resets. Field: `confirm=yes`. Redirects with `?done=deleted`. |
+| `POST /administration/quotas/{id}/grant` and `/reset` | Grants extra to, or resets, the group of a pool rule. Fields as for a user's grant and reset, without `rule`. Redirects with `?done=granted` or `reset`. |
 
 The printer forms answer `404` when `RECTO_CUPS_ADMIN_SOCKET` is not set. The `printer` field of
 the forms other than add takes any name CUPS accepts: up to 127 bytes, without spaces, control
@@ -57,6 +65,14 @@ characters or any of `/ \ ? ' " #`. A refused form renders the Printers page aga
 reason: `400` for an invalid name, address, description or location, a missing printer or
 confirmation, or a change CUPS declined; `409` when adding a name CUPS already has; `502` when
 CUPS refused recto or could not reach the printer; `503` when CUPS did not answer.
+
+A refused quota form, grant or reset renders its page again with the reason: `400` for an empty
+name, a limit that is not a number or not an amount, a negative limit, rolling days outside 1 to
+366, a group or user that does not exist, a deletion without `confirm=yes`, an extra allowance
+not above 0, a reason empty or over 200 characters, or a field the page never offers, such as a
+grant of another user's rule, of a pool rule through a user's address, or of a rule that is not
+a pool through the Quotas page; `404` for a rule that does not exist; `503` when the database
+fails. A refused rule form keeps what was typed, and the form of the rule it changes is open.
 
 The administration pages and their forms answer `404`, with the not-found page, to anyone but an
 administrator. The account page and its form answer `404` to users without a password.

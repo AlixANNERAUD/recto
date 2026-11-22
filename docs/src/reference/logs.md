@@ -28,10 +28,15 @@ only.
 | info | `password set`, `disabled changed`, `administration changed` | `by`, `user_id`, and `value` for the last two |
 | info | `session ended: the user is gone, disabled or signed out` | `user_id` |
 | info | `document sent to the printer` | `user`, `job` |
+| info | `document sent to the printer over a soft quota` | `user`, `job`, `rules` (the rule ids, comma-separated) |
+| info | `print refused by a quota` | `user`, `rule` |
 | info | `job canceled` | `user`, `job` |
 | info | `device access changed`, `device access forgotten` | `by`, `device` |
 | info | `printer added` | `by`, `printer`, `address` |
 | info | `printer prices set` | `by`, `printer`, `mono_page`, `color_page`, `sheet` (minor units) |
+| info | `quota rule created`, `quota rule changed`, `quota rule enabled changed`, `quota rule deleted` | `by`, `rule` (its id), and `enabled` for the third |
+| info | `quota granted` | `by`, `rule`, `user` or `group`, `amount` (minor units for cost) |
+| info | `quota reset` | `by`, `rule`, `user` or `group` |
 | info | `printer described`, `default printer set`, `printer paused`, `printer resumed`, `printer accepting jobs`, `printer rejecting jobs`, `printer removed` | `by`, `printer` |
 | info | `the CUPS socket does not exist yet`: harmless while CUPS is still starting, since recto connects at each request | `socket` |
 | info | `scan saved` | `user`, `path` |
@@ -51,10 +56,16 @@ only.
 | warn | `refunded ledger entries CUPS never received` | `count` |
 | warn | `listing the devices for the administration page failed` | `error` |
 | warn | `printer administration failed` | `error`, and `by` and `printer` for a printer form |
+| warn | `listing the printers for the quotas page failed`: the page offers the printers rules already name | `error` |
 | error | `starting the session failed` | `error` |
 | error | `password sign-in failed`, `changing a password failed`, `changing a user failed` | `error` |
 | error | `writing the ledger entry failed` | `error` |
-| error | `reading the printer prices failed`, `loading the printer prices failed`, `saving the printer prices failed`, `forgetting the printer prices failed` | `error` |
+| error | `reading the quota rules failed`, `reading the groups of the user failed`, `checking the print quotas failed`: the job is refused | `error` |
+| error | `reading the print quotas failed`: the Print page hides what the user has left | `error` |
+| error | `loading the quota rules failed`, `creating a quota rule failed`, `changing a quota rule failed`, `deleting a quota rule failed` | `error` |
+| error | `adjusting a quota failed`, `granting extra failed`, `resetting a quota failed` | `error` |
+| error | `reading the quota usage failed`: the Users page shows the users without their usage | `error` |
+| error | `reading the printer prices failed`, `loading the printer prices failed`, `saving the printer prices failed`, `forgetting the printer prices failed`: with a quota rule enabled, the first refuses the job | `error` |
 | error | `refunding the ledger entry failed` | `error` |
 | error | `linking the CUPS job to its ledger entry failed` | `error`, `job` |
 | error | `reading the job records failed` | `error`, and `job` when canceling |
