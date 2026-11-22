@@ -9,7 +9,7 @@
 //! Every query runs on SQLite and PostgreSQL alike: sums are cast back to 64-bit integers,
 //! booleans are summed through `CASE`, and every selected column is grouped.
 
-use std::{cmp::Reverse, ops::RangeInclusive};
+use std::{cmp::Reverse, collections::HashMap, ops::RangeInclusive};
 
 use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, Utc};
 use chrono_tz::Tz;
@@ -21,7 +21,7 @@ use sea_orm::{
 
 use crate::{
     error::Result,
-    quotas::{Period, midnight, sum, window},
+    quotas::{midnight, sum},
 };
 
 /// The years a range may start and end in. Beyond them a date is a typo, and refusing them
@@ -48,30 +48,6 @@ impl Range {
             start: midnight(tz, from),
             end: midnight(tz, to + Duration::days(1)),
         })
-    }
-
-    /// The local calendar month that contains `now`.
-    pub fn this_month(now: DateTime<Utc>, tz: Tz) -> Range {
-        match window(Period::Month, now, tz) {
-            (Some(start), Some(end)) => Range { start, end },
-            // A month is always bounded; fall back to its days.
-            _ => {
-                let (from, to) = this_month_days(now, tz);
-                Range {
-                    start: midnight(tz, from),
-                    end: midnight(tz, to + Duration::days(1)),
-                }
-            }
-        }
-    }
-
-    /// The local calendar month before the one that contains `now`.
-    pub fn last_month(now: DateTime<Utc>, tz: Tz) -> Range {
-        let (from, to) = last_month_days(now, tz);
-        Range {
-            start: midnight(tz, from),
-            end: midnight(tz, to + Duration::days(1)),
-        }
     }
 }
 
@@ -432,9 +408,15 @@ pub async fn rows(db: &impl ConnectionTrait, range: Range, by: Breakdown) -> Res
             scan: both.then(ScanTotals::default),
         })
         .collect();
+    // Indexed, so that thousands of users who both print and scan merge in linear time.
+    let index: HashMap<Key, usize> = rows
+        .iter()
+        .enumerate()
+        .map(|(position, row)| (row.key.clone(), position))
+        .collect();
     for (key, scan) in scanned {
-        match rows.iter_mut().find(|row| row.key == key) {
-            Some(row) => row.scan = Some(scan),
+        match index.get(&key) {
+            Some(&position) => rows[position].scan = Some(scan),
             None => rows.push(Row {
                 key,
                 print: both.then(PrintTotals::default),

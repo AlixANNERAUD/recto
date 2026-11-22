@@ -144,26 +144,27 @@ fn user(id: i64, name: &str) -> Key {
 fn ranges_follow_the_local_calendar() {
     let now = utc("2026-11-17T10:00:00Z");
     assert_eq!(
-        Range::this_month(now, TZ),
-        Range {
-            start: utc("2026-10-31T23:00:00Z"),
-            end: utc("2026-11-30T23:00:00Z"),
-        }
-    );
-    assert_eq!(
-        Range::last_month(now, TZ),
-        Range {
-            start: utc("2026-09-30T22:00:00Z"),
-            end: utc("2026-10-31T23:00:00Z"),
-        }
-    );
-    assert_eq!(
         this_month_days(now, TZ),
         (date("2026-11-01"), date("2026-11-30"))
     );
     assert_eq!(
         last_month_days(now, TZ),
         (date("2026-10-01"), date("2026-10-31"))
+    );
+    assert_eq!(
+        november(),
+        Range {
+            start: utc("2026-10-31T23:00:00Z"),
+            end: utc("2026-11-30T23:00:00Z"),
+        }
+    );
+    // October starts in summer time and ends in winter time.
+    assert_eq!(
+        Range::days(date("2026-10-01"), date("2026-10-31"), TZ),
+        Some(Range {
+            start: utc("2026-09-30T22:00:00Z"),
+            end: utc("2026-10-31T23:00:00Z"),
+        })
     );
     // January's last month is December of the year before.
     assert_eq!(
@@ -178,6 +179,16 @@ fn ranges_follow_the_local_calendar() {
             end: utc("2026-03-29T22:00:00Z"),
         })
     );
+    // The day clocks go back lasts 25 hours.
+    let october = Range::days(date("2026-10-25"), date("2026-10-25"), TZ).unwrap();
+    assert_eq!(
+        october,
+        Range {
+            start: utc("2026-10-24T22:00:00Z"),
+            end: utc("2026-10-25T23:00:00Z"),
+        }
+    );
+    assert_eq!(october.end - october.start, chrono::Duration::hours(25));
     assert_eq!(
         Range::days(date("2026-11-02"), date("2026-11-01"), TZ),
         None
