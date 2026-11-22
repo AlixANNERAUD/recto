@@ -6,7 +6,7 @@ use recto_domain::{
     scans::{self, NewScan, Source},
 };
 use recto_entity::scan_jobs;
-use sea_orm::ConnectionTrait;
+use sea_orm::{ConnectionTrait, DatabaseBackend, TransactionTrait};
 
 use super::*;
 
@@ -156,6 +156,33 @@ async fn a_scan_is_logged_and_a_preview_is_not() {
     assert_eq!(row.pages, outcome["pages"].as_i64().unwrap());
     assert_eq!(row.result_id.as_deref(), outcome["id"].as_str());
     assert!(!row.saved);
+}
+
+/// A scan and its save wait at most a couple of seconds for their log when another transaction
+/// holds the table. Only PostgreSQL can lock one table: SQLite has one writer for the whole database, and
+/// every request saves its session, so there a held write lock holds back every request alike.
+#[tokio::test]
+async fn a_locked_scan_log_does_not_hold_the_scan_back() {
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
+    if harness.database.get_database_backend() != DatabaseBackend::Postgres {
+        return;
+    }
+    let alice = harness.sign_in("alice-subject", "alice").await;
+    let lock = harness.database.begin().await.unwrap();
+    lock.execute_unprepared("LOCK TABLE scan_jobs IN EXCLUSIVE MODE")
+        .await
+        .unwrap();
+    // PostgreSQL would wait for the lock as long as it is held.
+    let patience = Duration::from_secs(6);
+    let outcome = tokio::time::timeout(patience, harness.scan_pdf(&alice))
+        .await
+        .expect("the scan waited for its log");
+    let id = outcome["id"].as_str().unwrap().to_owned();
+    let response = tokio::time::timeout(patience, harness.save_scan(&alice, &id))
+        .await
+        .expect("the save waited for its log");
+    assert_eq!(response.status(), StatusCode::OK);
+    lock.rollback().await.unwrap();
 }
 
 #[tokio::test]

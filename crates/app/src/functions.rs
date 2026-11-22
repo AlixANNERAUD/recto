@@ -398,7 +398,9 @@ mod server {
         }
 
         /// Logs a finished scan for the usage reports. Best effort: the person still gets the
-        /// scan when the log cannot be written, since scans have no quotas to enforce.
+        /// scan when the log cannot be written, since scans have no quotas to enforce, and waits
+        /// at most [`scans::LOG_WAIT`] for it. The write comes before the answer rather than in a
+        /// detached task, so whatever reads the log next sees the scan.
         pub async fn record_scan(
             &self,
             scanner: &str,
@@ -415,8 +417,15 @@ mod server {
                 pages: u32::try_from(outcome.pages).unwrap_or(u32::MAX),
             };
             let now = chrono::Utc::now();
-            if let Err(error) = scans::record(&self.state.database, scan, now).await {
-                tracing::error!(%error, user = self.user.username, "recording the scan failed");
+            let recorded = scans::record(&self.state.database, scan, now);
+            match tokio::time::timeout(scans::LOG_WAIT, recorded).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => {
+                    tracing::error!(%error, user = self.user.username, "recording the scan failed");
+                }
+                Err(_) => {
+                    tracing::warn!(user = self.user.username, "recording the scan timed out");
+                }
             }
         }
 

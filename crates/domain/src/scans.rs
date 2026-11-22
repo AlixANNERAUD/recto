@@ -4,6 +4,8 @@
 //! The log is best effort: a scan that could not be logged is still handed over, since scans
 //! have no quotas to enforce.
 
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use recto_entity::scan_jobs;
 use sea_orm::{
@@ -11,6 +13,11 @@ use sea_orm::{
 };
 
 use crate::error::Result;
+
+/// How long a scan or a save waits for its log write before going on without it. Far shorter
+/// than SQLite's wait for the write lock, so a busy database never holds back a scan that is
+/// already done.
+pub const LOG_WAIT: Duration = Duration::from_secs(2);
 
 /// Where a scan came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

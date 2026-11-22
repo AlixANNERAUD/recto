@@ -74,9 +74,11 @@ pub async fn save(
         Ok(path) => {
             tracing::info!(user = user.username, path = %path.display(), "scan saved");
             // The file is saved whatever the log says.
-            let marked = scans::mark_saved(&state.database, user.id, &result_id).await;
-            if let Err(error) = marked {
-                tracing::warn!(%error, "marking the scan saved failed");
+            let marked = scans::mark_saved(&state.database, user.id, &result_id);
+            match tokio::time::timeout(scans::LOG_WAIT, marked).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => tracing::warn!(%error, "marking the scan saved failed"),
+                Err(_) => tracing::warn!(user = user.username, "marking the scan saved timed out"),
             }
             Json(json!({ "path": path })).into_response()
         }

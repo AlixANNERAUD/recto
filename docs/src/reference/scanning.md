@@ -63,7 +63,9 @@ whether the file was then saved with **Save to folder**. The file itself is neve
 - **Preview** scans are not logged.
 - Downloads are not tracked: a scan downloaded and never saved is logged as not saved.
 - Logging is best effort: if the database cannot write the row, the scan is still handed over
-  and the log says `recording the scan failed`.
+  and the log says `recording the scan failed`. A scan or a save waits at most 2 seconds for
+  its row, for example while another write holds the database, then goes on and the log says
+  `recording the scan timed out` or `marking the scan saved timed out`.
 - The log is kept for as long as the database, like the print ledger.
 
 ## Limits
