@@ -11,6 +11,7 @@ pub mod printer_prices;
 pub mod quota_adjustments;
 pub mod quota_rule_printers;
 pub mod quota_rules;
+pub mod scan_jobs;
 pub mod sessions;
 pub mod user_identities;
 pub mod users;

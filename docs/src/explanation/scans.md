@@ -30,6 +30,16 @@ Results are deleted an hour after the scan, and all of them when recto restarts,
 container's disk never fills with forgotten scans. A result is not deleted when it is downloaded
 or saved, so you can do both, or download it again.
 
+## recto remembers the scan, not the document
+
+Each finished scan leaves a line in the database: who scanned, on which scanner, how many pages,
+in which format, when, and whether it was saved to the folder. That is what the usage reports
+count. The pages themselves are gone with the result an hour later; recto never keeps a copy, so
+the log can say that someone scanned three pages on Tuesday, never what they said.
+
+Previews are not logged: they are a look at the glass, not a scan anyone keeps. Downloads are not
+tracked either, because once the file is in the browser recto cannot tell what happens to it.
+
 ## Saving never overwrites
 
 **Save to folder** is designed for folders that something else watches, the consume folder of

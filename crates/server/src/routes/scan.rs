@@ -14,6 +14,7 @@ use recto_app::{
     i18n, messages,
     state::{AppState, User},
 };
+use recto_domain::scans;
 use recto_scanning::{ScanError, ScanResult, save_to_folder};
 use serde_json::json;
 use uuid::Uuid;
@@ -64,6 +65,7 @@ pub async fn save(
     let Some(bytes) = read(&state, &result).await else {
         return not_found();
     };
+    let result_id = result.id.to_string();
     let saved =
         tokio::task::spawn_blocking(move || save_to_folder(&dir, &result.file_name, &bytes))
             .await
@@ -71,6 +73,11 @@ pub async fn save(
     match saved {
         Ok(path) => {
             tracing::info!(user = user.username, path = %path.display(), "scan saved");
+            // The file is saved whatever the log says.
+            let marked = scans::mark_saved(&state.database, user.id, &result_id).await;
+            if let Err(error) = marked {
+                tracing::warn!(%error, "marking the scan saved failed");
+            }
             Json(json!({ "path": path })).into_response()
         }
         Err(error) => {

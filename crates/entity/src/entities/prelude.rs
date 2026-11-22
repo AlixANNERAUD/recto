@@ -9,6 +9,7 @@ pub use super::printer_prices::Entity as PrinterPrices;
 pub use super::quota_adjustments::Entity as QuotaAdjustments;
 pub use super::quota_rule_printers::Entity as QuotaRulePrinters;
 pub use super::quota_rules::Entity as QuotaRules;
+pub use super::scan_jobs::Entity as ScanJobs;
 pub use super::sessions::Entity as Sessions;
 pub use super::user_identities::Entity as UserIdentities;
 pub use super::users::Entity as Users;

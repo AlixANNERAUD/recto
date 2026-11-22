@@ -54,6 +54,18 @@ button, and a **Save to folder** button when `RECTO_SCAN_OUTPUT_DIR` is set.
   suffix `-1`, `-2` and so on when the name is taken. It never replaces a file. After saving, the
   button is disabled; the result can still be downloaded until it expires.
 
+## Scan log
+
+Every finished scan is logged in the database, for the usage reports: who scanned, on which
+scanner (its SANE device id), how many pages, in which format (`pdf`, `png` or `jpg`), when, and
+whether the file was then saved with **Save to folder**. The file itself is never kept.
+
+- **Preview** scans are not logged.
+- Downloads are not tracked: a scan downloaded and never saved is logged as not saved.
+- Logging is best effort: if the database cannot write the row, the scan is still handed over
+  and the log says `recording the scan failed`.
+- The log is kept for as long as the database, like the print ledger.
+
 ## Limits
 
 | Limit | Value |

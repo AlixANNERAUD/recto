@@ -1344,3 +1344,6 @@ async fn searching_drivers_fills_the_add_form() {
     let html = harness.page("/administration/printers", &admin).await;
     assert!(!html.contains("HP LaserJet"), "{html}");
 }
+
+#[path = "pages/usage.rs"]
+mod usage;

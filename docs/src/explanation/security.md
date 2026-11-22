@@ -83,7 +83,9 @@ at the next request.
 
 The database holds password hashes and the identifiers of open sessions. Whoever reads it, or a
 backup of it, can sign in as anyone with a session open at the time, and try to guess the
-passwords offline. Keep it, and its backups, as private as the server itself.
+passwords offline. It also holds the history of who printed and scanned what and when: the names
+of printed documents, and for scans the scanner, the pages and the format, never their content.
+Keep it, and its backups, as private as the server itself.
 
 ## Cross-site requests
 

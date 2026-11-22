@@ -119,7 +119,11 @@ pub async fn scan(
         let pages = context.state.scan.scan(&id, request).await?;
         context.store(pages, format).await
     };
-    scanned.await.map_err(|error| context.scan_failure(&error))
+    let outcome = scanned
+        .await
+        .map_err(|error| context.scan_failure(&error))?;
+    context.record_scan(&id, format, &outcome).await;
+    Ok(outcome)
 }
 
 /// Whether `user` sees a job and may cancel it. `record` is the job's record, when recto
@@ -148,6 +152,7 @@ mod server {
     use recto_domain::{
         access::{self, DeviceKind, Usable},
         jobs, quotas,
+        scans::{self, NewScan, Source},
     };
     use recto_printing::{Job, PrintError, Printer};
     use recto_scanning::{
@@ -349,6 +354,29 @@ mod server {
                 &self.state.branding.name,
                 self.locale,
             ))
+        }
+
+        /// Logs a finished scan for the usage reports. Best effort: the person still gets the
+        /// scan when the log cannot be written, since scans have no quotas to enforce.
+        pub async fn record_scan(
+            &self,
+            scanner: &str,
+            format: OutputFormat,
+            outcome: &ScanOutcome,
+        ) {
+            let scan = NewScan {
+                user_id: Some(self.user.id),
+                username: self.user.username.clone(),
+                scanner: scanner.to_owned(),
+                result_id: Some(outcome.id.to_string()),
+                source: Source::Web,
+                format: format.extension().to_owned(),
+                pages: u32::try_from(outcome.pages).unwrap_or(u32::MAX),
+            };
+            let now = chrono::Utc::now();
+            if let Err(error) = scans::record(&self.state.database, scan, now).await {
+                tracing::error!(%error, user = self.user.username, "recording the scan failed");
+            }
         }
 
         /// Assembles the pages into the file and keeps it for the user. Both block, so they run

@@ -45,6 +45,7 @@ only.
 | warn | `the printing service failed`, `the printing service refused` | `error` |
 | warn | `scanning failed` | `error`, `user` |
 | warn | `saving a scan failed` | `error` |
+| warn | `marking the scan saved failed` | `error` |
 | warn | `sign-in refused`, `starting a sign-in failed` | `error` |
 | warn | `password sign-in refused` | `client`, `refusal` |
 | warn | `disabled user refused` | `subject` |
@@ -61,6 +62,7 @@ only.
 | error | `starting the session failed` | `error` |
 | error | `password sign-in failed`, `changing a password failed`, `changing a user failed` | `error` |
 | error | `writing the ledger entry failed` | `error` |
+| error | `recording the scan failed` | `error`, `user` |
 | error | `reading the quota rules failed`, `reading the groups of the user failed`, `checking the print quotas failed`: the job is refused | `error` |
 | error | `reading the print quotas failed`: the Print page hides what the user has left | `error` |
 | error | `loading the quota rules failed`, `creating a quota rule failed`, `changing a quota rule failed`, `deleting a quota rule failed` | `error` |

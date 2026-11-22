@@ -80,6 +80,7 @@ recto keeps little, and only in its database on disk:
 | Print job records: the ledger, with each job's owner, counts, cost and refund | the database | kept |
 | Printer prices | the database | until changed or forgotten |
 | Quota rules, their grants and resets | the database | until the rule is deleted |
+| The scan log: who scanned how many pages, on which scanner, and when | the database | kept |
 | Scan results | `/tmp/recto-scans` | 1 hour, or until recto restarts |
 | The scanner list | memory | until someone looks again |
 | Password sign-in attempts | memory | a few seconds, or until recto restarts |
@@ -87,15 +88,16 @@ recto keeps little, and only in its database on disk:
 
 Printers and jobs live in CUPS, and recto asks CUPS for them at every page load. The database
 holds only what CUPS and SANE cannot: who may sign in and who is signed in, who may use which
-device, and what each person printed, what it cost and what they may still print (see
-[How quotas work](quotas.md)). Keeping sessions
+device, what each person printed, what it cost and what they may still print (see
+[How quotas work](quotas.md)), and what they scanned. Keeping sessions
 there, rather than in memory, is what lets recto restart or upgrade without signing anyone out,
 and lets a password change or a disabled account end sessions at once.
 
 ## SQLite or PostgreSQL
 
 The database is a SQLite file by default, `/data/recto.db` on a volume. It needs no server, no
-password and no tuning, and recto's data is tiny: a household's accounts and sessions. SQLite
+password and no tuning, and recto's data is small: a household's accounts and sessions, and a line
+per print job and per scan. SQLite
 runs in write-ahead log mode, so pages being read never wait for a sign-in being written; that
 is also why the file must not be copied while recto runs, and why `recto backup` exists.
 
