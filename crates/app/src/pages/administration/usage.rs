@@ -333,9 +333,9 @@ fn Total(report: Report, currency: Currency) -> impl IntoView {
     }
 }
 
-const HEAD: &str =
-    "text-muted-foreground px-3 py-2 text-xs font-semibold whitespace-nowrap text-right";
-const NUMBER: &str = "px-3 py-3 text-right tabular-nums whitespace-nowrap";
+/// Headings wrap, so that the numbers stay in view on a laptop without scrolling sideways.
+const HEAD: &str = "text-muted-foreground px-2 py-2 align-bottom text-xs font-semibold";
+const NUMBER: &str = "px-2 py-3 text-right tabular-nums whitespace-nowrap";
 
 /// The chosen table, which scrolls sideways inside its card when the window is narrow.
 #[component]
@@ -367,7 +367,7 @@ fn UsageTable(rows: Vec<UsageRow>, by: Breakdown, currency: Currency) -> impl In
     }
     let headings = headings
         .into_iter()
-        .map(|heading| view! { <th scope="col" class=HEAD>{heading}</th> })
+        .map(|heading| view! { <th scope="col" class=format!("{HEAD} text-right")>{heading}</th> })
         .collect_view();
     let rows = rows
         .into_iter()
@@ -402,7 +402,7 @@ fn UsageTable(rows: Vec<UsageRow>, by: Breakdown, currency: Currency) -> impl In
                 .map(|detail| view! { <span class="text-muted-foreground block">{detail}</span> });
             view! {
                 <tr>
-                    <th scope="row" class="bg-card sticky left-0 px-3 py-3 pl-4 text-left font-normal md:pl-6">
+                    <th scope="row" class="bg-card sticky left-0 px-2 py-3 pl-4 text-left font-normal md:pl-6">
                         <span class="block font-semibold whitespace-nowrap">{row.label}</span>
                         {detail}
                     </th>
