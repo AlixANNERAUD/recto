@@ -40,6 +40,7 @@ only.
 | info | `printer described`, `default printer set`, `printer paused`, `printer resumed`, `printer accepting jobs`, `printer rejecting jobs`, `printer removed` | `by`, `printer` |
 | info | `the CUPS socket does not exist yet`: harmless while CUPS is still starting, since recto connects at each request | `socket` |
 | info | `scan saved` | `user`, `path` |
+| info | `usage exported` | `by` (who downloaded it), `export` (the file name), `from`, `to` |
 | info | `shutting down` | |
 | warn | `listing the scanners failed` | `error` |
 | warn | `the printing service failed`, `the printing service refused` | `error` |
@@ -78,6 +79,7 @@ only.
 | error | `saving the device access failed`, `forgetting the device access failed`, `loading the device rules failed` | `error` |
 | error | `listing the users failed`, `listing the groups failed` | `error` |
 | error | `loading the usage failed`: the Usage page shows the error instead of the tables | `error` |
+| error | `exporting the usage failed`: the download answers `503` | `error` |
 
 Commands such as `recto create-administrator` write their messages as text.
 

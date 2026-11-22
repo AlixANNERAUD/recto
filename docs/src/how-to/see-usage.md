@@ -36,6 +36,24 @@ below the totals. The range stays the same.
   someone in no group in none, so the group rows need not add up to the total.
 - **By printer** counts only printing, and **By scanner** only scanning.
 
+## Export to a spreadsheet
+
+Next to the tables, **Download** offers three CSV files for the range shown:
+
+- **Print jobs (CSV)**: every print job, one per line, with its document, options, counts,
+  cost and state. Refunded jobs are included and marked, so it is the whole record. Use it to
+  bill people, or to pivot by day or by document.
+- **Scans (CSV)**: every scan, one per line.
+- **This table (CSV)**: the table on the page, by user, group, printer or scanner, without the
+  total line.
+
+Excel and LibreOffice Calc open them as they are, accents included. In a script, read them as
+UTF-8 with a byte order mark, such as `encoding="utf-8-sig"` in Python. The columns are in the
+[reports reference](../reference/reports.md#csv-files).
+
+The files hold personal data: who printed which document, and when. Each download is logged
+with the administrator who made it.
+
 ## When the numbers look wrong
 
 - **A job is missing.** Jobs that printed nothing (refused by CUPS, or cancelled before

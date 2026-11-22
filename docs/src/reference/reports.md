@@ -57,6 +57,79 @@ The user and group tables have every column, the printer table the print columns
 scanner table the scan columns. A user who only scanned shows 0 for printing, and the other way
 round.
 
+## CSV files
+
+The **Download** links export the range shown, with the same query. Each file is RFC 4180:
+comma separated, lines ending with CRLF, cells holding a comma, a quote or a line break between
+double quotes, quotes doubled. It starts with a UTF-8 byte order mark, so that Excel reads
+accents.
+
+- Headers are fixed snake_case English, whatever the interface language: they are for
+  scripts.
+- Costs are amounts in `RECTO_CURRENCY` with a dot, such as `0.66`, next to a `currency` column.
+- Times are RFC 3339 in `RECTO_TIMEZONE`, with their offset, such as
+  `2026-11-17T11:00:00+01:00`.
+- Unknown counts are empty cells; yes and no are `true` and `false`.
+- A text cell starting with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'`,
+  so that a spreadsheet shows it rather than running it as a formula: a document named
+  `=HYPERLINK("http://example.com")` stays text.
+
+Each download is logged as `usage exported`, with who downloaded which file (see
+[Logs](logs.md)).
+
+### Print jobs
+
+`print-jobs-<from>-<to>.csv`: one line per ledger row of the range, oldest first, refunded ones
+included.
+
+| Column | Content |
+| --- | --- |
+| `id` | The row's number in the ledger. |
+| `submitted_at` | When recto sent the job. |
+| `username` | The username when the job was sent. |
+| `printer` | The CUPS queue. |
+| `document_name` | The uploaded file's name. |
+| `document_format` | Its MIME type, such as `application/pdf`. |
+| `document_pages` | The pages of the document itself; empty when unknown. |
+| `copies` | Copies asked for. |
+| `sides`, `color_mode` | The IPP keywords, such as `two-sided-long-edge` and `monochrome`. |
+| `pages`, `sheets`, `color_pages`, `mono_pages` | What the job counts for, copies and page range included; empty when unknown. |
+| `cost`, `currency` | Its cost. |
+| `state` | The last state recto saw: `pending`, `processing`, `completed`, `canceled` and so on. |
+| `refunded` | `true` for a job that printed nothing, which the totals leave out. |
+| `cups_job_id` | The CUPS job number; empty if CUPS never confirmed it. |
+
+### Scans
+
+`scans-<from>-<to>.csv`: one line per logged scan, oldest first.
+
+| Column | Content |
+| --- | --- |
+| `id` | The row's number in the scan log. |
+| `scanned_at` | When the scan finished. |
+| `source` | `web` for the Scan page. |
+| `username` | The username at the time; empty for an anonymous network scan. |
+| `scanner` | The SANE device id. |
+| `pages` | Pages in the file. |
+| `format` | `pdf`, `png` or `jpg`. |
+| `saved` | Whether it was saved with **Save to folder**. |
+
+### Totals
+
+`usage-by-<table>-<from>-<to>.csv`: the rows of the table on the page, in its order, without
+the total line, which would get in the way of a pivot table.
+
+| Table | Columns |
+| --- | --- |
+| `user` | `username`, `display_name`, then the print and scan columns. The anonymous line has an empty `username` and the `display_name` `anonymous`. |
+| `group` | `group`, then the print and scan columns. |
+| `printer` | `printer`, then the print columns. |
+| `scanner` | `scanner`, then the scan columns. |
+
+The print columns are `jobs`, `pages`, `sheets`, `color_pages`, `mono_pages`, `cost`,
+`currency` and `uncounted_jobs`; the scan columns `scans`, `scanned_pages` and `saved_scans`.
+They count as the page does (see [Columns](#columns)).
+
 ## Retention
 
 The ledger and the scan log are kept as long as the database. recto has no way to delete a

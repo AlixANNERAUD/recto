@@ -40,6 +40,9 @@ These work without JavaScript and accept only requests from recto's own pages (s
 | `GET /scan/results/{id}` | The result of a scan, for the preview image. |
 | `GET /scan/results/{id}/download` | The scan as a file download. |
 | `POST /scan/results/{id}/save` | Saves the scan into `RECTO_SCAN_OUTPUT_DIR`. |
+| `GET /administration/usage/print-jobs.csv` | Every ledger row of the range as CSV, refunded ones included. Same query as `/administration/usage`. Administrators only. See [Reports](reports.md#csv-files). |
+| `GET /administration/usage/scans.csv` | Every logged scan of the range as CSV. Same query. Administrators only. |
+| `GET /administration/usage/totals.csv` | The table the page shows (`by`) as CSV, without the total line. Same query. Administrators only. The three answer `400` with the message as plain text when the dates cannot be read, and `503` when the database fails. |
 | `POST /account/password` | Changes your password, then redirects to `/account?changed=1`. Answers `400` with the page for a refused change, and `429` after too many password attempts (see [Password sign-in limit](accounts.md#password-sign-in-limit)). |
 | `POST /administration/users` | Creates a local account. |
 | `POST /administration/users/{id}/administrator` | Grants or removes administration. |
