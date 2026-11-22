@@ -4,7 +4,7 @@
 //! account rules, which sign-in and the administration pages share; [`access`] limits devices
 //! to groups; [`jobs`] records who submitted each print job, [`ledger`] what each counts for,
 //! [`prices`] what printers charge and [`quotas`] the limits on printing; [`scans`] logs every
-//! finished scan; the `testing` module
+//! finished scan and [`reports`] sums both over a range; the `testing` module
 //! (behind the `testing` feature) gives tests a fresh, migrated database.
 
 pub mod access;
@@ -17,6 +17,7 @@ pub mod names;
 pub mod passwords;
 pub mod prices;
 pub mod quotas;
+pub mod reports;
 pub mod scans;
 pub mod users;
 

@@ -31,6 +31,7 @@ pub use check::{Verdict, check, lock_subjects};
 pub use family::{amount, applicable};
 pub use usage::{Standing, standing};
 pub use window::window;
+pub(crate) use {usage::sum, window::midnight};
 
 use crate::{Error, Problem, database::begin_write, error::Result};
 

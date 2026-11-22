@@ -131,7 +131,7 @@ pub async fn standing(
 
 /// `SUM` as a 64-bit integer: PostgreSQL sums `bigint` into `numeric`, which does not read back
 /// as one.
-fn sum(expression: Expr) -> Expr {
+pub(crate) fn sum(expression: Expr) -> Expr {
     Func::cast_as(Func::sum(expression), Alias::new("BIGINT")).into()
 }
 

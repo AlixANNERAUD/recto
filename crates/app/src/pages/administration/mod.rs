@@ -1,6 +1,6 @@
 //! The administration pages, for administrators only: `/administration/users`,
-//! `/administration/groups`, `/administration/printers`, `/administration/scanners` and
-//! `/administration/quotas`, which
+//! `/administration/groups`, `/administration/printers`, `/administration/scanners`,
+//! `/administration/quotas` and `/administration/usage`, which
 //! `/administration` leads to. The server loads their data, checks that the user administers
 //! recto, and hands each page what it shows as a context; anyone else gets the not-found page,
 //! so the pages do not reveal that they exist. Every change is a plain form posted to the
@@ -9,6 +9,7 @@
 pub mod devices;
 pub mod groups;
 pub mod quotas;
+pub mod usage;
 pub mod users;
 
 use leptos::prelude::*;
@@ -23,6 +24,7 @@ enum Section {
     Printers,
     Scanners,
     Quotas,
+    Usage,
 }
 
 /// The links between the administration pages, as tabs under the page heading.
@@ -58,6 +60,7 @@ fn Sections(current: Section) -> impl IntoView {
                 {tab(Section::Printers, "/administration/printers", t!("administration.printers.tab"))}
                 {tab(Section::Scanners, "/administration/scanners", t!("administration.scanners.tab"))}
                 {tab(Section::Quotas, "/administration/quotas", t!("administration.quotas.tab"))}
+                {tab(Section::Usage, "/administration/usage", t!("administration.usage.tab"))}
             </ul>
         </nav>
     }

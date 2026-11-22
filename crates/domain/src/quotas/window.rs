@@ -52,7 +52,7 @@ fn months_later(first: NaiveDate, months: u32) -> NaiveDate {
 
 /// The instant a local day starts. Where a change of clocks skips midnight, the day starts at
 /// the first local time that exists; where midnight happens twice, at the first.
-fn midnight(tz: Tz, date: NaiveDate) -> DateTime<Utc> {
+pub(crate) fn midnight(tz: Tz, date: NaiveDate) -> DateTime<Utc> {
     let mut time = date.and_hms_opt(0, 0, 0).expect("midnight exists");
     // Clock changes skip at most a few hours.
     for _ in 0..(24 * 4) {

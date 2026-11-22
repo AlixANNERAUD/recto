@@ -59,13 +59,13 @@ const SCANNERS: &str = "/administration/scanners";
 const QUOTAS: &str = "/administration/quotas";
 
 #[derive(Clone)]
-struct AdministrationState {
-    app: AppState,
-    methods: SignInMethods,
+pub(super) struct AdministrationState {
+    pub(super) app: AppState,
+    pub(super) methods: SignInMethods,
     policy: PasswordPolicy,
 }
 
-/// `GET /administration/users`, `/groups`, `/printers`, `/scanners` and `/quotas`,
+/// `GET /administration/users`, `/groups`, `/printers`, `/scanners`, `/quotas` and `/usage`,
 /// `/administration` leading to the first, and the forms of the Users, Printers, Scanners and
 /// Quotas pages.
 pub fn router(app: AppState, auth: &AuthState) -> Router {
@@ -145,6 +145,7 @@ pub fn router(app: AppState, auth: &AuthState) -> Router {
             post(set_rule_enabled),
         )
         .route("/administration/quotas/{id}/delete", post(delete_rule))
+        .merge(super::usage::router())
         // The last layer runs first: anonymous visitors are sent to sign in before the check.
         .route_layer(middleware::from_fn_with_state(
             state.clone(),

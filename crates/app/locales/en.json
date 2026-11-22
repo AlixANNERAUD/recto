@@ -393,6 +393,40 @@
         "reason_invalid": "Give a reason of 1 to 200 characters.",
         "unavailable": "The change could not be saved. Try again in a moment."
       }
+    },
+    "usage": {
+      "tab": "Usage",
+      "document_title": "Usage · Administration",
+      "intro": "What people printed and scanned over a range of days, from the print ledger and the scan log. Refunded jobs are left out; jobs still printing count.",
+      "range": "Range",
+      "this_month": "This month",
+      "last_month": "Last month",
+      "from": "From",
+      "to": "To",
+      "show": "Show",
+      "tables": "Tables",
+      "by": {
+        "user": "By user",
+        "group": "By group",
+        "printer": "By printer",
+        "scanner": "By scanner"
+      },
+      "total": "Total",
+      "columns": {
+        "user": "User",
+        "group": "Group",
+        "printer": "Printer",
+        "scanner": "Scanner",
+        "uncounted": "Unknown pages",
+        "scans": "Scans",
+        "scanned_pages": "Scanned pages",
+        "saved": "Saved"
+      },
+      "anonymous": "Anonymous (network)",
+      "empty": "Nothing was printed or scanned in this range.",
+      "empty_body": "Choose another range above.",
+      "invalid_dates": "Enter two dates between 2000 and 2999, the second on or after the first.",
+      "load_failed": "The usage could not be loaded. Try again in a moment."
     }
   },
   "print": {

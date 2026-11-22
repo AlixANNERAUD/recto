@@ -6,6 +6,7 @@ pub mod password;
 pub mod print;
 pub mod pwa;
 pub mod scan;
+mod usage;
 
 use axum::{
     body::Body,

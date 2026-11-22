@@ -51,6 +51,7 @@ use pages::{
         devices::{PrintersAdministrationPage, ScannersAdministrationPage},
         groups::GroupsPage,
         quotas::QuotasPage,
+        usage::UsagePage,
         users::UsersPage,
     },
     auth::{SignInErrorPage, SignedOutPage},
@@ -142,6 +143,7 @@ pub fn App() -> impl IntoView {
                 <Route path=path!("/administration/printers") view=PrintersAdministrationPage />
                 <Route path=path!("/administration/scanners") view=ScannersAdministrationPage />
                 <Route path=path!("/administration/quotas") view=QuotasPage />
+                <Route path=path!("/administration/usage") view=UsagePage />
                 <Route path=path!("/sign-in") view=SignInPage />
                 <Route path=path!("/no-access") view=NoAccessPage />
                 <Route path=path!("/offline") view=OfflinePage />
