@@ -46,6 +46,13 @@ pub struct Job {
     pub pages: Option<u32>,
     /// Unix seconds.
     pub created: Option<i64>,
+    /// The pages recto counted for the job when it was sent, copies included; filled from the
+    /// ledger for the job's owner and administrators only.
+    #[serde(default)]
+    pub counted_pages: Option<i64>,
+    /// What the job cost, in minor currency units, when it cost anything; for the same people.
+    #[serde(default)]
+    pub cost: Option<i64>,
 }
 
 /// What CUPS reports about one job: enough to tell whether it printed.
@@ -156,6 +163,8 @@ mod tests {
             state,
             pages: None,
             created: None,
+            counted_pages: None,
+            cost: None,
         };
         assert!(job(JobState::Held).is_active());
         assert!(job(JobState::Stopped).is_active());

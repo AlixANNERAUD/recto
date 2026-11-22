@@ -46,6 +46,7 @@ recto-scanning.workspace = true
 # The server functions read the database; the browser build must not pull it.
 recto-domain = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
 chrono-tz = { workspace = true, optional = true }
 
 [features]
@@ -64,6 +65,7 @@ ssr = [
     "dep:leptos_axum",
     "dep:axum",
     "dep:sea-orm",
+    "dep:chrono",
     "dep:chrono-tz",
     "dep:tracing",
     "dep:tokio",

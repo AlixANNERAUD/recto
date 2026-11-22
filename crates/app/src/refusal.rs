@@ -20,10 +20,16 @@ pub enum Refusal {
     JobNotFound,
     Unavailable,
     Refused,
+    /// A hard quota rule has too little left; the rule's id travels next to the code.
+    Quota,
+    /// Quota rules count pages and recto could not count the document's.
+    Uncountable,
+    /// Quota rules count pages and recto was busy counting other documents.
+    CountingBusy,
 }
 
 impl Refusal {
-    const ALL: [Refusal; 14] = [
+    const ALL: [Refusal; 17] = [
         Refusal::TooLarge,
         Refusal::NoFile,
         Refusal::EmptyFile,
@@ -38,6 +44,9 @@ impl Refusal {
         Refusal::JobNotFound,
         Refusal::Unavailable,
         Refusal::Refused,
+        Refusal::Quota,
+        Refusal::Uncountable,
+        Refusal::CountingBusy,
     ];
 
     /// The value of the `error` query parameter.
@@ -57,6 +66,9 @@ impl Refusal {
             Refusal::JobNotFound => "job_not_found",
             Refusal::Unavailable => "unavailable",
             Refusal::Refused => "refused",
+            Refusal::Quota => "quota",
+            Refusal::Uncountable => "uncountable",
+            Refusal::CountingBusy => "counting_busy",
         }
     }
 
@@ -81,6 +93,9 @@ impl Refusal {
             Refusal::JobNotFound => t!("print.errors.job_not_found"),
             Refusal::Unavailable => t!("print.errors.unavailable"),
             Refusal::Refused => t!("print.errors.refused"),
+            Refusal::Quota => t!("print.errors.quota"),
+            Refusal::Uncountable => t!("print.errors.uncountable"),
+            Refusal::CountingBusy => t!("print.errors.counting_busy"),
         }
         .to_string()
     }

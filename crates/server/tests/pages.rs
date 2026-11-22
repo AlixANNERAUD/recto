@@ -297,6 +297,8 @@ fn job(id: i32, owner: Option<&str>, state: JobState) -> Job {
         state,
         pages: Some(3),
         created: Some(1_700_000_000),
+        counted_pages: None,
+        cost: None,
     }
 }
 

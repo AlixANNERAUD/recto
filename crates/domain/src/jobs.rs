@@ -28,6 +28,10 @@ pub struct RecordedJob {
     pub cups_job_id: i32,
     pub submitted_at: DateTime<Utc>,
     pub state: String,
+    /// Pages counted at submission, copies included; `None` when unknown.
+    pub pages: Option<i64>,
+    /// In minor currency units.
+    pub cost: i64,
 }
 
 /// The records of these CUPS job ids, with their users.
@@ -56,6 +60,8 @@ pub async fn for_cups_ids(
                 printer: job.printer,
                 submitted_at: job.submitted_at.with_timezone(&Utc),
                 state: job.state,
+                pages: job.pages,
+                cost: job.cost,
             })
         })
         .collect())
@@ -113,6 +119,8 @@ mod tests {
             cups_job_id,
             submitted_at: at(submitted_at),
             state: "pending".to_owned(),
+            pages: None,
+            cost: 0,
         }
     }
 

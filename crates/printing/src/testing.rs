@@ -158,6 +158,8 @@ impl PrintService for MockPrintService {
             state: JobState::Pending,
             pages: None,
             created: None,
+            counted_pages: None,
+            cost: None,
         });
         lock(&self.submitted).push(request);
         Ok(id)

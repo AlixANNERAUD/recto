@@ -12,6 +12,7 @@ use crate::{
         Failure, failure,
         ui::{Alert, Badge, ButtonVariant, Empty, Tone, button_class},
     },
+    currency::Currency,
     display::{iso_time, relative_time, unix_now},
     functions::list_jobs,
     t, tf, tp,
@@ -32,7 +33,7 @@ fn state_label(state: JobState) -> (&'static str, Tone) {
 }
 
 #[component]
-fn JobRow(job: Job, now: RwSignal<i64>) -> impl IntoView {
+fn JobRow(job: Job, now: RwSignal<i64>, currency: Currency) -> impl IntoView {
     let (state, tone) = state_label(job.state);
     let name = job
         .name
@@ -43,7 +44,13 @@ fn JobRow(job: Job, now: RwSignal<i64>) -> impl IntoView {
         .owner
         .clone()
         .unwrap_or_else(|| t!("jobs.another_user").to_string());
-    let pages = job.pages.map(|pages| tp!("jobs.pages", pages));
+    // What recto counted when the job was sent, else what CUPS reports printed so far.
+    let pages = match (job.counted_pages, job.pages) {
+        (Some(pages), _) => Some(tp!("jobs.pages", pages)),
+        (None, Some(pages)) => Some(tp!("jobs.pages", pages)),
+        (None, None) => None,
+    };
+    let cost = job.cost.map(|cost| currency.format(cost));
     let time = job.created.map(|created| {
         view! {
             <time datetime=iso_time(created)>{move || relative_time(created, now.get())}</time>
@@ -79,6 +86,13 @@ fn JobRow(job: Job, now: RwSignal<i64>) -> impl IntoView {
                                 <span>{pages}</span>
                             }
                         })}
+                    {cost
+                        .map(|cost| {
+                            view! {
+                                <span aria-hidden="true">"·"</span>
+                                <span>{cost}</span>
+                            }
+                        })}
                     {time
                         .map(|time| {
                             view! {
@@ -96,11 +110,12 @@ fn JobRow(job: Job, now: RwSignal<i64>) -> impl IntoView {
 }
 
 /// The jobs, newest first. `now` is the server's clock when it rendered, so the times written
-/// on the server and in the browser agree until the first refresh.
+/// on the server and in the browser agree until the first refresh. Costs read in `currency`.
 #[island]
-pub fn JobList(jobs: Vec<Job>, now: i64) -> impl IntoView {
+pub fn JobList(jobs: Vec<Job>, now: i64, currency: Currency) -> impl IntoView {
     let jobs = RwSignal::new(jobs);
     let now = RwSignal::new(now);
+    let currency = StoredValue::new(currency);
     let signed_out = RwSignal::new(false);
     let in_flight = StoredValue::new(false);
     Effect::new(move |_| {
@@ -156,8 +171,18 @@ pub fn JobList(jobs: Vec<Job>, now: i64) -> impl IntoView {
                 // keyboard focus on their Cancel button) across refreshes.
                 <For
                     each=move || jobs.get()
-                    key=|job| (job.id, job.state as u8, job.pages, job.owner.clone(), job.name.clone())
-                    children=move |job| view! { <JobRow job now /> }
+                    key=|job| {
+                        (
+                            job.id,
+                            job.state as u8,
+                            job.pages,
+                            job.counted_pages,
+                            job.cost,
+                            job.owner.clone(),
+                            job.name.clone(),
+                        )
+                    }
+                    children=move |job| view! { <JobRow job now currency=currency.get_value() /> }
                 />
             </ul>
         </Show>

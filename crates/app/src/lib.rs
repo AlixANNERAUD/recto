@@ -24,6 +24,7 @@ embedded_i18n::i18n!(
 
 pub mod branding;
 pub mod components;
+pub mod currency;
 pub mod display;
 pub mod functions;
 pub mod i18n;
@@ -31,6 +32,7 @@ pub mod islands;
 pub mod layout;
 pub mod messages;
 pub mod pages;
+pub mod quotas;
 pub mod refusal;
 #[cfg(feature = "ssr")]
 pub mod state;

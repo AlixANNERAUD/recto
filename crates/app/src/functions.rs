@@ -16,6 +16,8 @@ use recto_scanning::{OutputFormat, ScanSettings, ScannerCapabilities, ScannerInf
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::{currency::Currency, quotas::Allowance};
+
 /// A finished preview or scan, stored for the user until downloaded, saved or expired.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScanOutcome {
@@ -24,6 +26,15 @@ pub struct ScanOutcome {
     pub pages: usize,
     /// Whether an output folder is configured, so Save can work.
     pub can_save: bool,
+}
+
+/// Where the signed-in user stands against the quota rules that apply to them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Allowances {
+    /// One per enabled rule that applies on a printer the user may use, by rule id; empty
+    /// without rules.
+    pub allowances: Vec<Allowance>,
+    pub currency: Currency,
 }
 
 #[server(endpoint = "list_printers")]
@@ -40,6 +51,12 @@ pub async fn list_jobs() -> Result<Vec<Job>, ServerFnError> {
     let jobs = context.state.print.jobs().await;
     let jobs = jobs.map_err(|error| context.print_failure(&error))?;
     context.name_owners_and_filter(jobs).await
+}
+
+#[server(endpoint = "my_quotas")]
+pub async fn my_quotas() -> Result<Allowances, ServerFnError> {
+    let context = server::Context::new()?;
+    context.my_quotas().await
 }
 
 #[server(endpoint = "list_scanners")]
@@ -124,13 +141,13 @@ pub fn visible(
 
 #[cfg(feature = "ssr")]
 mod server {
-    use std::sync::Arc;
+    use std::{collections::BTreeMap, sync::Arc};
 
     use embedded_i18n::Locale;
     use leptos::prelude::ServerFnError;
     use recto_domain::{
-        access::{DeviceKind, Usable},
-        jobs,
+        access::{self, DeviceKind, Usable},
+        jobs, quotas,
     };
     use recto_printing::{Job, PrintError, Printer};
     use recto_scanning::{
@@ -138,10 +155,10 @@ mod server {
         Selection,
     };
 
-    use super::ScanOutcome;
-    use super::visible;
+    use super::{Allowances, ScanOutcome, visible};
     use crate::{
         i18n, messages,
+        quotas::Allowance,
         state::{AppState, JobVisibility, User, require_user},
     };
 
@@ -205,10 +222,59 @@ mod server {
                 let record = jobs::matching(&records, job.id, job.created);
                 if let Some(record) = record {
                     job.owner = Some(record.display_name.clone());
+                    // What a job counted and cost is its owner's business, and the
+                    // administrators'.
+                    if self.user.is_administrator || record.user_id == self.user.id {
+                        job.counted_pages = record.pages;
+                        job.cost = Some(record.cost).filter(|cost| *cost > 0);
+                    }
                 }
                 visible(record, &self.user, visibility)
             });
             Ok(jobs)
+        }
+
+        /// The rules that apply to the user on any printer they may use, each once, with where
+        /// the user stands in its current window.
+        pub async fn my_quotas(&self) -> Result<Allowances, ServerFnError> {
+            let currency = self.state.currency.clone();
+            let database = &self.state.database;
+            let failed = |error: recto_domain::Error| {
+                tracing::error!(%error, "reading the print quotas failed");
+                self.try_again()
+            };
+            let rules = quotas::rules(database).await.map_err(failed)?;
+            if !rules.iter().any(|rule| rule.enabled) {
+                return Ok(Allowances {
+                    allowances: Vec::new(),
+                    currency,
+                });
+            }
+            let groups = access::group_ids_of(database, self.user.id)
+                .await
+                .map_err(failed)?;
+            let printers = self.state.print.printers().await;
+            let printers = printers.map_err(|error| self.print_failure(&error))?;
+            let printers = self.usable_printers(printers).await?;
+            let mut applicable = BTreeMap::new();
+            for printer in &printers {
+                for rule in quotas::applicable(&rules, self.user.id, &groups, &printer.name) {
+                    applicable.insert(rule.id, rule);
+                }
+            }
+            let now = chrono::Utc::now();
+            let mut allowances = Vec::new();
+            for rule in applicable.values() {
+                let standing =
+                    quotas::standing(database, rule, self.user.id, now, self.state.timezone)
+                        .await
+                        .map_err(failed)?;
+                allowances.push(Allowance::from(&standing));
+            }
+            Ok(Allowances {
+                allowances,
+                currency,
+            })
         }
 
         /// What the user is told when the database cannot say what they may see or use: nothing

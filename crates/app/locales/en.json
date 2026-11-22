@@ -354,7 +354,14 @@
       "invalid_form": "The print form was incomplete. Try again.",
       "job_not_found": "That job no longer exists.",
       "unavailable": "The printing service is unavailable. Try again later.",
-      "refused": "The printing service refused the request."
+      "refused": "The printing service refused the request.",
+      "quota": "This job goes over a print quota.",
+      "quota_rule": "This job needs more than you have left of “{rule}”: {left}.",
+      "uncountable": "recto could not count the pages of this PDF, and your quotas count pages. Save it again as PDF and retry.",
+      "counting_busy": "recto is busy counting the pages of other documents, and your quotas count pages. Try again in a moment."
+    },
+    "left": {
+      "title": "What you have left"
     }
   },
   "printers": {
@@ -411,7 +418,9 @@
       "canceled": "Canceled",
       "aborted": "Failed",
       "completed": "Printed"
-    }
+    },
+    "over": "This job went over “{rule}”: {left}.",
+    "over_unknown": "This job went over a print quota."
   },
   "scan": {
     "title": "Scan",
@@ -475,5 +484,97 @@
       "save_disabled": "Saving to a folder is not set up.",
       "storage": "Cannot write to {path}: {reason}"
     }
+  },
+  "quotas": {
+    "metric": {
+      "pages": "Pages",
+      "sheets": "Sheets",
+      "color_pages": "Color pages",
+      "mono_pages": "Black-and-white pages",
+      "jobs": "Jobs",
+      "cost": "Cost"
+    },
+    "amount": {
+      "pages": {
+        "one": "{count} page",
+        "other": "{count} pages"
+      },
+      "sheets": {
+        "one": "{count} sheet",
+        "other": "{count} sheets"
+      },
+      "color_pages": {
+        "one": "{count} color page",
+        "other": "{count} color pages"
+      },
+      "mono_pages": {
+        "one": "{count} black-and-white page",
+        "other": "{count} black-and-white pages"
+      },
+      "jobs": {
+        "one": "{count} job",
+        "other": "{count} jobs"
+      }
+    },
+    "period": {
+      "day": "Day",
+      "week": "Week, from Monday",
+      "month": "Month",
+      "quarter": "Quarter",
+      "year": "Year",
+      "rolling": "Rolling number of days",
+      "total": "Total, never renews"
+    },
+    "current": {
+      "day": "today",
+      "week": "this week",
+      "month": "this month",
+      "quarter": "this quarter",
+      "year": "this year",
+      "rolling": {
+        "one": "in the last day",
+        "other": "in the last {count} days"
+      },
+      "total": "in total"
+    },
+    "each": {
+      "day": "a day",
+      "week": "a week",
+      "month": "a month",
+      "quarter": "a quarter",
+      "year": "a year",
+      "rolling": {
+        "one": "in any day",
+        "other": "in any {count} days"
+      },
+      "total": "in total"
+    },
+    "left": {
+      "pages": {
+        "one": "{left} of {count} page left {period}",
+        "other": "{left} of {count} pages left {period}"
+      },
+      "sheets": {
+        "one": "{left} of {count} sheet left {period}",
+        "other": "{left} of {count} sheets left {period}"
+      },
+      "color_pages": {
+        "one": "{left} of {count} color page left {period}",
+        "other": "{left} of {count} color pages left {period}"
+      },
+      "mono_pages": {
+        "one": "{left} of {count} black-and-white page left {period}",
+        "other": "{left} of {count} black-and-white pages left {period}"
+      },
+      "jobs": {
+        "one": "{left} of {count} job left {period}",
+        "other": "{left} of {count} jobs left {period}"
+      },
+      "cost": "{left} of {limit} left {period}"
+    },
+    "used": "{used} of {limit} used {period}",
+    "with_grant": "{text}, plus {granted} granted",
+    "on_printers": "{text}, on {printers}",
+    "separator": ", "
   }
 }

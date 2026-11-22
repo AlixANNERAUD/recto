@@ -68,22 +68,40 @@ impl PageCounter {
 
     /// [`pdf_pages`], or `None` when it takes too long. The document is shared, not copied.
     pub async fn pdf_pages(&self, document: Bytes) -> Option<u32> {
-        let counted = async {
-            let permit = self.permits.clone().acquire_owned().await.ok()?;
-            tokio::task::spawn_blocking(move || {
-                let pages = pdf_pages(&document);
-                drop(permit);
-                pages
-            })
-            .await
-            .ok()
-            .flatten()
-        };
-        tokio::time::timeout(self.timeout, counted)
-            .await
-            .ok()
-            .flatten()
+        self.count(document).await.ok()
     }
+
+    /// The page count of a PDF, or why it is unknown. Waiting for a place counts in the time
+    /// limit: when other documents hold every place until then, the count is [`Uncounted::Busy`],
+    /// which a retry may fix; a document that cannot be read in the time left is
+    /// [`Uncounted::Unreadable`], like a damaged one.
+    pub async fn count(&self, document: Bytes) -> Result<u32, Uncounted> {
+        let deadline = tokio::time::Instant::now() + self.timeout;
+        let permit = tokio::time::timeout_at(deadline, self.permits.clone().acquire_owned())
+            .await
+            .map_err(|_| Uncounted::Busy)?
+            .map_err(|_| Uncounted::Busy)?;
+        let read = tokio::task::spawn_blocking(move || {
+            let pages = pdf_pages(&document);
+            drop(permit);
+            pages
+        });
+        tokio::time::timeout_at(deadline, read)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten()
+            .ok_or(Uncounted::Unreadable)
+    }
+}
+
+/// Why a PDF's page count is unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Uncounted {
+    /// Damaged, encrypted, or too slow to read.
+    Unreadable,
+    /// Other documents were being counted the whole time.
+    Busy,
 }
 
 impl Default for PageCounter {
@@ -116,6 +134,24 @@ mod tests {
     fn pdf_pages_are_counted() {
         assert_eq!(pdf_pages(&sample_pdf(3)), Some(3));
         assert_eq!(pdf_pages(b"%PDF-1.7 garbage"), None);
+    }
+
+    #[tokio::test]
+    async fn a_busy_counter_says_so() {
+        let counter = PageCounter::new(1, Duration::from_millis(50));
+        assert_eq!(counter.count(Bytes::from(sample_pdf(2))).await, Ok(2));
+        assert_eq!(
+            counter.count(Bytes::from_static(b"%PDF-1.7 garbage")).await,
+            Err(Uncounted::Unreadable)
+        );
+        // Another document holds the only place until the time is up.
+        let held = counter.permits.clone().acquire_owned().await.unwrap();
+        assert_eq!(
+            counter.count(Bytes::from(sample_pdf(2))).await,
+            Err(Uncounted::Busy)
+        );
+        drop(held);
+        assert_eq!(counter.pdf_pages(Bytes::from(sample_pdf(2))).await, Some(2));
     }
 
     #[test]

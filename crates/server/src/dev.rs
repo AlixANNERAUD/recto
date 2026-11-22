@@ -193,6 +193,8 @@ fn jobs() -> Vec<Job> {
             state: JobState::Processing,
             pages: Some(1),
             created: Some(now - 90),
+            counted_pages: None,
+            cost: None,
         },
         Job {
             id: 40,
@@ -202,6 +204,8 @@ fn jobs() -> Vec<Job> {
             state: JobState::Pending,
             pages: None,
             created: Some(now - 600),
+            counted_pages: None,
+            cost: None,
         },
         Job {
             id: 39,
@@ -211,6 +215,8 @@ fn jobs() -> Vec<Job> {
             state: JobState::Completed,
             pages: Some(12),
             created: Some(now - 3 * 86_400),
+            counted_pages: None,
+            cost: None,
         },
     ]
 }

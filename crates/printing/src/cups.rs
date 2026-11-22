@@ -565,5 +565,7 @@ fn parse_job(group: &IppAttributeGroup) -> Option<Job> {
         state: JobState::from_ipp(integer(group, "job-state")?)?,
         pages,
         created: integer(group, "time-at-creation").map(i64::from),
+        counted_pages: None,
+        cost: None,
     })
 }

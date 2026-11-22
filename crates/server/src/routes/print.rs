@@ -1,6 +1,11 @@
 //! The print and cancel forms. Both are plain form posts answered with a redirect, so they work
 //! without JavaScript and a reload never sends a document twice. A refusal goes back to the
 //! page with its code (`/?error=too_large`, see [`Refusal`]).
+//!
+//! With quota rules enabled, a job is checked and entered in the ledger in one write
+//! transaction before CUPS is asked, so two jobs racing for the last pages cannot both pass, and
+//! any database failure refuses the job: quotas fail closed. Without rules, the ledger is best
+//! effort and never stops printing.
 
 use axum::{
     Extension,
@@ -15,14 +20,17 @@ use recto_app::{
     state::{AppState, JobVisibility, User},
 };
 use recto_domain::{
-    access::{DeviceKind, Usable},
+    access::{self, DeviceKind, Usable},
+    database::begin_write,
     jobs,
     ledger::{self, NewEntry},
     prices::{self, Prices},
+    quotas::{self, Metric, Rule, Verdict},
 };
 use recto_printing::{
     Capabilities, ColorMode, DocumentFormat, PageRanges, PrintError, PrintOptions, PrintRequest,
-    Sides, count::printed_pages,
+    Sides,
+    count::{Uncounted, printed_pages},
 };
 
 /// Room for the form fields and multipart headers next to the largest accepted file, so a file
@@ -33,7 +41,9 @@ pub const FORM_SLACK: usize = 64 * 1024;
 const MAX_JOB_NAME: usize = 255;
 
 /// `POST /print`: a multipart form with `file`, `printer`, `copies`, `sides`, `color_mode` and
-/// `page_ranges`. Answers `303 /jobs?submitted=<id>`, or `303 /?error=<code>`.
+/// `page_ranges`. Answers `303 /jobs?submitted=<id>`, with `&over=<rule id>,…` when the job went
+/// over soft quota rules, `303 /?error=quota&rule=<id>` when a hard rule refused it, or
+/// `303 /?error=<code>`.
 pub async fn submit(
     State(state): State<AppState>,
     Extension(user): Extension<User>,
@@ -43,23 +53,70 @@ pub async fn submit(
         Ok(multipart) => submit_form(&state, &user, multipart).await,
         Err(rejection) => {
             tracing::warn!(%rejection, "unreadable print form");
-            Err(Refusal::InvalidForm)
+            Err(Refusal::InvalidForm.into())
         }
     };
     match submitted {
-        Ok(job) => {
+        Ok(Submitted { job, over }) if over.is_empty() => {
             tracing::info!(user = user.username, job, "document sent to the printer");
             Redirect::to(&format!("/jobs?submitted={job}"))
         }
-        Err(refusal) => Redirect::to(&format!("/?error={}", refusal.code())),
+        Ok(Submitted { job, over }) => {
+            let over: Vec<String> = over.iter().map(i64::to_string).collect();
+            let over = over.join(",");
+            tracing::info!(
+                user = user.username,
+                job,
+                rules = over,
+                "document sent to the printer over a soft quota"
+            );
+            Redirect::to(&format!("/jobs?submitted={job}&over={over}"))
+        }
+        Err(Rejected::Quota(rule)) => {
+            tracing::info!(user = user.username, rule, "print refused by a quota");
+            Redirect::to(&format!("/?error={}&rule={rule}", Refusal::Quota.code()))
+        }
+        Err(Rejected::Refusal(refusal)) => Redirect::to(&format!("/?error={}", refusal.code())),
     }
 }
 
-async fn submit_form(state: &AppState, user: &User, multipart: Multipart) -> Result<i32, Refusal> {
+/// A job CUPS accepted, and the soft rules it went over.
+struct Submitted {
+    job: i32,
+    over: Vec<i64>,
+}
+
+/// Why a job was not printed.
+enum Rejected {
+    Refusal(Refusal),
+    /// The hard quota rule, by id, that has too little left.
+    Quota(i64),
+}
+
+impl From<Refusal> for Rejected {
+    fn from(refusal: Refusal) -> Self {
+        Rejected::Refusal(refusal)
+    }
+}
+
+/// What a database failure is, while quotas are enforced: a refusal. Printing without being able
+/// to check the quotas would let anyone print past them.
+fn closed(what: &'static str) -> impl Fn(recto_domain::Error) -> Refusal + Copy {
+    move |error| {
+        tracing::error!(%error, "{what} failed");
+        Refusal::Unavailable
+    }
+}
+
+async fn submit_form(
+    state: &AppState,
+    user: &User,
+    multipart: Multipart,
+) -> Result<Submitted, Rejected> {
     let form = Form::read(multipart, state.max_upload_size).await?;
     let (file_name, document) = form.file.ok_or(Refusal::NoFile)?;
     if document.is_empty() {
-        return Err(Refusal::EmptyFile);
+        return Err(Refusal::EmptyFile.into());
     }
     // From the content, never the name or declared type: a renamed document stops here.
     let format = DocumentFormat::detect(&document).ok_or(Refusal::UnsupportedFormat)?;
@@ -73,37 +130,60 @@ async fn submit_form(state: &AppState, user: &User, multipart: Multipart) -> Res
         user.is_administrator,
     )
     .await
-    .map_err(|error| {
-        tracing::error!(%error, "reading the printer access rules failed");
-        Refusal::Unavailable
-    })?;
+    .map_err(closed("reading the printer access rules"))?;
     if !usable.allows(&printer_name) {
-        return Err(Refusal::PrinterNotFound);
+        return Err(Refusal::PrinterNotFound.into());
     }
+    // Rules that cannot be read might be there: refused, like access rules.
+    let rules = quotas::rules(&state.database)
+        .await
+        .map_err(closed("reading the quota rules"))?;
+    let enforced = rules.iter().any(|rule| rule.enabled);
     let printer = state.print.printer(&printer_name).await.map_err(refusal)?;
     // CUPS ignores the case of printer names, so "LAB" reaches the printer "lab": its rule is
     // checked again under the name CUPS answered with.
     if !usable.allows(&printer.name) {
-        return Err(Refusal::PrinterNotFound);
+        return Err(Refusal::PrinterNotFound.into());
     }
     if !printer.accepting_jobs {
-        return Err(Refusal::NotAccepting);
+        return Err(Refusal::NotAccepting.into());
     }
     let options = options(&form.options, &printer.capabilities, format)?;
     let document_pages = match format {
         // Bounded in concurrency and time, and not copied: see `PageCounter`.
-        DocumentFormat::Pdf => state.page_counter.pdf_pages(document.clone()).await,
-        DocumentFormat::Jpeg | DocumentFormat::Png => Some(1),
+        DocumentFormat::Pdf => state.page_counter.count(document.clone()).await,
+        DocumentFormat::Jpeg | DocumentFormat::Png => Ok(1),
     };
+    let groups = if enforced {
+        access::group_ids_of(&state.database, user.id)
+            .await
+            .map_err(closed("reading the groups of the user"))?
+    } else {
+        Vec::new()
+    };
+    let applicable = quotas::applicable(&rules, user.id, &groups, &printer.name);
+    // Only the jobs metric does without the pages; the others cannot be checked blind.
+    if let Err(uncounted) = document_pages
+        && applicable.iter().any(|rule| rule.metric != Metric::Jobs)
+    {
+        return Err(match uncounted {
+            Uncounted::Unreadable => Refusal::Uncountable,
+            Uncounted::Busy => Refusal::CountingBusy,
+        }
+        .into());
+    }
+    let document_pages = document_pages.ok();
     let printed = document_pages.map(|pages| printed_pages(pages, options.page_ranges.as_ref()));
-    // The cost is fixed now: a later price change leaves this job's cost alone. Without quota
-    // rules yet, prices that cannot be read must not stop printing.
-    let prices = prices::get(&state.database, &printer.name)
-        .await
-        .unwrap_or_else(|error| {
+    // The cost is fixed now: a later price change leaves this job's cost alone.
+    let prices = match prices::get(&state.database, &printer.name).await {
+        Ok(prices) => prices,
+        Err(error) if enforced => return Err(closed("reading the printer prices")(error).into()),
+        // Without quota rules, prices that cannot be read must not stop printing.
+        Err(error) => {
             tracing::error!(%error, "reading the printer prices failed");
             Prices::default()
-        });
+        }
+    };
     let counts = ledger::counts(
         printed,
         options.copies,
@@ -123,13 +203,18 @@ async fn submit_form(state: &AppState, user: &User, multipart: Multipart) -> Res
         color_mode: options.color_mode.keyword().to_owned(),
         counts,
     };
-    // Written before CUPS is asked, so a job cannot print without being counted. Without rules
-    // yet, a ledger that cannot be written must not stop printing.
-    let entry_id = match ledger::insert(&state.database, entry, chrono::Utc::now()).await {
-        Ok(id) => Some(id),
-        Err(error) => {
-            tracing::error!(%error, "writing the ledger entry failed");
-            None
+    // Written before CUPS is asked, so a job cannot print without being counted.
+    let (entry_id, over) = if enforced {
+        let (entry_id, over) = enter_checked(state, user, &groups, entry).await?;
+        (Some(entry_id), over)
+    } else {
+        // Without rules, a ledger that cannot be written must not stop printing.
+        match ledger::insert(&state.database, entry, chrono::Utc::now()).await {
+            Ok(id) => (Some(id), Vec::new()),
+            Err(error) => {
+                tracing::error!(%error, "writing the ledger entry failed");
+                (None, Vec::new())
+            }
         }
     };
     let request = PrintRequest {
@@ -149,7 +234,7 @@ async fn submit_form(state: &AppState, user: &User, multipart: Multipart) -> Res
             {
                 tracing::error!(%error, "refunding the ledger entry failed");
             }
-            return Err(refusal(error));
+            return Err(refusal(error).into());
         }
     };
     // The job is printing already: failing to link it must not tell the user it failed.
@@ -162,7 +247,61 @@ async fn submit_form(state: &AppState, user: &User, multipart: Multipart) -> Res
             "linking the CUPS job to its ledger entry failed"
         );
     }
-    Ok(id)
+    Ok(Submitted { job: id, over })
+}
+
+/// Checks the job against the quota rules and enters it in the ledger, in one write
+/// transaction: a concurrent job of the same user or pool waits for this one to be counted.
+/// Returns the entry's id and the soft rules the job goes over.
+async fn enter_checked(
+    state: &AppState,
+    user: &User,
+    groups: &[i64],
+    entry: NewEntry,
+) -> Result<(i64, Vec<i64>), Rejected> {
+    let failed = closed("checking the print quotas");
+    let transaction = begin_write(&state.database)
+        .await
+        .map_err(|error| failed(error.into()))?;
+    let checked = async {
+        // Read again inside the transaction, so the pools locked are those checked.
+        let rules = quotas::rules(&transaction).await?;
+        let applicable: Vec<Rule> = quotas::applicable(&rules, user.id, groups, &entry.printer);
+        quotas::lock_subjects(&transaction, user.id, &quotas::pool_groups(&applicable)).await?;
+        let now = chrono::Utc::now();
+        let verdict = quotas::check(
+            &transaction,
+            user.id,
+            groups,
+            &entry.printer,
+            &entry.counts,
+            now,
+            state.timezone,
+        )
+        .await?;
+        let warnings = match verdict {
+            Verdict::Refused { standing } => return Ok(Err(standing.rule.id)),
+            Verdict::Allowed { warnings } => warnings,
+        };
+        let id = ledger::insert(&transaction, entry, now).await?;
+        Ok::<_, recto_domain::Error>(Ok((id, warnings)))
+    }
+    .await;
+    match checked {
+        Ok(Ok((id, warnings))) => {
+            transaction
+                .commit()
+                .await
+                .map_err(|error| failed(error.into()))?;
+            Ok((
+                id,
+                warnings.iter().map(|standing| standing.rule.id).collect(),
+            ))
+        }
+        // Dropping the transaction rolls it back.
+        Ok(Err(rule)) => Err(Rejected::Quota(rule)),
+        Err(error) => Err(failed(error).into()),
+    }
 }
 
 /// `POST /jobs/{id}/cancel`: answers `303 /jobs`, or `303 /jobs?error=<code>`. By default anyone

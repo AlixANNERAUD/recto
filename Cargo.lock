@@ -4025,6 +4025,7 @@ name = "recto-app"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "chrono-tz",
  "embedded-i18n",
  "js-sys",

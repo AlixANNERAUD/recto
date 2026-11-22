@@ -147,6 +147,8 @@ impl Harness {
                         state: JobState::Processing,
                         pages: None,
                         created: None,
+                        counted_pages: None,
+                        cost: None,
                     }]
                 })),
         );
@@ -2933,6 +2935,8 @@ fn job_of(id: i32, owner: &str) -> Job {
         state: JobState::Processing,
         pages: None,
         created: Some(chrono::Utc::now().timestamp()),
+        counted_pages: None,
+        cost: None,
     }
 }
 
@@ -4296,3 +4300,6 @@ async fn a_job_costs_the_prices_of_its_submission() {
         .unwrap();
     assert_eq!(cost().await, 6 * 20 + 3);
 }
+
+#[path = "server/quotas.rs"]
+mod quotas;
