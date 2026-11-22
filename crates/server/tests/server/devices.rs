@@ -415,3 +415,35 @@ async fn os_integration_off_hides_the_device_counts() {
         Some("bob")
     );
 }
+
+#[tokio::test]
+async fn device_forms_refuse_cross_site_posts() {
+    let harness = Harness::new().await;
+    let cookie = harness.sign_in("carol-subject", "carol").await;
+    let carol = harness.user_id("carol").await;
+    let phone = device_passwords::create(&harness.database, carol, "Phone", chrono::Utc::now())
+        .await
+        .unwrap();
+    let revoke = format!("/account/devices/{}/revoke", phone.id);
+    for (uri, fields) in [
+        ("/account/devices", vec![("name", "Evil")]),
+        (revoke.as_str(), vec![]),
+    ] {
+        let mut request = form(uri, Some(&cookie), &fields);
+        let headers = request.headers_mut();
+        headers.insert(header::ORIGIN, "https://evil.example".parse().unwrap());
+        headers.insert("sec-fetch-site", "cross-site".parse().unwrap());
+        let response = harness.send(request).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{uri}");
+        // Nothing of the secret page, which only a same-site post may get.
+        assert!(secrets_in(&text(response).await).is_empty(), "{uri}");
+    }
+    let listed = device_passwords::list(&harness.database, carol)
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        owner_of(&harness, &phone.secret).await.as_deref(),
+        Some("carol")
+    );
+}
