@@ -17,7 +17,8 @@ clocks change is 23 or 25 hours long, and counts as one day.
 before it, in `RECTO_TIMEZONE`.
 
 The page answers `400`, with a message and without tables, when only one date is given, a date
-does not read as `YYYY-MM-DD`, `to` is before `from`, or a year is outside 2000 to 2999.
+does not read as `YYYY-MM-DD`, `to` is before `from`, a year is outside 2000 to 2999, or a
+parameter is given twice. The CSV files answer `400` in the same cases.
 
 ## What counts
 
@@ -45,13 +46,13 @@ first, then by name.
 | Sheets | Sheets of paper, two-sided jobs counting half. |
 | Color pages, Black-and-white pages | Pages by color mode. |
 | Cost | The sum of the jobs' cost in `RECTO_CURRENCY`, from the printer prices when each job was sent. |
-| Unknown pages | Jobs whose pages recto could not count, such as a PDF it could not read. They add nothing to the page columns or the cost. |
+| Uncounted jobs | Jobs whose pages recto could not count, such as a PDF it could not read. They add nothing to the page columns or the cost. |
 | Scans | Finished scans. |
 | Scanned pages | Their pages. |
 | Saved | Scans saved with **Save to folder**. Downloads are not tracked. |
 
-The **Total** line above the table counts the whole range: printed pages, jobs and cost, scanned
-pages and scans, anonymous scans included.
+The **Total** line above the table counts the whole range: printed pages, jobs, cost and
+uncounted jobs, scanned pages and scans, anonymous scans included.
 
 The user and group tables have every column, the printer table the print columns, and the
 scanner table the scan columns. A user who only scanned shows 0 for printing, and the other way

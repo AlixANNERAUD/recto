@@ -15,7 +15,7 @@ use leptos::prelude::provide_context;
 use recto_app::{
     i18n, messages,
     pages::administration::usage::{
-        Breakdown, PrintTotals, Report, ScanTotals, USAGE, UsagePageData, UsageRow, anonymous_label,
+        Breakdown, PrintTotals, Report, ScanTotals, USAGE, UsagePageData, UsageRow,
     },
     state::{Currency, User},
 };
@@ -34,11 +34,12 @@ pub(crate) struct UsageQuery {
 }
 
 impl UsageQuery {
-    /// The query of a request; a malformed one reads as empty.
-    pub(crate) fn of(uri: &Uri) -> Self {
+    /// The query of a request. Refused when it does not read, such as a key given twice: which
+    /// of two dates was meant cannot be told.
+    pub(crate) fn of(uri: &Uri) -> Result<Self, ()> {
         Query::<UsageQuery>::try_from_uri(uri)
             .map(|query| query.0)
-            .unwrap_or_default()
+            .map_err(|_| ())
     }
 
     pub(crate) fn breakdown(&self) -> Breakdown {
@@ -117,18 +118,20 @@ fn scan_totals(totals: reports::ScanTotals) -> ScanTotals {
 }
 
 fn usage_row(row: reports::Row) -> UsageRow {
+    let anonymous = row.key == Key::Anonymous;
     let (label, detail) = match row.key {
         Key::User {
             username,
             display_name,
             ..
         } => (display_name, Some(username)),
-        Key::Anonymous => (anonymous_label().to_owned(), None),
+        Key::Anonymous => (String::new(), None),
         Key::Group { name, .. } => (name, None),
         Key::Printer(name) | Key::Scanner(name) => (name, None),
     };
     UsageRow {
         label,
+        anonymous,
         detail,
         print: row.print.map(print_totals),
         scan: row.scan.map(scan_totals),
@@ -138,15 +141,21 @@ fn usage_row(row: reports::Row) -> UsageRow {
 /// `GET /administration/usage?from=YYYY-MM-DD&to=YYYY-MM-DD&by=user|group|printer|scanner`.
 async fn usage_page(State(state): State<AdministrationState>, parts: Parts) -> Response {
     let query = UsageQuery::of(&parts.uri);
-    let by = query.breakdown();
+    let by = query
+        .as_ref()
+        .map(UsageQuery::breakdown)
+        .unwrap_or_default();
     let now = Utc::now();
     let tz = state.app.timezone;
     let date = |date: NaiveDate| date.format("%Y-%m-%d").to_string();
     let (this_from, this_to) = reports::this_month_days(now, tz);
     let (last_from, last_to) = reports::last_month_days(now, tz);
+    let typed = query.as_ref().ok();
     let mut data = UsagePageData {
-        from: query.from.clone().unwrap_or_default(),
-        to: query.to.clone().unwrap_or_default(),
+        from: typed
+            .and_then(|query| query.from.clone())
+            .unwrap_or_default(),
+        to: typed.and_then(|query| query.to.clone()).unwrap_or_default(),
         this_month: (date(this_from), date(this_to)),
         last_month: (date(last_from), date(last_to)),
         by,
@@ -154,7 +163,7 @@ async fn usage_page(State(state): State<AdministrationState>, parts: Parts) -> R
         report: None,
         invalid_dates: false,
     };
-    let status = match requested_range(&query, now, tz) {
+    let status = match query.and_then(|query| requested_range(&query, now, tz)) {
         Err(()) => {
             data.invalid_dates = true;
             StatusCode::BAD_REQUEST
@@ -230,9 +239,13 @@ fn count(value: Option<i64>) -> String {
 async fn export(state: AdministrationState, actor: User, parts: Parts, file: Export) -> Response {
     let locale = i18n::from_headers(&parts.headers);
     let query = UsageQuery::of(&parts.uri);
-    let by = query.breakdown();
+    let by = query
+        .as_ref()
+        .map(UsageQuery::breakdown)
+        .unwrap_or_default();
     let tz = state.app.timezone;
-    let Ok((from, to, range)) = requested_range(&query, Utc::now(), tz) else {
+    let range = query.and_then(|query| requested_range(&query, Utc::now(), tz));
+    let Ok((from, to, range)) = range else {
         return (
             StatusCode::BAD_REQUEST,
             messages::invalid_usage_dates(locale),

@@ -7,7 +7,7 @@ in the [reports reference](../reference/reports.md).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/usage-dark.png">
-  <img src="../images/usage-light.png" alt="The Usage tab of the Administration page: links for this month and last month and a form with two dates, links to the tables by user, group, printer and scanner and to the CSV downloads, the totals of the range, then a table with one row per user and their jobs, pages, sheets, color and black-and-white pages, cost, unknown pages, scans, scanned pages and saved scans.">
+  <img src="../images/usage-light.png" alt="The Usage tab of the Administration page: links for this month and last month and a form with two dates, links to the tables by user, group, printer and scanner and to the CSV downloads, the totals of the range, then a table with one row per user and their jobs, pages, sheets, color and black-and-white pages, cost, uncounted jobs, scans, scanned pages and saved scans.">
 </picture>
 
 ## Before you start
@@ -65,7 +65,7 @@ with the administrator who made it.
 - **A job is missing.** Jobs that printed nothing (refused by CUPS, or cancelled before
   printing) are refunded and left out. The ledger export still lists them.
 - **Pages are 0 but there are jobs.** recto could not count the pages of some documents. The
-  **Unknown pages** column counts those jobs (jobs, not pages), and they add nothing to the
-  page columns, the cost or the totals at the top.
+  **Uncounted jobs** column and the tile of the same name at the top count those jobs, and
+  they add nothing to the page columns, the cost or the page totals.
 - **The page says the dates are wrong.** Both dates must be between 2000 and 2999, and **To**
   cannot be before **From**.

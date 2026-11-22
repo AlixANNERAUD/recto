@@ -109,7 +109,10 @@ pub struct ScanTotals {
 /// A row of the table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageRow {
+    /// Empty for the anonymous network scans, which are named at render time, in the reader's
+    /// language.
     pub label: String,
+    pub anonymous: bool,
     /// The username under a display name.
     pub detail: Option<String>,
     pub print: Option<PrintTotals>,
@@ -149,11 +152,6 @@ pub fn usage_href(from: &str, to: &str, by: Breakdown) -> String {
 /// table.
 pub fn export_href(file: &str, from: &str, to: &str, by: Breakdown) -> String {
     format!("{USAGE}/{file}?from={from}&to={to}&by={}", by.keyword())
-}
-
-/// What the anonymous network scans are called in the user table.
-pub fn anonymous_label() -> &'static str {
-    t!("administration.usage.anonymous")
 }
 
 const LINK: &str = "inline-flex min-h-10 items-center rounded-md border px-3 text-sm font-semibold transition-colors";
@@ -307,6 +305,10 @@ fn Total(report: Report, currency: Currency) -> impl IntoView {
         (Metric::Jobs.label(), report.print.jobs.to_string()),
         (Metric::Cost.label(), currency.format(report.print.cost)),
         (
+            t!("administration.usage.columns.uncounted"),
+            report.print.uncounted.to_string(),
+        ),
+        (
             t!("administration.usage.columns.scanned_pages"),
             report.scan.pages.to_string(),
         ),
@@ -328,7 +330,7 @@ fn Total(report: Report, currency: Currency) -> impl IntoView {
         .collect_view();
     view! {
         <Card title=t!("administration.usage.total")>
-            <dl class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">{tiles}</dl>
+            <dl class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">{tiles}</dl>
         </Card>
     }
 }
@@ -397,13 +399,18 @@ fn UsageTable(rows: Vec<UsageRow>, by: Breakdown, currency: Currency) -> impl In
                 .into_iter()
                 .map(|cell| view! { <td class=NUMBER>{cell}</td> })
                 .collect_view();
+            let label = if row.anonymous {
+                t!("administration.usage.anonymous").to_owned()
+            } else {
+                row.label
+            };
             let detail = row
                 .detail
                 .map(|detail| view! { <span class="text-muted-foreground block">{detail}</span> });
             view! {
                 <tr>
                     <th scope="row" class="bg-card sticky left-0 px-2 py-3 pl-4 text-left font-normal md:pl-6">
-                        <span class="block font-semibold whitespace-nowrap">{row.label}</span>
+                        <span class="block font-semibold whitespace-nowrap">{label}</span>
                         {detail}
                     </th>
                     {cells}

@@ -443,7 +443,7 @@
         "group": "Group",
         "printer": "Printer",
         "scanner": "Scanner",
-        "uncounted": "Unknown pages",
+        "uncounted": "Uncounted jobs",
         "scans": "Scans",
         "scanned_pages": "Scanned pages",
         "saved": "Saved"

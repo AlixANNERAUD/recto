@@ -1,6 +1,6 @@
 //! Usage: the scan log, the Usage administration page and its CSV exports.
 
-use chrono::{DateTime, Datelike, Months, Utc};
+use chrono::{DateTime, Datelike, Months, NaiveDate, Utc};
 use recto_domain::{
     ledger::{self, NewEntry, Prices},
     scans::{self, NewScan, Source},
@@ -233,6 +233,19 @@ fn cells(row: &str) -> Vec<String> {
         .collect()
 }
 
+/// The value of a tile of the Total card.
+fn tile(html: &str, label: &str) -> String {
+    let card = &html[html.find(">Total<").expect("a Total card")..];
+    let card = &card[..card.find("</dl>").unwrap()];
+    let after = &card[card
+        .find(&format!(">{label}</dt>"))
+        .unwrap_or_else(|| panic!("no {label} tile: {card}"))..];
+    let start = after.find("<dd").unwrap();
+    let value = &after[start..];
+    let value = &value[value.find('>').unwrap() + 1..value.find("</dd>").unwrap()];
+    value.replace("<!>", "").trim().to_owned()
+}
+
 const NOVEMBER: &str = "/administration/usage?from=2026-11-01&to=2026-11-30";
 
 #[tokio::test]
@@ -254,6 +267,9 @@ async fn the_usage_page_totals_the_range() {
         .printed("bob", "office", "c.pdf", Some(1), false, november)
         .await;
     harness
+        .printed("bob", "office", "unreadable.pdf", None, false, november)
+        .await;
+    harness
         .printed(
             "bob",
             "office",
@@ -270,20 +286,23 @@ async fn the_usage_page_totals_the_range() {
     assert!(html.contains(">Total<"), "{html}");
     assert!(html.contains(r#"value="2026-11-01""#), "{html}");
     assert!(html.contains(r#"value="2026-11-30""#), "{html}");
-    // Jobs, pages, sheets, color, black and white, cost, unknown; scans, pages, saved.
+    // Jobs, pages, sheets, color, black and white, cost, uncounted; scans, pages, saved.
     assert_eq!(
         cells(row(&html, "alice")),
         ["2", "5", "5", "2", "3", "0.81 EUR", "0", "1", "4", "0"]
     );
     assert_eq!(
         cells(row(&html, "bob")),
-        ["1", "1", "1", "0", "1", "0.05 EUR", "0", "0", "0", "0"]
+        ["2", "1", "1", "0", "1", "0.05 EUR", "1", "0", "0", "0"]
     );
     assert_eq!(
         cells(row(&html, "Anonymous (network)")),
         ["0", "0", "0", "0", "0", "0.00 EUR", "0", "1", "2", "0"]
     );
     assert!(html.contains("0.86 EUR"), "{html}");
+    assert!(html.contains(">Uncounted jobs</th>"), "{html}");
+    assert_eq!(tile(&html, "Uncounted jobs"), "1", "{html}");
+    assert_eq!(tile(&html, "Pages"), "6", "{html}");
     // The tables keep the range.
     for by in ["user", "group", "printer", "scanner"] {
         let link = format!(
@@ -297,7 +316,7 @@ async fn the_usage_page_totals_the_range() {
         .await;
     assert_eq!(
         cells(row(&html, "office")),
-        ["2", "4", "4", "0", "4", "0.20 EUR", "0"]
+        ["3", "4", "4", "0", "4", "0.20 EUR", "1"]
     );
     assert!(!html.contains(">alice<"), "{html}");
     let html = harness.page(&format!("{NOVEMBER}&by=group"), &admin).await;
@@ -315,12 +334,28 @@ async fn the_usage_page_totals_the_range() {
 async fn the_usage_page_defaults_to_this_month() {
     let harness = Harness::new(vec![kitchen()], vec![]).await;
     let admin = administrator(&harness, "admin-subject", "admin").await;
-    let today = Utc::now().date_naive();
-    let first = today.with_day(1).unwrap();
-    let last = (first + Months::new(1)).pred_opt().unwrap();
+    // The month may turn during the request: it is the month at either end of it.
+    let before = Utc::now().date_naive();
     let html = harness.page("/administration/usage", &admin).await;
-    assert!(html.contains(&format!(r#"value="{first}""#)), "{html}");
-    assert!(html.contains(&format!(r#"value="{last}""#)), "{html}");
+    let after = Utc::now().date_naive();
+    let input = |id: &str| {
+        let input = &html[html.find(&format!(r#"id="{id}""#)).expect(id)..];
+        let value = &input[input.find(r#"value=""#).unwrap() + 7..];
+        NaiveDate::parse_from_str(&value[..10], "%Y-%m-%d").unwrap()
+    };
+    let (first, last) = (input("usage-from"), input("usage-to"));
+    assert_eq!(first.day(), 1, "{html}");
+    assert_eq!(last, (first + Months::new(1)).pred_opt().unwrap(), "{html}");
+    let month = |day: NaiveDate| day.with_day(1).unwrap();
+    assert!(
+        first == month(before) || first == month(after),
+        "{first} {html}"
+    );
+    // The This month link is that range, and is the current one.
+    let link = format!(
+        r#"href="/administration/usage?from={first}&amp;to={last}&amp;by=user" aria-current="true""#
+    );
+    assert!(html.contains(&link), "{html}");
 }
 
 #[tokio::test]
@@ -336,6 +371,8 @@ async fn invalid_dates_are_refused() {
         "from=2026-01-01&to=3000-01-01",
         "from=9999-12-31&to=9999-12-31",
         "from=%FF&to=x",
+        "from=2026-01-01&to=2026-01-31&from=2026-02-01",
+        "from=2026-01-01&to=2026-01-31&to=2026-01-31",
     ] {
         let (status, html) = harness
             .get(&format!("/administration/usage?{query}"), &admin)
@@ -595,6 +632,8 @@ async fn exports_refuse_invalid_dates() {
             "from=2026-11-02&to=2026-11-01",
             "from=9999-12-31&to=9999-12-31",
             "from=2026-11-01",
+            "from=2026-11-01&to=2026-11-30&from=2026-10-01",
+            "from=2026-11-01&to=2026-11-30&to=2026-11-30",
         ] {
             let (status, headers, body) = export(&harness, file, query, &admin).await;
             assert_eq!(status, StatusCode::BAD_REQUEST, "{file} {query}");
