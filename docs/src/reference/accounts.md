@@ -146,9 +146,19 @@ default). They are kept in the **Devices** section of the Account page, at `/acc
 
 A device sends its password as the password of HTTP Basic authentication, with any username:
 computers fill in their own login name, so recto ignores it. Capital letters are accepted. A
-device password cannot sign in to the web pages or change the account. It stops working at once
-when its user is disabled, and works again when they are enabled; deleting a user deletes their
-device passwords.
+device password cannot sign in to the web pages or change the account.
+
+A device password does not expire. It stops working:
+
+- when it is revoked, by its owner or by an administrator (**Revoke devices** on the Users page
+  revokes all of a user's);
+- when an administrator sets the user's password, which revokes all their device passwords; a
+  user changing their own password keeps theirs;
+- when single sign-on refuses the user the required claim (`RECTO_OIDC_REQUIRED_CLAIM`), which
+  revokes all their device passwords before showing **No access to recto**. Removing someone at
+  the provider alone does not: recto only learns of it at their next sign-in, so disable them in
+  recto too;
+- while its user is disabled. It works again when they are enabled.
 
 Devices send their passwords only over HTTPS: recto refuses them with `403` when
 `RECTO_PUBLIC_URL` is `http://`, unless `RECTO_IPP_ALLOW_PLAIN=true`. Requests from the server

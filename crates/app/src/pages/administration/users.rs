@@ -1,7 +1,7 @@
 //! `/administration/users`: every user, how they sign in, what they used of each quota rule
 //! that applies to them, and the forms that create a local user, grant or remove
-//! administration, disable or enable a user, set a new password, and grant extra or reset a
-//! quota.
+//! administration, disable or enable a user, set a new password, revoke their device
+//! passwords, and grant extra or reset a quota.
 //! The server answers an accepted form with `/administration/users?done=<notice>&user=<id>`
 //! and a refused one by rendering this page again with its [`UsersRefusal`].
 
@@ -23,7 +23,7 @@ use crate::{
     layout::Layout,
     pages::sign_in::SignInMethods,
     quotas::Allowance,
-    t, tf,
+    t, tf, tp,
 };
 
 /// A user as the page lists it.
@@ -45,6 +45,8 @@ pub struct UserRow {
     pub last_sign_in: Option<i64>,
     /// What the user used of each enabled personal rule that applies to them, by rule id.
     pub quotas: Vec<Allowance>,
+    /// How many device passwords the user has.
+    pub device_passwords: usize,
 }
 
 /// What the server hands the page.
@@ -56,6 +58,8 @@ pub struct UsersPageData {
     /// What the New local user form shows: after a refusal, what was typed but the password.
     pub draft: NewUserDraft,
     pub currency: Currency,
+    /// Whether OS integration is on: only then are device passwords counted and revoked here.
+    pub devices: bool,
 }
 
 /// The New local user form's fields, without the password, which never comes back.
@@ -140,10 +144,11 @@ pub enum Notice {
     PasswordSet,
     QuotaGranted,
     QuotaReset,
+    DevicesRevoked,
 }
 
 impl Notice {
-    const ALL: [Notice; 8] = [
+    const ALL: [Notice; 9] = [
         Notice::Created,
         Notice::Granted,
         Notice::Removed,
@@ -152,6 +157,7 @@ impl Notice {
         Notice::PasswordSet,
         Notice::QuotaGranted,
         Notice::QuotaReset,
+        Notice::DevicesRevoked,
     ];
 
     /// The value of the `done` query parameter.
@@ -165,6 +171,7 @@ impl Notice {
             Notice::PasswordSet => "password_set",
             Notice::QuotaGranted => "quota_granted",
             Notice::QuotaReset => "quota_reset",
+            Notice::DevicesRevoked => "devices_revoked",
         }
     }
 
@@ -182,6 +189,9 @@ impl Notice {
             Notice::PasswordSet => tf!("administration.done.password_set", username = username),
             Notice::QuotaGranted => tf!("administration.done.quota_granted", username = username),
             Notice::QuotaReset => tf!("administration.done.quota_reset", username = username),
+            Notice::DevicesRevoked => {
+                tf!("administration.done.devices_revoked", username = username)
+            }
         }
     }
 }
@@ -219,7 +229,10 @@ pub fn UsersPage() -> impl IntoView {
     };
     let create = local_accounts.then(|| view! { <NewUser draft=data.draft.clone() minimum /> });
     let list = match data.users {
-        Some(users) => view! { <UserTable users me local_accounts minimum currency /> }.into_any(),
+        Some(users) => {
+            let devices = data.devices;
+            view! { <UserTable users me local_accounts minimum currency devices /> }.into_any()
+        }
         None => view! {
             <Alert tone=Tone::Danger>{t!("administration.users.load_failed")}</Alert>
         }
@@ -342,6 +355,7 @@ fn UserTable(
     local_accounts: bool,
     minimum: usize,
     currency: Currency,
+    devices: bool,
 ) -> impl IntoView {
     let now = unix_now();
     // Without rules the column would be empty for everyone.
@@ -350,7 +364,7 @@ fn UserTable(
         .into_iter()
         .map(|user| {
             let currency = currency.clone();
-            view! { <UserTableRow user me local_accounts minimum now quotas currency /> }
+            view! { <UserTableRow user me local_accounts minimum now quotas currency devices /> }
         })
         .collect_view();
     let quotas_head = quotas.then(|| {
@@ -409,6 +423,7 @@ fn UserTableRow(
     now: i64,
     quotas: bool,
     currency: Currency,
+    devices: bool,
 ) -> impl IntoView {
     let id = user.id;
     let usage = quotas.then(|| {
@@ -460,7 +475,19 @@ fn UserTableRow(
         let none = (!user.single_sign_on && !user.has_password).then(|| {
             view! { <span class="text-muted-foreground">{t!("administration.users.no_method")}</span> }
         });
-        view! { <div class="grid justify-items-start gap-1">{single_sign_on}{password}{none}</div> }
+        // Devices print and scan with these, so they belong with the ways in.
+        let device_passwords = (devices && user.device_passwords > 0).then(|| {
+            view! {
+                <span class="text-muted-foreground text-xs whitespace-nowrap">
+                    {tp!("administration.users.device_passwords", user.device_passwords)}
+                </span>
+            }
+        });
+        view! {
+            <div class="grid justify-items-start gap-1">
+                {single_sign_on}{password}{none}{device_passwords}
+            </div>
+        }
     };
     // Whether the user may sign in, then whether they administer recto: one column, so the
     // table fits the page beside the actions on a laptop.
@@ -494,7 +521,7 @@ fn UserTableRow(
         }
         .into_any()
     } else {
-        view! { <UserActions user=user.clone() local_accounts minimum /> }.into_any()
+        view! { <UserActions user=user.clone() local_accounts minimum devices /> }.into_any()
     };
     let email = user.email.clone().map(
         |email| view! { <span class="text-muted-foreground block max-md:break-all">{email}</span> },
@@ -537,7 +564,12 @@ fn UserTableRow(
 /// The forms acting on another user. Administration granted by the identity provider has no
 /// toggle: the provider's claim would take it back or grant it again at the next sign-in.
 #[component]
-fn UserActions(user: UserRow, local_accounts: bool, minimum: usize) -> impl IntoView {
+fn UserActions(
+    user: UserRow,
+    local_accounts: bool,
+    minimum: usize,
+    devices: bool,
+) -> impl IntoView {
     let id = user.id;
     let username = user.username;
     let administration = (!user.administrator_from_claim).then(|| {
@@ -618,11 +650,28 @@ fn UserActions(user: UserRow, local_accounts: bool, minimum: usize) -> impl Into
             </details>
         }
     });
+    let revoke_devices = (devices && user.device_passwords > 0).then(|| {
+        view! {
+            <form method="post" action=format!("/administration/users/{id}/devices/revoke")>
+                <button
+                    type="submit"
+                    aria-label=tf!(
+                        "administration.users.revoke_devices_label",
+                        username = username.clone()
+                    )
+                    class=small_button_class(ButtonVariant::Secondary)
+                >
+                    {t!("administration.users.revoke_devices")}
+                </button>
+            </form>
+        }
+    });
     view! {
         <div class="flex flex-wrap items-start gap-2 md:flex-col md:flex-nowrap md:items-end md:gap-1.5">
             {administration}
             {disabled}
             {password}
+            {revoke_devices}
         </div>
     }
 }

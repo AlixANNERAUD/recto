@@ -172,7 +172,13 @@
       "set_password": "Set password",
       "new_password_for": "New password for {username}",
       "set_password_submit": "Set",
-      "set_password_note": "Signs {username} out everywhere."
+      "set_password_note": "Signs {username} out everywhere and revokes their device passwords.",
+      "device_passwords": {
+        "one": "{count} device password",
+        "other": "{count} device passwords"
+      },
+      "revoke_devices": "Revoke devices",
+      "revoke_devices_label": "Revoke every device password of {username}"
     },
     "new_user": {
       "title": "New local user",
@@ -192,9 +198,10 @@
       "removed": "{username} is no longer an administrator.",
       "disabled": "{username} is disabled and was signed out.",
       "enabled": "{username} can sign in again.",
-      "password_set": "The password of {username} was set, and {username} was signed out everywhere.",
+      "password_set": "The password of {username} was set, {username} was signed out everywhere, and their device passwords were revoked.",
       "quota_granted": "Extra was granted to {username}.",
-      "quota_reset": "The usage of {username} was reset."
+      "quota_reset": "The usage of {username} was reset.",
+      "devices_revoked": "The device passwords of {username} were revoked. Their devices can no longer print or scan."
     },
     "errors": {
       "about": "{username}: {message}",

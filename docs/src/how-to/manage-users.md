@@ -46,7 +46,10 @@ Press **Create user**.
 ## Reset a password
 
 There is no reset by email. Press **Set password** on the person's row, type the new password and
-press **Set**. All of the person's sessions end: they sign in again with the new password.
+press **Set**. All of the person's sessions end: they sign in again with the new password. Their
+[device passwords](../reference/accounts.md#device-passwords) are revoked too, so a device an
+intruder set up with the old password stops working; the person makes new ones for their own
+devices.
 
 Only users who already have a password get the button. Single sign-on users change their
 password at their identity provider.
@@ -58,6 +61,17 @@ their next request. Their account and its groups are kept: **Enable** lets them 
 
 To keep someone from signing in through single sign-on, disable them here or remove their access
 in the provider (see [Let only some people in](restrict-access.md)).
+
+## Revoke a user's devices
+
+With OS integration on (`RECTO_OS_INTEGRATION=true`), each person's row says how many device
+passwords they have, such as "2 device passwords", next to how they sign in. Press **Revoke
+devices** to revoke them all, when a device is lost or the person leaves: their computers and
+phones are refused from their next request. The person keeps their account and can make new ones
+on their Account page.
+
+Removing someone at the identity provider does not revoke their device passwords until they try
+to sign in again. Disable them here, or revoke their devices, as well.
 
 ## Grant or remove administration
 

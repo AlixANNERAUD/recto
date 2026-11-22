@@ -9,10 +9,12 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use data_encoding::{BASE32_NOPAD, HEXLOWER};
-use recto_entity::{device_passwords, users};
+use std::collections::HashMap;
+
+use recto_entity::{device_passwords, user_identities, users};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait,
-    QueryFilter, QueryOrder, TransactionSession, TransactionTrait,
+    QueryFilter, QueryOrder, QuerySelect, TransactionSession, TransactionTrait,
 };
 use sha2::{Digest, Sha256};
 
@@ -129,6 +131,52 @@ pub async fn revoke(database: &impl ConnectionTrait, user_id: i64, id: i64) -> R
         .exec(database)
         .await?;
     Ok(result.rows_affected > 0)
+}
+
+/// Deletes every device password of the user, for when their access ends some other way:
+/// an administrator setting their password ([`crate::users::reset_password`]), revoking their
+/// devices from the Users page, or the identity provider no longer letting them in. Returns how
+/// many there were.
+pub async fn revoke_all(database: &impl ConnectionTrait, user_id: i64) -> Result<u64> {
+    let result = device_passwords::Entity::delete_many()
+        .filter(device_passwords::Column::UserId.eq(user_id))
+        .exec(database)
+        .await?;
+    Ok(result.rows_affected)
+}
+
+/// [`revoke_all`] for the user of an identity provider account, if recto knows it: when the
+/// provider refuses them recto's required claim, it does not say who they are in recto.
+pub async fn revoke_for_identity(
+    database: &impl ConnectionTrait,
+    issuer: &str,
+    subject: &str,
+) -> Result<u64> {
+    let identity = user_identities::Entity::find()
+        .filter(user_identities::Column::Issuer.eq(issuer))
+        .filter(user_identities::Column::Subject.eq(subject))
+        .one(database)
+        .await?;
+    match identity {
+        Some(identity) => revoke_all(database, identity.user_id).await,
+        None => Ok(0),
+    }
+}
+
+/// How many device passwords each user has, for the Users page; users without any are left
+/// out.
+pub async fn counts(database: &impl ConnectionTrait) -> Result<HashMap<i64, usize>> {
+    let owners: Vec<i64> = device_passwords::Entity::find()
+        .select_only()
+        .column(device_passwords::Column::UserId)
+        .into_tuple()
+        .all(database)
+        .await?;
+    let mut counts = HashMap::new();
+    for owner in owners {
+        *counts.entry(owner).or_insert(0) += 1;
+    }
+    Ok(counts)
 }
 
 /// The id of the user's device password with this secret, if they have one.
@@ -449,6 +497,100 @@ mod tests {
         // Newest first.
         assert_eq!(listed[0].name, format!("Device {}", MAX_PER_USER - 1));
         assert_eq!(listed[MAX_PER_USER - 1].name, "é".repeat(MAX_NAME_LENGTH));
+    }
+
+    #[tokio::test]
+    async fn access_ending_revokes_device_passwords() {
+        let database = crate::testing::database().await;
+        let alice = user(&database, "alice", false).await;
+        let bob = user(&database, "bob", false).await;
+        let laptop = create(&database, alice, "Laptop", noon()).await.unwrap();
+        create(&database, alice, "Phone", noon()).await.unwrap();
+        let tablet = create(&database, bob, "Tablet", noon()).await.unwrap();
+        let counted = counts(&database).await.unwrap();
+        assert_eq!(counted.get(&alice), Some(&2));
+        assert_eq!(counted.get(&bob), Some(&1));
+
+        // An administrator setting the password; the user's own change keeps them.
+        let policy = PasswordPolicy { minimum_length: 12 };
+        users::set_password(&database, bob, "a new password!".into(), &policy)
+            .await
+            .unwrap();
+        assert!(matches!(
+            authenticate(&database, &tablet.secret, noon())
+                .await
+                .unwrap(),
+            Lookup::Found(_)
+        ));
+        let revoked = users::reset_password(&database, bob, "another password".into(), &policy)
+            .await
+            .unwrap();
+        assert_eq!(revoked, 1);
+        assert_eq!(
+            authenticate(&database, &tablet.secret, noon())
+                .await
+                .unwrap(),
+            Lookup::Unknown
+        );
+        // A refused password changes nothing.
+        let alice_phone = create(&database, alice, "Watch", noon()).await.unwrap();
+        assert!(
+            users::reset_password(&database, alice, "short".into(), &policy)
+                .await
+                .is_err()
+        );
+        assert!(matches!(
+            authenticate(&database, &alice_phone.secret, noon())
+                .await
+                .unwrap(),
+            Lookup::Found(_)
+        ));
+
+        assert_eq!(revoke_all(&database, alice).await.unwrap(), 3);
+        assert_eq!(
+            authenticate(&database, &laptop.secret, noon())
+                .await
+                .unwrap(),
+            Lookup::Unknown
+        );
+        assert!(counts(&database).await.unwrap().is_empty());
+        assert_eq!(revoke_all(&database, alice).await.unwrap(), 0);
+
+        // A single sign-on user the provider no longer lets in.
+        let identity = users::Identity {
+            issuer: "https://id.example".into(),
+            subject: "carol-subject".into(),
+            preferred_username: Some("carol".into()),
+            ..users::Identity::default()
+        };
+        let carol = users::sign_in_with_identity(&database, &identity)
+            .await
+            .unwrap();
+        let phone = create(&database, carol.id, "Phone", noon()).await.unwrap();
+        assert_eq!(
+            revoke_for_identity(&database, "https://id.example", "someone-else")
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            revoke_for_identity(&database, "https://other.example", "carol-subject")
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            revoke_for_identity(&database, "https://id.example", "carol-subject")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            authenticate(&database, &phone.secret, noon())
+                .await
+                .unwrap(),
+            Lookup::Unknown
+        );
     }
 
     #[tokio::test]

@@ -14,7 +14,7 @@ use axum::{
     routing::{get, post},
 };
 use recto_authentication::{OpenId, OpenIdError, PendingSignIn, SignedIn};
-use recto_domain::users;
+use recto_domain::{device_passwords, users};
 use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use tower_sessions::Session;
@@ -109,12 +109,28 @@ async fn finish(
     };
     let signed_in = match openid.finish(pending, &code, &state).await {
         Ok(signed_in) => signed_in,
-        Err(error) => {
-            tracing::warn!(%error, "sign-in refused");
-            return Redirect::to(&failure_location(&error, &next));
-        }
+        Err(error) => return refused(&auth.database, &error, &next).await,
     };
     complete(&auth.database, session, &signed_in, &next).await
+}
+
+/// Where a sign-in the provider's answer refused goes. A person refused the required claim has
+/// lost access to recto, so the device passwords of their user, if recto knows them, are
+/// revoked: the provider never sees those, and they would otherwise keep printing for good.
+async fn refused(database: &DatabaseConnection, error: &OpenIdError, next: &str) -> Redirect {
+    tracing::warn!(%error, "sign-in refused");
+    if let OpenIdError::AccessDenied { issuer, subject } = error {
+        match device_passwords::revoke_for_identity(database, issuer, subject).await {
+            Ok(0) => {}
+            Ok(count) => {
+                tracing::info!(subject, count, "device passwords revoked: no access");
+            }
+            Err(error) => {
+                tracing::error!(%error, subject, "revoking the device passwords failed");
+            }
+        }
+    }
+    Redirect::to(&failure_location(error, next))
 }
 
 /// Signs in the user of an identity the provider vouched for: finds or creates the user, then
@@ -185,7 +201,7 @@ fn failure_location(error: &OpenIdError, next: &str) -> String {
         OpenIdError::Unavailable(_) => error_location("unavailable", next),
         OpenIdError::StateMismatch => error_location("state", next),
         OpenIdError::Rejected(_) => error_location("rejected", next),
-        OpenIdError::AccessDenied => "/no-access".to_owned(),
+        OpenIdError::AccessDenied { .. } => "/no-access".to_owned(),
     }
 }
 
@@ -213,7 +229,13 @@ mod tests {
                 OpenIdError::Rejected("bad token".into()),
                 "/auth/error?reason=rejected&next=%2Fjobs",
             ),
-            (OpenIdError::AccessDenied, "/no-access"),
+            (
+                OpenIdError::AccessDenied {
+                    issuer: "https://id.test/".into(),
+                    subject: "alice".into(),
+                },
+                "/no-access",
+            ),
         ];
         for (error, location) in cases {
             assert_eq!(failure_location(&error, "/jobs"), location);
@@ -301,6 +323,55 @@ mod tests {
 
             assert_eq!(location(redirect), "/no-access");
             assert_eq!(session.get::<i64>("user_id").await.unwrap(), None);
+        }
+
+        #[tokio::test]
+        async fn a_refused_claim_revokes_device_passwords() {
+            let (database, _store) = sessions().await;
+            let alice = users::sign_in_with_identity(&database, &signed_in("alice").identity)
+                .await
+                .unwrap();
+            let bob = users::sign_in_with_identity(&database, &signed_in("bob").identity)
+                .await
+                .unwrap();
+            let now = chrono::Utc::now();
+            device_passwords::create(&database, alice.id, "Phone", now)
+                .await
+                .unwrap();
+            device_passwords::create(&database, bob.id, "Phone", now)
+                .await
+                .unwrap();
+            let denied = OpenIdError::AccessDenied {
+                issuer: "https://id.test/".into(),
+                subject: "alice".into(),
+            };
+
+            let redirect = refused(&database, &denied, "/jobs").await;
+
+            assert_eq!(location(redirect), "/no-access");
+            assert!(
+                device_passwords::list(&database, alice.id)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(
+                device_passwords::list(&database, bob.id)
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+            // Other failures say nothing about access, and revoke nothing.
+            let redirect = refused(&database, &OpenIdError::StateMismatch, "/jobs").await;
+            assert_eq!(location(redirect), "/auth/error?reason=state&next=%2Fjobs");
+            assert_eq!(
+                device_passwords::list(&database, bob.id)
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
         }
 
         #[tokio::test]

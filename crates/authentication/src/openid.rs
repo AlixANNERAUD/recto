@@ -151,8 +151,10 @@ pub enum OpenIdError {
     StateMismatch,
     #[error("the sign-in provider refused the sign-in: {0}")]
     Rejected(String),
+    /// The provider signed the person in, without the required claim. Who they are travels
+    /// along, so recto can take back what their user still holds.
     #[error("your account does not have the access required to use recto")]
-    AccessDenied,
+    AccessDenied { issuer: String, subject: String },
 }
 
 /// The provider as discovered: the client (with the provider's signing keys) and where to send
@@ -426,7 +428,11 @@ impl OpenId {
         if let Some(claim) = required
             && !claims::allows(&all, claim, required_value)
         {
-            return Err(OpenIdError::AccessDenied);
+            return Err(OpenIdError::AccessDenied {
+                // As the identity of a sign-in names it (see `identity`).
+                issuer: self.settings.issuer.as_str().to_owned(),
+                subject: subject.as_str().to_owned(),
+            });
         }
         let identity = identity(&self.settings, &all, subject.as_str(), incomplete);
         let id_token = token

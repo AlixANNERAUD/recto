@@ -18,8 +18,8 @@ recto is built for a household, or a small team, that trusts itself:
   your network, bypasses them, print quotas included: keep those services off networks you do
   not trust.
 - **Administrators manage accounts and device rules.** They create local accounts, set
-  passwords, disable users, appoint other administrators and limit devices to groups. They can
-  use every device and see every job. They cannot read passwords, and they cannot act on their
+  passwords, disable users, revoke their device passwords, appoint other administrators and
+  limit devices to groups. They can use every device and see every job. They cannot read passwords, and they cannot act on their
   own account from the web page.
 - **Scans are private.** A scan result can only be reached by the person who made it, and only for
   an hour. Scans saved to a folder belong to that folder's readers.
@@ -81,6 +81,21 @@ A slow hash such as Argon2id protects passwords people choose, which can be gues
 secret of that size cannot, so a fast hash loses nothing, and lets a device that polls every few
 seconds authenticate with one database lookup. The database never holds the secret, and recto
 never logs it: log lines name the device password's id and name.
+
+A device password lasts until it is revoked; it does not expire. Access ends with it when:
+
+- its owner or an administrator revokes it, on the Account page or with **Revoke devices** on the
+  Users page;
+- an administrator sets the user's password, which is what follows a compromised account: a
+  device password an intruder made with a stolen session goes with it. Changing your own password
+  keeps yours;
+- the identity provider refuses the user recto's required claim at a sign-in: recto revokes their
+  device passwords before showing **No access to recto**;
+- the user is disabled, until they are enabled again.
+
+Removing someone at the identity provider alone does not reach recto: the provider never sees
+device passwords, and recto only learns of the change if the person tries to sign in again.
+Disable the user in recto, or revoke their devices, as well.
 
 Revoking a device password, or disabling its user, applies to the next request: what grants
 access is never cached. Only refusals are: a secret that matches no device password is refused

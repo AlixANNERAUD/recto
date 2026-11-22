@@ -381,11 +381,17 @@ async fn required_claim_missing_denies() {
         ..provider.settings()
     });
     let result = sign_in(&provider, &openid, json!({}), json!({})).await;
-    assert!(matches!(result, Err(OpenIdError::AccessDenied)));
+    // Who was refused, so that recto can revoke what they still hold.
+    let issuer = provider.settings().issuer.to_string();
+    assert!(
+        matches!(&result, Err(OpenIdError::AccessDenied { issuer: denied, subject })
+            if *denied == issuer && subject == "subject-1"),
+        "{result:?}"
+    );
 
     let wrong = json!({"urn:zitadel:iam:org:project:roles": {"other": {"1": "example.org"}}});
     let result = sign_in(&provider, &openid, wrong, json!({})).await;
-    assert!(matches!(result, Err(OpenIdError::AccessDenied)));
+    assert!(matches!(result, Err(OpenIdError::AccessDenied { .. })));
 
     let right = json!({"urn:zitadel:iam:org:project:roles": {"recto": {"1": "example.org"}}});
     assert!(sign_in(&provider, &openid, right, json!({})).await.is_ok());

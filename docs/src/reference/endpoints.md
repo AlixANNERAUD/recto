@@ -16,7 +16,7 @@ instead. A single sign-on user without the required claim, or disabled, is sent 
 | `/scan` | Scan: scanners, options, preview and results. Needs JavaScript. |
 | `/account` | Account: change your password, for users with a password while local accounts are on, and keep your [device passwords](accounts.md#device-passwords), for everyone while `RECTO_OS_INTEGRATION` is on. `?changed=1` confirms a password change and `?done=revoked` a revoked device password. |
 | `/administration` | Redirects to `/administration/users`. Administrators only. |
-| `/administration/users` | Users: create local accounts, set passwords, disable users, grant administration, see each user's quota usage, grant extra and reset it. Administrators only. |
+| `/administration/users` | Users: create local accounts, set passwords, disable users, grant administration, count and revoke each user's device passwords, see each user's quota usage, grant extra and reset it. Administrators only. |
 | `/administration/groups` | Groups: the groups from the identity provider and their members. Administrators only. |
 | `/administration/printers` | Printers: who may use each printer, its prices, and, with printer management on, adding printers and managing each one. `?drivers=<words>` fills the Add form's driver list with up to 50 matching drivers. Administrators only. |
 | `/administration/scanners` | Scanners: who may use each scanner. Administrators only. |
@@ -49,7 +49,8 @@ These work without JavaScript and accept only requests from recto's own pages (s
 | `POST /administration/users` | Creates a local account. |
 | `POST /administration/users/{id}/administrator` | Grants or removes administration. |
 | `POST /administration/users/{id}/disabled` | Disables or enables a user. |
-| `POST /administration/users/{id}/password` | Sets a user's password. |
+| `POST /administration/users/{id}/password` | Sets a user's password, and revokes all their device passwords. |
+| `POST /administration/users/{id}/devices/revoke` | Revokes all of a user's device passwords, then redirects with `?done=devices_revoked&user=<id>`. Answers `404` for a user that does not exist, and while `RECTO_OS_INTEGRATION` is off. |
 | `POST /administration/users/{id}/grant` | Grants the user extra of a quota rule until its current window ends. Fields: `rule` (the id of an `everyone` or `group` rule, or of a `user` rule for that user), `amount` (a whole number above 0, at most 1000000000; for a cost rule, an amount in `RECTO_CURRENCY` above 0) and `reason` (1 to 200 characters once trimmed). Redirects with `?done=quota_granted&user=<id>`. |
 | `POST /administration/users/{id}/reset` | Resets the user's usage of a quota rule: only later jobs count. Fields: `rule` and `reason`, as for a grant. Redirects with `?done=quota_reset&user=<id>`. |
 | `POST /administration/printers/access` and `/administration/scanners/access` | Sets who may use a device. Fields: `device`, `access` (`everyone` or `groups`) and one `groups` field per group id; `groups` with none means administrators only. Redirects to the page with `?done=access`. Answers `400` with the page when `device` or `access` is missing or a group is unknown, and `503` when the database fails. |

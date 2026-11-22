@@ -20,6 +20,7 @@ use sea_orm::{
 
 use crate::{
     database::begin_write,
+    device_passwords,
     error::{Error, Problem, Result},
     names,
     passwords::{self, PasswordPolicy},
@@ -383,6 +384,31 @@ pub async fn set_password(
     changes.sessions_valid_after = Set(Some(sessions_cutoff()));
     changes.update(database).await?;
     Ok(())
+}
+
+/// [`set_password`] for an administrator resetting another user's password, which also
+/// revokes all their device passwords: a reset is what follows a compromised account, and a
+/// device password the intruder made would otherwise outlive it. Both happen in one
+/// transaction. Returns how many device passwords were revoked.
+pub async fn reset_password(
+    database: &(impl ConnectionTrait + TransactionTrait),
+    user_id: i64,
+    password: String,
+    policy: &PasswordPolicy,
+) -> Result<u64> {
+    policy.validate(&password)?;
+    let password_hash = passwords::hash(password).await;
+    let transaction = begin_write(database).await?;
+    let user = find_by_id(&transaction, user_id)
+        .await?
+        .ok_or(Error::NotFound)?;
+    let mut changes: users::ActiveModel = user.into();
+    changes.password_hash = Set(Some(password_hash));
+    changes.sessions_valid_after = Set(Some(sessions_cutoff()));
+    changes.update(&transaction).await?;
+    let revoked = device_passwords::revoke_all(&transaction, user_id).await?;
+    transaction.commit().await?;
+    Ok(revoked)
 }
 
 /// Disables or re-enables a user. Disabling ends every session of the user, as

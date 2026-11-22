@@ -40,7 +40,7 @@ use recto_app::{
 use recto_domain::{
     Error, Problem,
     access::{self, Access, DeviceKind},
-    groups,
+    device_passwords, groups,
     passwords::PasswordPolicy,
     prices::{self, Prices},
     quotas::{self, Enforcement, Holder, Metric, NewRule, Period, Rule, Subject},
@@ -83,6 +83,10 @@ pub fn router(app: AppState, auth: &AuthState) -> Router {
         )
         .route("/administration/users/{id}/disabled", post(set_disabled))
         .route("/administration/users/{id}/password", post(set_password))
+        .route(
+            "/administration/users/{id}/devices/revoke",
+            post(revoke_devices),
+        )
         .route(
             "/administration/users/{id}/grant",
             post(
@@ -218,6 +222,17 @@ async fn users_view(
                 // The users still show, without their usage.
                 tracing::error!(%error, "reading the quota usage failed");
             }
+            if state.app.os_integration {
+                match device_passwords::counts(&state.app.database).await {
+                    Ok(counts) => {
+                        for row in &mut rows {
+                            row.device_passwords = counts.get(&row.id).copied().unwrap_or(0);
+                        }
+                    }
+                    // The users still show, without their device passwords.
+                    Err(error) => tracing::error!(%error, "counting the device passwords failed"),
+                }
+            }
             Some(rows)
         }
         Err(error) => {
@@ -239,6 +254,7 @@ async fn users_view(
         refusal,
         draft,
         currency: state.app.currency.clone(),
+        devices: state.app.os_integration,
     };
     render(&state.app, state.methods, parts, status, move || {
         provide_context(data.clone());
@@ -261,6 +277,7 @@ fn user_row(summary: UserSummary) -> UserRow {
         is_disabled: user.is_disabled,
         last_sign_in: user.last_sign_in_at.map(|time| time.timestamp()),
         quotas: Vec::new(),
+        device_passwords: 0,
     }
 }
 
@@ -499,12 +516,47 @@ async fn set_password(
     let changed = if user_id == actor.id {
         Err(Error::Invalid(Problem::OwnAccount))
     } else {
-        users::set_password(&state.app.database, user_id, password, &state.policy).await
+        users::reset_password(&state.app.database, user_id, password, &state.policy).await
     };
-    if changed.is_ok() {
-        tracing::info!(by = actor.username, user_id, "password set");
-    }
+    let changed = changed.map(|revoked| {
+        tracing::info!(
+            by = actor.username,
+            user_id,
+            device_passwords = revoked,
+            "password set"
+        );
+    });
     finish(&state, parts, user_id, changed, Notice::PasswordSet).await
+}
+
+/// `POST /administration/users/{id}/devices/revoke`: revokes every device password of the
+/// user, whose devices are refused from their next request. For a lost or compromised account,
+/// or someone who left, when disabling them is not wanted. Answers the not-found page while OS
+/// integration is off, as the Account page's device forms do.
+async fn revoke_devices(
+    State(state): State<AdministrationState>,
+    Extension(actor): Extension<User>,
+    Path(user_id): Path<i64>,
+    parts: Parts,
+) -> Response {
+    if !state.app.os_integration {
+        return not_found(&state, parts).await;
+    }
+    let database = &state.app.database;
+    let changed = match users::find_by_id(database, user_id).await {
+        Ok(Some(_)) => device_passwords::revoke_all(database, user_id).await,
+        Ok(None) => Err(Error::NotFound),
+        Err(error) => Err(error),
+    };
+    let changed = changed.map(|count| {
+        tracing::info!(
+            by = actor.username,
+            user_id,
+            count,
+            "device passwords revoked"
+        );
+    });
+    finish(&state, parts, user_id, changed, Notice::DevicesRevoked).await
 }
 
 /// Redirects with `notice` after a change, or renders the Users page with why it was refused.

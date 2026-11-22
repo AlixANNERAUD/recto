@@ -293,3 +293,109 @@ async fn a_personal_address_never_leaves_its_secret_in_a_redirect() {
         }
     }
 }
+
+#[tokio::test]
+async fn administrators_end_a_users_device_passwords() {
+    let harness = Harness::new().await;
+    let admin = harness.administrator("root-subject", "root").await;
+    let bob_id = harness.local_user("bob", ALICE_PASSWORD).await;
+    let now = chrono::Utc::now();
+    let phone = device_passwords::create(&harness.database, bob_id, "Phone", now)
+        .await
+        .unwrap();
+    device_passwords::create(&harness.database, bob_id, "Laptop", now)
+        .await
+        .unwrap();
+
+    // The Users page counts them, with a form that revokes them all.
+    let response = harness
+        .send(page("/administration/users", Some(&admin)))
+        .await;
+    let html = text(response).await;
+    assert!(html.contains("2 device passwords"), "{html}");
+    let revoke = format!("/administration/users/{bob_id}/devices/revoke");
+    assert!(html.contains(&format!("action=\"{revoke}\"")), "{html}");
+    assert!(html.contains("Revoke devices"), "{html}");
+
+    // Only administrators may, and only from recto's own pages.
+    let bob = harness.sign_in_with_password("bob", ALICE_PASSWORD).await;
+    let response = harness.send(form(&revoke, Some(&bob), &[])).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = harness
+        .send(
+            Request::post(revoke.as_str())
+                .header(header::COOKIE, &admin)
+                .header(header::ORIGIN, "https://evil.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        owner_of(&harness, &phone.secret).await.as_deref(),
+        Some("bob")
+    );
+
+    let response = harness.send(form(&revoke, Some(&admin), &[])).await;
+    let done = format!("/administration/users?done=devices_revoked&user={bob_id}");
+    assert_redirect(&response, &done);
+    assert_eq!(owner_of(&harness, &phone.secret).await, None);
+    let html = text(harness.send(page(&done, Some(&admin))).await).await;
+    assert!(
+        html.contains("The device passwords of bob were revoked"),
+        "{html}"
+    );
+    assert!(!html.contains(&format!("action=\"{revoke}\"")), "{html}");
+    let response = harness
+        .send(form(
+            "/administration/users/999999/devices/revoke",
+            Some(&admin),
+            &[],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    // Setting the password revokes the ones made since; bob's own change would not.
+    let tablet = device_passwords::create(&harness.database, bob_id, "Tablet", now)
+        .await
+        .unwrap();
+    let response = harness
+        .send(form(
+            &format!("/administration/users/{bob_id}/password"),
+            Some(&admin),
+            &[("password", "a brand new password")],
+        ))
+        .await;
+    assert_redirect(
+        &response,
+        &format!("/administration/users?done=password_set&user={bob_id}"),
+    );
+    assert_eq!(owner_of(&harness, &tablet.secret).await, None);
+}
+
+#[tokio::test]
+async fn os_integration_off_hides_the_device_counts() {
+    let harness = Harness::with(Setup {
+        os_integration: false,
+        ..Setup::default()
+    })
+    .await;
+    let admin = harness.administrator("root-subject", "root").await;
+    let bob_id = harness.local_user("bob", ALICE_PASSWORD).await;
+    let phone = device_passwords::create(&harness.database, bob_id, "Phone", chrono::Utc::now())
+        .await
+        .unwrap();
+    let response = harness
+        .send(page("/administration/users", Some(&admin)))
+        .await;
+    let html = text(response).await;
+    assert!(!html.contains("1 device password"), "{html}");
+    assert!(!html.contains("Revoke devices"), "{html}");
+    let revoke = format!("/administration/users/{bob_id}/devices/revoke");
+    let response = harness.send(form(&revoke, Some(&admin), &[])).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        owner_of(&harness, &phone.secret).await.as_deref(),
+        Some("bob")
+    );
+}

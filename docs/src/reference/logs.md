@@ -25,7 +25,9 @@ only.
 | info | `user created at first sign-in` | `user` |
 | info | `local user created`, `administrator created` | `user` |
 | info | `password changed` | `user` |
-| info | `password set`, `disabled changed`, `administration changed` | `by`, `user_id`, and `value` for the last two |
+| info | `password set`, `disabled changed`, `administration changed` | `by`, `user_id`, `device_passwords` (how many were revoked) for the first, and `value` for the last two |
+| info | `device passwords revoked` | `by`, `user_id`, `count` |
+| info | `device passwords revoked: no access`: single sign-on refused the user the required claim | `subject`, `count` |
 | info | `session ended: the user is gone, disabled or signed out` | `user_id` |
 | info | `document sent to the printer` | `user`, `job` |
 | info | `document sent to the printer over a soft quota` | `user`, `job`, `rules` (the rule ids, comma-separated) |
@@ -87,6 +89,8 @@ only.
 | error | `reading the printer access rules failed`, `reading the scanner access rules failed` | `error` |
 | error | `saving the device access failed`, `forgetting the device access failed`, `loading the device rules failed` | `error` |
 | error | `listing the users failed`, `listing the groups failed` | `error` |
+| error | `counting the device passwords failed`: the Users page shows the users without them | `error` |
+| error | `revoking the device passwords failed`: at a sign-in refused the required claim | `error`, `subject` |
 | error | `loading the usage failed`: the Usage page shows the error instead of the tables | `error` |
 | error | `exporting the usage failed`: the download answers `503` | `error` |
 
