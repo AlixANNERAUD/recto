@@ -40,8 +40,9 @@ type, the printer, the copies, the sides and the color mode, and these counts:
 | Color pages | All the pages when the color mode is color, otherwise none. |
 | Black and white pages | The other pages. |
 
-The pages of a PDF come from reading the file. When recto cannot read a PDF, it still prints it
-and records the counts as unknown, which is not the same as zero, unless a quota rule needs them:
+The pages of a PDF come from reading the file's page tree, where a page listed several times
+counts each time, as CUPS prints it each time. When recto cannot count a PDF (see
+[Counting](quotas.md#counting)), it still prints it and records the counts as unknown, which is not the same as zero, unless a quota rule needs them:
 then it refuses the job (see [Counting](quotas.md#counting)). A page range that goes past the
 end of the document selects only the pages that exist.
 

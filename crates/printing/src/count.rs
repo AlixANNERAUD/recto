@@ -15,6 +15,12 @@ use crate::PageRanges;
 /// are a few hundred kilobytes; a compression bomb stops here instead of at lopdf's 256 MiB.
 const MAX_INFLATED_STREAM: usize = 16 * 1024 * 1024;
 
+/// The deepest page tree counted, its root and pages included.
+const MAX_DEPTH: usize = 64;
+
+/// The most pages a document may have and still be counted.
+pub const MAX_PAGES: u32 = 100_000;
+
 /// Keeps what the page tree is made of. Page contents, fonts and images are the bulk of a PDF
 /// and never needed: dropping them keeps the memory of a large document small. Object streams
 /// are kept for loading, because ordinary objects may live inside them.
@@ -31,12 +37,15 @@ fn page_tree_only(id: ObjectId, object: &mut Object) -> Option<(ObjectId, Object
     }
 }
 
-/// The page count of a PDF, or `None` when it cannot be parsed (damaged, or encrypted so that
-/// its page tree cannot be read). The count is the document's own, before any page range.
+/// The page count of a PDF, or `None` when it cannot be counted. The count is the document's own,
+/// before any page range.
 ///
-/// The trailer's `/Count` is not trusted nor used: the file may lie, and CUPS prints the pages
-/// the tree really holds. lopdf walks the tree with its own depth and visit limits, so a cyclic
-/// or very deep tree ends.
+/// The tree is walked here rather than through lopdf's page list, which drops what it cannot
+/// place and visits each page once: CUPS prints a page as often as the tree lists it, so a page
+/// listed 1000 times counts 1000 times. The trailer's `/Count` is neither trusted nor used. A
+/// document is uncountable when it cannot be parsed (damaged, or encrypted so that its page tree
+/// cannot be read), or when its tree has a cycle, is deeper than [`MAX_DEPTH`], has a node that
+/// is neither `/Pages` nor `/Page`, more than [`MAX_PAGES`] pages, or none.
 pub fn pdf_pages(document: &[u8]) -> Option<u32> {
     let options = LoadOptions {
         filter: Some(page_tree_only),
@@ -44,7 +53,61 @@ pub fn pdf_pages(document: &[u8]) -> Option<u32> {
         ..LoadOptions::default()
     };
     let document = Document::load_mem_with_options(document, options).ok()?;
-    u32::try_from(document.get_pages().len()).ok()
+    let root = document
+        .catalog()
+        .ok()?
+        .get(b"Pages")
+        .and_then(Object::as_reference)
+        .ok()?;
+    let mut walk = Walk {
+        document: &document,
+        path: Vec::new(),
+        visits: 0,
+        pages: 0,
+    };
+    walk.node(root)?;
+    (walk.pages > 0).then_some(walk.pages)
+}
+
+/// The most nodes visited in a page tree. A tree that lists its subtrees many times could make
+/// the walk exponential without pages to stop it: this bounds the time it takes.
+const MAX_VISITS: usize = 1_000_000;
+
+/// A walk of a page tree, counting every page each time the tree lists it.
+struct Walk<'a> {
+    document: &'a Document,
+    /// The nodes from the root to the current one, to find cycles.
+    path: Vec<ObjectId>,
+    visits: usize,
+    pages: u32,
+}
+
+impl Walk<'_> {
+    /// Counts the pages under `id`; `None` as soon as the tree is uncountable.
+    fn node(&mut self, id: ObjectId) -> Option<()> {
+        self.visits += 1;
+        if self.visits > MAX_VISITS || self.path.len() >= MAX_DEPTH || self.path.contains(&id) {
+            return None;
+        }
+        let node = self.document.get_dictionary(id).ok()?;
+        match node.get(b"Type").and_then(Object::as_name).ok()? {
+            b"Page" => {
+                self.pages += 1;
+                (self.pages <= MAX_PAGES).then_some(())
+            }
+            b"Pages" => {
+                let kids = node.get(b"Kids").ok()?;
+                let (_, kids) = self.document.dereference(kids).ok()?;
+                self.path.push(id);
+                for kid in kids.as_array().ok()? {
+                    self.node(kid.as_reference().ok()?)?;
+                }
+                self.path.pop();
+                Some(())
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Reads PDFs for their page count with bounded concurrency and time. Reading runs on blocking
@@ -129,6 +192,7 @@ pub fn printed_pages(document_pages: u32, ranges: Option<&PageRanges>) -> u32 {
 mod tests {
     use super::*;
     use crate::{PageRanges, testing::sample_pdf};
+    use lopdf::dictionary;
 
     #[test]
     fn pdf_pages_are_counted() {
@@ -187,12 +251,12 @@ mod tests {
     }
 
     /// A PDF whose page tree is a chain of `depth` nodes, with one page at the end.
-    fn deep_pdf(depth: u32) -> Vec<u8> {
+    fn deep_pdf(depth: usize) -> Vec<u8> {
         use lopdf::{Document, Object, dictionary};
         let mut document = Document::with_version("1.5");
         let ids: Vec<_> = (0..depth).map(|_| document.new_object_id()).collect();
-        let page = document
-            .add_object(dictionary! { "Type" => "Page", "Parent" => ids[depth as usize - 1] });
+        let page =
+            document.add_object(dictionary! { "Type" => "Page", "Parent" => ids[depth - 1] });
         for (index, id) in ids.iter().enumerate() {
             let kid: Object = match ids.get(index + 1) {
                 Some(next) => (*next).into(),
@@ -213,17 +277,92 @@ mod tests {
     }
 
     #[test]
-    fn a_cyclic_page_tree_ends() {
-        // The file claims 99999 pages; the tree holds one real page, however often it is
-        // reached. Any answer is fine as long as it comes, and is not the claimed count.
-        let pages = pdf_pages(&cyclic_pdf());
-        assert!(pages.is_none_or(|pages| pages < 100), "{pages:?}");
+    fn a_cyclic_page_tree_is_uncountable() {
+        // The file claims 99999 pages; the tree reaches its root again.
+        assert_eq!(pdf_pages(&cyclic_pdf()), None);
     }
 
     #[test]
-    fn a_very_deep_page_tree_ends() {
-        let pages = pdf_pages(&deep_pdf(5_000));
-        assert!(pages.is_none_or(|pages| pages <= 1), "{pages:?}");
+    fn a_page_tree_deeper_than_the_limit_is_uncountable() {
+        // The chain of nodes, then the page: 64 levels in all.
+        assert_eq!(pdf_pages(&deep_pdf(MAX_DEPTH - 1)), Some(1));
+        assert_eq!(pdf_pages(&deep_pdf(MAX_DEPTH)), None);
+        assert_eq!(pdf_pages(&deep_pdf(5_000)), None);
+    }
+
+    /// A PDF whose root node is `Pages` with the kids `tree` adds to the document.
+    fn tree_pdf(tree: impl FnOnce(&mut lopdf::Document) -> Vec<lopdf::Object>) -> Vec<u8> {
+        use lopdf::{Document, Object, dictionary};
+        let mut document = Document::with_version("1.5");
+        let root = document.new_object_id();
+        let kids = tree(&mut document);
+        document.objects.insert(
+            root,
+            Object::Dictionary(dictionary! { "Type" => "Pages", "Count" => 1, "Kids" => kids }),
+        );
+        let catalog = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => root });
+        document.trailer.set("Root", catalog);
+        let mut bytes = Vec::new();
+        document.save_to(&mut bytes).unwrap();
+        bytes
+    }
+
+    fn page(document: &mut lopdf::Document) -> lopdf::ObjectId {
+        document.add_object(dictionary! {
+            "Type" => "Page",
+            "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+        })
+    }
+
+    /// A `Pages` node listing `kid` `times` times.
+    fn node(document: &mut lopdf::Document, kid: lopdf::ObjectId, times: usize) -> lopdf::ObjectId {
+        document.add_object(dictionary! {
+            "Type" => "Pages", "Count" => 1, "Kids" => vec![kid.into(); times],
+        })
+    }
+
+    #[test]
+    fn a_page_listed_many_times_counts_each_time() {
+        // CUPS prints a page as often as the tree lists it.
+        let repeated = tree_pdf(|document| vec![page(document).into(); 1000]);
+        assert_eq!(pdf_pages(&repeated), Some(1000));
+        // A shared subtree counts each time too.
+        let shared = tree_pdf(|document| {
+            let page = page(document);
+            let pair = node(document, page, 2);
+            vec![pair.into(), pair.into(), page.into()]
+        });
+        assert_eq!(pdf_pages(&shared), Some(5));
+    }
+
+    #[test]
+    fn more_pages_than_the_limit_are_uncountable() {
+        let pages = |each: usize| {
+            tree_pdf(|document| {
+                let page = page(document);
+                let hundred = node(document, page, each);
+                vec![hundred.into(); 1000]
+            })
+        };
+        assert_eq!(pdf_pages(&pages(100)), Some(MAX_PAGES));
+        assert_eq!(pdf_pages(&pages(101)), None);
+    }
+
+    #[test]
+    fn a_document_without_pages_is_uncountable() {
+        assert_eq!(pdf_pages(&tree_pdf(|_| Vec::new())), None);
+    }
+
+    #[test]
+    fn a_node_neither_pages_nor_page_is_uncountable() {
+        let mistyped = tree_pdf(|document| {
+            let page = page(document);
+            let odd = document.add_object(dictionary! {
+                "Type" => "Folder", "Kids" => vec![page.into()],
+            });
+            vec![page.into(), odd.into()]
+        });
+        assert_eq!(pdf_pages(&mistyped), None);
     }
 
     #[test]

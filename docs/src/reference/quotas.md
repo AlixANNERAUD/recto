@@ -153,12 +153,18 @@ keeps its full counts.
 Counts are taken when the job is sent, before CUPS prints it, and never change afterwards.
 
 The pages of a PDF come from reading the file, at most two PDFs at a time and for at most 10
-seconds each, waiting included. When the counts matter, because a rule that applies to the job on
-that printer counts anything but `jobs`:
+seconds each, waiting included. recto walks the page tree as CUPS does: a page the tree lists
+several times counts each time, since it prints each time. The page count the file states is
+not used.
+
+A PDF is uncountable when it cannot be read (damaged, or encrypted), or when its page tree loops
+back on itself, is more than 64 levels deep, holds a node that is neither a page nor a list of
+pages, or has no pages or more than 100,000. When the counts matter, because a rule that applies
+to the job on that printer counts anything but `jobs`:
 
 | Case | The job is |
 | --- | --- |
-| The PDF cannot be read, or reading it takes too long | refused: "recto could not count the pages of this PDF, and your quotas count pages. Save it again as PDF and retry." |
+| The PDF is uncountable, or reading it takes too long | refused: "recto could not count the pages of this PDF, and your quotas count pages. Save it again as PDF and retry." |
 | Other PDFs held both places for the whole 10 seconds | refused: "recto is busy counting the pages of other documents, and your quotas count pages. Try again in a moment." |
 
 Otherwise such a job prints, with unknown counts.
