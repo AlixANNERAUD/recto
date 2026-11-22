@@ -148,17 +148,38 @@ pub async fn owns(
     Ok(row.map(|row| row.id))
 }
 
-/// Who `secret` authenticates: `None` when it is malformed, unknown (revoked included) or its
-/// user is disabled. Read from the database on every call, so revoking or disabling applies to
-/// the next request. Records the use when the last one recorded is older than
-/// [`LAST_USE_PRECISION`]; failing to record it does not refuse the device.
+/// What a secret is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Lookup {
+    /// A device password of a user who may use it.
+    Found(DeviceUser),
+    /// A device password of a disabled user: refused until they are enabled again.
+    Disabled,
+    /// Malformed, or no device password (revoked ones included): it never will be one.
+    Unknown,
+}
+
+impl Lookup {
+    /// The user, when the secret authenticates one.
+    pub fn user(self) -> Option<DeviceUser> {
+        match self {
+            Lookup::Found(user) => Some(user),
+            Lookup::Disabled | Lookup::Unknown => None,
+        }
+    }
+}
+
+/// Who `secret` authenticates, if anyone (see [`Lookup`]). Read from the database on every
+/// call, so revoking or disabling applies to the next request. Records the use when the last
+/// one recorded is older than [`LAST_USE_PRECISION`]; failing to record it does not refuse the
+/// device.
 pub async fn authenticate(
     database: &impl ConnectionTrait,
     secret: &str,
     now: DateTime<Utc>,
-) -> Result<Option<DeviceUser>> {
+) -> Result<Lookup> {
     let Some(secret) = normalized(secret) else {
-        return Ok(None);
+        return Ok(Lookup::Unknown);
     };
     let found = device_passwords::Entity::find()
         .filter(device_passwords::Column::SecretHash.eq(hash(&secret)))
@@ -166,10 +187,10 @@ pub async fn authenticate(
         .one(database)
         .await?;
     let Some((device, Some(user))) = found else {
-        return Ok(None);
+        return Ok(Lookup::Unknown);
     };
     if user.is_disabled {
-        return Ok(None);
+        return Ok(Lookup::Disabled);
     }
     let stale = device
         .last_used_at
@@ -186,13 +207,19 @@ pub async fn authenticate(
             tracing::warn!(%error, device_password_id = device.id, "recording a device's last use failed");
         }
     }
-    Ok(Some(DeviceUser {
+    Ok(Lookup::Found(DeviceUser {
         user_id: user.id,
         username: user.username,
         is_administrator: user.is_administrator,
         device_password_id: device.id,
         device_name: device.name,
     }))
+}
+
+/// What a secret is known by in memory, such as in a cache of refused secrets: the SHA-256 of
+/// the secret as typed, in lowercase, so the secret itself is not kept.
+pub fn fingerprint(secret: &str) -> [u8; 32] {
+    Sha256::digest(secret.to_ascii_lowercase().as_bytes()).into()
 }
 
 /// A new secret: [`SECRET_BYTES`] from the system's random source, in lowercase base32.
@@ -282,6 +309,7 @@ mod tests {
         let device = authenticate(&database, &created.secret, noon())
             .await
             .unwrap()
+            .user()
             .expect("the secret is known");
         assert_eq!(
             device,
@@ -295,19 +323,20 @@ mod tests {
         );
         // Base32 reads the same in capitals, as some password fields type it.
         let upper = created.secret.to_ascii_uppercase();
-        assert!(
-            authenticate(&database, &upper, noon())
-                .await
-                .unwrap()
-                .is_some()
-        );
+        assert!(matches!(
+            authenticate(&database, &upper, noon()).await.unwrap(),
+            Lookup::Found(_)
+        ));
         for wrong in [
             "",
             "short",
             &"a".repeat(32),
             &format!("{}1", &created.secret[1..]),
         ] {
-            assert_eq!(authenticate(&database, wrong, noon()).await.unwrap(), None);
+            assert_eq!(
+                authenticate(&database, wrong, noon()).await.unwrap(),
+                Lookup::Unknown
+            );
         }
         assert_eq!(
             owns(&database, alice, &created.secret).await.unwrap(),
@@ -316,18 +345,18 @@ mod tests {
         assert_eq!(owns(&database, bob, &created.secret).await.unwrap(), None);
 
         assert!(!revoke(&database, bob, created.id).await.unwrap());
-        assert!(
+        assert!(matches!(
             authenticate(&database, &created.secret, noon())
                 .await
-                .unwrap()
-                .is_some()
-        );
+                .unwrap(),
+            Lookup::Found(_)
+        ));
         assert!(revoke(&database, alice, created.id).await.unwrap());
         assert_eq!(
             authenticate(&database, &created.secret, noon())
                 .await
                 .unwrap(),
-            None
+            Lookup::Unknown
         );
         assert_eq!(owns(&database, alice, &created.secret).await.unwrap(), None);
         assert!(!revoke(&database, alice, created.id).await.unwrap());
@@ -346,17 +375,17 @@ mod tests {
             authenticate(&database, &created.secret, noon())
                 .await
                 .unwrap(),
-            None
+            Lookup::Disabled
         );
         users::set_disabled(&database, admin, alice, false)
             .await
             .unwrap();
-        assert!(
+        assert!(matches!(
             authenticate(&database, &created.secret, noon())
                 .await
-                .unwrap()
-                .is_some()
-        );
+                .unwrap(),
+            Lookup::Found(_)
+        ));
     }
 
     #[tokio::test]

@@ -82,19 +82,26 @@ secret of that size cannot, so a fast hash loses nothing, and lets a device that
 seconds authenticate with one database lookup. The database never holds the secret, and recto
 never logs it: log lines name the device password's id and name.
 
-Revoking a device password, or disabling its user, applies to the next request: nothing is
-cached. Over plain HTTP, recto refuses device passwords unless told otherwise
+Revoking a device password, or disabling its user, applies to the next request: what grants
+access is never cached. Only refusals are: a secret that matches no device password is refused
+again from memory for 10 minutes (up to 1024 of them), since a random secret never becomes one
+later. A disabled user's secret is not remembered, so enabling them again brings their devices
+back at once. Over plain HTTP, recto refuses device passwords unless told otherwise
 (`RECTO_IPP_ALLOW_PLAIN`), as the password would cross the network in clear; behind a reverse
 proxy recto cannot see the hop to the device, and trusts the proxy as the sign-in form does.
 
-Wrong device passwords have **their own limit**, per connection address, not the password
-sign-in one. Slowing guesses would gain nothing against a 160-bit secret, so the limit only keeps
-floods off the database: 30 at once, then one a second, and right passwords never count. It is
-kept apart on purpose, departing from the first accounts design, which shared one limit: behind a
-proxy without trusted forwarded headers, or behind a school's NAT, every client has the same
-address, and one phone still polling with a revoked password would otherwise make password
-sign-in fail for everyone there. For the same reason it reads only the connection's address,
-never a forwarded header, which a device could write itself.
+Wrong device passwords have **their own limit**, not the password sign-in one. Slowing guesses
+would gain nothing against a 160-bit secret, so the limit only keeps floods off the database: 30
+at once, then one a second, and right passwords never count. It is kept apart on purpose,
+departing from the first accounts design, which shared one limit: behind a proxy without trusted
+forwarded headers, or behind a school's NAT, every client has the same address, and one phone
+still polling with a revoked password would otherwise make password sign-in fail for everyone
+there. Such a phone does not drain the device limit either: its secret, refused once, is refused
+again from memory without counting, so only new guesses do. A flood of new guesses through a
+shared address still makes every device behind it wait; with `RECTO_TRUST_FORWARDED_HEADERS`
+on, the limit counts by the forwarded client address, as the sign-in limit does, and only the
+guesser waits. Whether plain HTTP is accepted always depends on the connection's address, never
+on a forwarded header, which a device could write itself.
 
 ## Administrators
 

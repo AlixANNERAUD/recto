@@ -32,6 +32,8 @@ only.
 | info | `print refused by a quota` | `user`, `rule` |
 | info | `job canceled` | `user`, `job` |
 | info | `device access changed`, `device access forgotten` | `by`, `device` |
+| info | `device password created` | `user`, `device_password_id`, `device_name` |
+| info | `device password revoked` | `user`, `device_password_id` |
 | info | `printer added` | `by`, `printer`, `address` |
 | info | `printer prices set` | `by`, `printer`, `mono_page`, `color_page`, `sheet` (minor units) |
 | info | `quota rule created`, `quota rule changed`, `quota rule enabled changed`, `quota rule deleted` | `by`, `rule` (its id), and `enabled` for the third |
@@ -51,6 +53,11 @@ only.
 | warn | `password sign-in refused` | `client`, `refusal` |
 | warn | `cross-site request refused` | `method`, `path`, with the secret of a personal device address shown as `<secret>` |
 | warn | `disabled user refused` | `subject` |
+| warn | `unknown device password`: counts toward the [device password limit](accounts.md#device-password-limit) | `peer`, `client`, `in_path` |
+| warn | `device password of a disabled user` | `peer`, `in_path` |
+| warn | `device password refused: too many failures` | `peer`, `client` |
+| warn | `device credentials refused over plain HTTP` | `peer` |
+| warn | `recording a device's last use failed`: the device is still let in | `error`, `device_password_id` |
 | warn | `reading the user information failed` | `error` |
 | warn | `SANE could not start; scanning is off`, `SANE crashed while starting; scanning is off` | `error` |
 | warn | `the scan results directory is not usable` | `error`, `dir` |
@@ -62,6 +69,7 @@ only.
 | warn | `printer administration failed` | `error`, and `by` and `printer` for a printer form |
 | warn | `listing the printers for the quotas page failed`: the page offers the printers rules already name | `error` |
 | error | `starting the session failed` | `error` |
+| error | `creating a device password failed`, `revoking a device password failed`, `checking a device password failed`: the last answers the device `503` | `error` |
 | error | `password sign-in failed`, `changing a password failed`, `changing a user failed` | `error` |
 | error | `writing the ledger entry failed` | `error` |
 | error | `recording the scan failed` | `error`, `user` |
@@ -84,7 +92,9 @@ only.
 
 Commands such as `recto create-administrator` write their messages as text.
 
-Tokens, cookies, passwords and file contents are never logged. The password of a PostgreSQL URL
+Tokens, cookies, passwords, device passwords and file contents are never logged. A device
+password refused again from memory is logged at `debug` only (`device password refused again`),
+so a phone polling with a revoked password does not fill the log. The password of a PostgreSQL URL
 is hidden in messages.
 
 ## Health

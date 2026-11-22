@@ -27,6 +27,7 @@ async fn owner_of(harness: &Harness, secret: &str) -> Option<String> {
     device_passwords::authenticate(&harness.database, secret, chrono::Utc::now())
         .await
         .unwrap()
+        .user()
         .map(|user| user.username)
 }
 
@@ -233,7 +234,7 @@ fn device_request(peer: [u8; 4], password: &str) -> Parts {
 }
 
 #[tokio::test]
-async fn a_revoked_phone_does_not_block_sign_in() {
+async fn a_flood_of_device_guesses_does_not_block_sign_in() {
     let harness = Harness::new().await;
     harness.local_user("alice", ALICE_PASSWORD).await;
     let devices = DeviceAuth {
@@ -243,11 +244,17 @@ async fn a_revoked_phone_does_not_block_sign_in() {
     };
     // Behind a proxy every client has the proxy's address, which is the peer of the requests
     // the harness sends.
-    let revoked = device_request(PEER, &"r".repeat(32));
+    // A secret refused once is refused again without counting, so only new guesses drain the
+    // budget.
     let mut refusals = Vec::new();
-    for _ in 0..100 {
+    for number in 0..100_u64 {
+        let mut bytes = [0; 20];
+        bytes[..8].copy_from_slice(&number.to_be_bytes());
+        let guess = data_encoding::BASE32_NOPAD
+            .encode(&bytes)
+            .to_ascii_lowercase();
         refusals.push(
-            device_auth::authenticate(&devices, &revoked, None)
+            device_auth::authenticate(&devices, &device_request(PEER, &guess), None)
                 .await
                 .unwrap_err(),
         );

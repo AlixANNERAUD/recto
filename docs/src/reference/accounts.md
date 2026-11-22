@@ -160,9 +160,17 @@ Wrong device passwords are counted per client address, separately from the
 [password sign-in limit](#password-sign-in-limit): a burst of 30, then one more every second.
 Beyond that, recto answers `429 Too Many Requests` with `Retry-After: 1`, without looking the
 password up. Right passwords never count, so a device that checks the printer every few seconds
-is never slowed down, and a phone still polling with a revoked password does not stop anyone
-from signing in with a password from the same address. The address is always the connection's,
-whatever `RECTO_TRUST_FORWARDED_HEADERS` says; an IPv6 client counts by its `/64` network.
+is never slowed down.
+
+A password that matches no device password, revoked ones included, is remembered as refused for
+10 minutes (the last 1024 of them). Sent again, it is refused at once, without a lookup and
+without counting, so a phone still polling with a revoked password stops neither password
+sign-in nor the other devices at the same address. The password of a disabled user is refused
+without counting and is not remembered, so it works again as soon as the user is enabled.
+
+The address is the connection's, or with `RECTO_TRUST_FORWARDED_HEADERS=true` the client the
+forwarded headers name, as for the password sign-in limit; an IPv6 client counts by its `/64`
+network.
 
 ## Sessions
 
