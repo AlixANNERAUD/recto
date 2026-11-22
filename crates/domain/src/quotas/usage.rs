@@ -71,13 +71,12 @@ pub async fn standing(
         jobs = jobs.filter(print_jobs::Column::SubmittedAt.gt(reset.fixed_offset()));
     }
     if !rule.printers.is_empty() {
-        // CUPS compares printer names without case; SQL's LOWER, like Rust's ASCII one, only
-        // folds A to Z on both databases.
-        let printers: Vec<String> = rule
+        // CUPS compares printer names without case. Both sides go through the database's own
+        // LOWER, which folds only A to Z on SQLite but every letter on PostgreSQL.
+        let printers = rule
             .printers
             .iter()
-            .map(|printer| printer.to_ascii_lowercase())
-            .collect();
+            .map(|printer| Expr::expr(Func::lower(Expr::val(printer.as_str()))));
         jobs = jobs.filter(
             Expr::expr(Func::lower(Expr::col((
                 print_jobs::Entity,

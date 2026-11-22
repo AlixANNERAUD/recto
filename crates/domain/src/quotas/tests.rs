@@ -404,6 +404,25 @@ async fn usage_counts_the_window_after_the_latest_reset_minus_grants() {
 }
 
 #[tokio::test]
+async fn usage_finds_printers_named_beyond_ascii() {
+    // CUPS accepts UTF-8 printer names. PostgreSQL's LOWER folds É and SQLite's does not, so
+    // both sides of the comparison must go through the same LOWER.
+    let db = crate::testing::database().await;
+    let alice = person(&db, "alice", &[]).await;
+    let mut school = new_rule(Subject::Everyone, Metric::Pages, Period::Month, 100);
+    school.printers = vec!["ÉCOLE".into()];
+    let school = created(&db, school).await;
+    printed(&db, alice, "ÉCOLE", Some(4), "2026-11-12T10:00:00Z").await;
+    printed(&db, alice, "École", Some(2), "2026-11-12T11:00:00Z").await;
+    printed(&db, alice, "office", Some(1), "2026-11-12T12:00:00Z").await;
+    let now = utc("2026-11-17T10:00:00Z");
+    assert_eq!(
+        standing(&db, &school, alice, now, TZ).await.unwrap().used,
+        6
+    );
+}
+
+#[tokio::test]
 async fn a_pool_sums_every_member() {
     let db = crate::testing::database().await;
     let alice = person(&db, "alice", &["design"]).await;
