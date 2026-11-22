@@ -671,7 +671,7 @@ async fn check_refuses_over_a_hard_rule_and_warns_over_a_soft_one() {
 }
 
 #[tokio::test]
-async fn check_counts_pools_and_locks_their_groups() {
+async fn check_counts_pools_over_personal_allowances() {
     let db = crate::testing::database().await;
     let alice = person(&db, "alice", &["design"]).await;
     let bob = person(&db, "bob", &["design"]).await;
@@ -701,6 +701,48 @@ async fn check_counts_pools_and_locks_their_groups() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+#[tokio::test]
+async fn checks_of_one_pool_wait_for_each_other() {
+    // SQLite runs one write transaction at a time, so only PostgreSQL needs the locks.
+    let db = crate::testing::database().await;
+    if db.get_database_backend() != sea_orm::DatabaseBackend::Postgres {
+        return;
+    }
+    let alice = person(&db, "alice", &["design"]).await;
+    let bob = person(&db, "bob", &["design"]).await;
+    let design = group_id(&db, "design").await;
+    let first = begin_write(&db).await.unwrap();
+    lock_subjects(&first, alice, &[design]).await.unwrap();
+
+    let second = begin_write(&db).await.unwrap();
+    let pool = [design];
+    {
+        let waiting = lock_subjects(&second, bob, &pool);
+        tokio::pin!(waiting);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(500), waiting.as_mut())
+                .await
+                .is_err(),
+            "bob did not wait for alice's pool"
+        );
+        first.commit().await.unwrap();
+        waiting.await.unwrap();
+    }
+    second.commit().await.unwrap();
+
+    // Without a shared pool, nothing waits.
+    let first = begin_write(&db).await.unwrap();
+    lock_subjects(&first, alice, &[]).await.unwrap();
+    let second = begin_write(&db).await.unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        lock_subjects(&second, bob, &[]),
+    )
+    .await
+    .expect("bob waited for alice")
+    .unwrap();
 }
 
 #[tokio::test]
