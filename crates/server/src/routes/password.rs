@@ -44,7 +44,7 @@ use tower_governor::{
 };
 use tower_sessions::Session;
 
-use super::render;
+use super::{not_found, render};
 use crate::{
     session::{self, SignInMethod, local_path},
     state::AuthState,
@@ -300,14 +300,7 @@ async fn change_password(
     Form(fields): Form<PasswordFields>,
 ) -> Response {
     if !(state.methods.password && user.has_password) {
-        return render(
-            &state.app,
-            state.methods,
-            parts,
-            StatusCode::NOT_FOUND,
-            || {},
-        )
-        .await;
+        return not_found(&state.app, state.methods, parts).await;
     }
     // The current password is guessed like any other: the same budget as sign-in.
     let client = state.attempts.client(&parts);

@@ -26,10 +26,10 @@ use recto_printing::DocumentFormat;
 use serde::Deserialize;
 
 use super::{
+    not_found,
     print::{
         Choices, Document, HeldClaim, Rejected, Submitted, give_back, location, print_document,
     },
-    render,
 };
 use crate::{session, state::AuthState};
 
@@ -87,7 +87,7 @@ async fn document(
 ) -> Response {
     let job = match own(&state, &user, &id).await {
         Ok(Some(job)) => job,
-        Ok(None) => return not_found(&state, parts).await,
+        Ok(None) => return not_found(&state.app, state.methods, parts).await,
         Err(status) => return status.into_response(),
     };
     // Only while it waits: a released job is never offered again, and an expired one waits
@@ -96,7 +96,7 @@ async fn document(
         && job.expires_at > chrono::Utc::now();
     let (true, Some(file), Some(format)) = (waiting, job.file.clone(), job.stored_format.clone())
     else {
-        return not_found(&state, parts).await;
+        return not_found(&state.app, state.methods, parts).await;
     };
     let bytes = match state
         .app
@@ -106,7 +106,7 @@ async fn document(
     {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return not_found(&state, parts).await;
+            return not_found(&state.app, state.methods, parts).await;
         }
         Err(error) => {
             tracing::error!(%error, job = job.id, "reading a held document failed");
@@ -144,7 +144,7 @@ async fn release(
 ) -> Response {
     let job = match own(&state, &user, &id).await {
         Ok(Some(job)) => job,
-        Ok(None) => return not_found(&state, parts).await,
+        Ok(None) => return not_found(&state.app, state.methods, parts).await,
         Err(status) => return status.into_response(),
     };
     // In a task of its own: the request is dropped when the browser goes away, and a release cut
@@ -254,7 +254,7 @@ async fn delete(
 ) -> Response {
     let job = match own(&state, &user, &id).await {
         Ok(Some(job)) => job,
-        Ok(None) => return not_found(&state, parts).await,
+        Ok(None) => return not_found(&state.app, state.methods, parts).await,
         Err(status) => return status.into_response(),
     };
     let app = &state.app;
@@ -295,15 +295,4 @@ async fn own(state: &HeldRoutes, user: &User, id: &str) -> Result<Option<HeldJob
 
 fn refused(refusal: Refusal) -> Response {
     Redirect::to(&format!("/jobs?error={}", refusal.code())).into_response()
-}
-
-async fn not_found(state: &HeldRoutes, parts: Parts) -> Response {
-    render(
-        &state.app,
-        state.methods,
-        parts,
-        StatusCode::NOT_FOUND,
-        || {},
-    )
-    .await
 }

@@ -48,3 +48,9 @@ pub(crate) async fn render(
     }
     response
 }
+
+/// The not-found page at the request's path, which no page has: for a form or a resource that
+/// is missing, or that the user may not see.
+pub(crate) async fn not_found(state: &AppState, methods: SignInMethods, parts: Parts) -> Response {
+    render(state, methods, parts, StatusCode::NOT_FOUND, || {}).await
+}

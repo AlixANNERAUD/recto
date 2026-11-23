@@ -51,7 +51,7 @@ use recto_domain::{
 use recto_printing::{AdminError, Driver, NewPrinter, PrinterAdmin, PrinterState};
 use serde::Deserialize;
 
-use super::render;
+use super::{not_found, render};
 use crate::{session, state::AuthState};
 
 /// Where the Users page is, and where every form returns to.
@@ -189,19 +189,7 @@ async fn require_administrator(
     {
         return next.run(request).await;
     }
-    not_found(&state, request.into_parts().0).await
-}
-
-/// The not-found page: without their data, the administration pages render it.
-async fn not_found(state: &AdministrationState, parts: Parts) -> Response {
-    render(
-        &state.app,
-        state.methods,
-        parts,
-        StatusCode::NOT_FOUND,
-        || {},
-    )
-    .await
+    not_found(&state.app, state.methods, request.into_parts().0).await
 }
 
 /// `GET /administration/users`.
@@ -441,7 +429,7 @@ async fn create(
     Form(fields): Form<NewUserFields>,
 ) -> Response {
     if !state.methods.password {
-        return not_found(&state, parts).await;
+        return not_found(&state.app, state.methods, parts).await;
     }
     let draft = NewUserDraft {
         username: fields.username.clone(),
@@ -538,7 +526,7 @@ async fn set_password(
     Form(PasswordField { password }): Form<PasswordField>,
 ) -> Response {
     if !state.methods.password {
-        return not_found(&state, parts).await;
+        return not_found(&state.app, state.methods, parts).await;
     }
     let changed = if user_id == actor.id {
         Err(Error::Invalid(Problem::OwnAccount))
@@ -567,7 +555,7 @@ async fn revoke_devices(
     parts: Parts,
 ) -> Response {
     if !state.app.os_integration {
-        return not_found(&state, parts).await;
+        return not_found(&state.app, state.methods, parts).await;
     }
     let database = &state.app.database;
     let changed = match users::find_by_id(database, user_id).await {
@@ -1314,7 +1302,7 @@ async fn administer(
     body: Bytes,
 ) -> Response {
     let Some(admin) = state.app.printer_admin.clone() else {
-        return not_found(&state, parts).await;
+        return not_found(&state.app, state.methods, parts).await;
     };
     match perform(&state, &*admin, action, &actor.username, &body).await {
         Ok(notice) => devices_done(DeviceKind::Printer, notice),

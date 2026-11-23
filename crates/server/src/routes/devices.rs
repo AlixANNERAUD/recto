@@ -50,7 +50,7 @@ mod profile;
 
 use profile::AirPrintProfile;
 
-use super::render;
+use super::{not_found, render};
 use crate::{device_auth::PERSONAL_PREFIX, session, state::AuthState};
 
 #[derive(Clone)]
@@ -114,7 +114,7 @@ async fn create(
     Form(fields): Form<NewDeviceFields>,
 ) -> Response {
     if !state.app.os_integration {
-        return not_found(&state, parts).await;
+        return not_found(&state.app, state.methods, parts).await;
     }
     parts.uri = Uri::from_static("/account");
     let created = device_passwords::create(
@@ -245,7 +245,7 @@ async fn revoke(
     mut parts: Parts,
 ) -> Response {
     if !state.app.os_integration {
-        return not_found(&state, parts).await;
+        return not_found(&state.app, state.methods, parts).await;
     }
     match device_passwords::revoke(&state.app.database, user.id, id).await {
         Ok(true) => {
@@ -256,7 +256,7 @@ async fn revoke(
             );
             Redirect::to("/account?done=revoked").into_response()
         }
-        Ok(false) => not_found(&state, parts).await,
+        Ok(false) => not_found(&state.app, state.methods, parts).await,
         Err(error) => {
             tracing::error!(%error, "revoking a device password failed");
             parts.uri = Uri::from_static("/account");
@@ -293,7 +293,7 @@ async fn direct_printer(
     Form(fields): Form<DirectPrinterFields>,
 ) -> Response {
     if !state.app.os_integration {
-        return not_found(&state, parts).await;
+        return not_found(&state.app, state.methods, parts).await;
     }
     let app = &state.app;
     let wanted = fields.printer.trim();
@@ -425,14 +425,14 @@ async fn ask_profile(
     Form(fields): Form<ProfileFields>,
 ) -> Response {
     if !state.app.os_integration {
-        return not_found(&state, parts).await;
+        return not_found(&state.app, state.methods, parts).await;
     }
     match device_passwords::owns(&state.app.database, user.id, &fields.secret).await {
         Ok(Some(id)) => {
             let ticket = state.tickets.issue(user.id, id, fields.secret);
             Redirect::to(&format!("/account/devices/profile/{ticket}")).into_response()
         }
-        Ok(None) => not_found(&state, parts).await,
+        Ok(None) => not_found(&state.app, state.methods, parts).await,
         Err(error) => {
             tracing::error!(%error, "checking a device password failed");
             StatusCode::SERVICE_UNAVAILABLE.into_response()
@@ -453,10 +453,10 @@ async fn download_profile(
     let mut parts = parts;
     parts.uri = Uri::from_static("/account/devices/profile");
     if !state.app.os_integration {
-        return not_found(&state, parts).await;
+        return not_found(&state.app, state.methods, parts).await;
     }
     let Some(secret) = state.tickets.secret(user.id, &ticket) else {
-        return not_found(&state, parts).await;
+        return not_found(&state.app, state.methods, parts).await;
     };
     let database = &state.app.database;
     let device = match device_passwords::owns(database, user.id, &secret).await {
@@ -475,7 +475,7 @@ async fn download_profile(
     };
     let Some(device) = device else {
         state.tickets.forget(&ticket);
-        return not_found(&state, parts).await;
+        return not_found(&state.app, state.methods, parts).await;
     };
     let locale = recto_app::i18n::from_headers(&parts.headers);
     let brand = &state.app.branding.name;
@@ -516,16 +516,4 @@ async fn download_profile(
         profile.to_xml(),
     )
         .into_response()
-}
-
-/// The not-found page, at the form's own address, which no page has.
-async fn not_found(state: &DevicesState, parts: Parts) -> Response {
-    render(
-        &state.app,
-        state.methods,
-        parts,
-        StatusCode::NOT_FOUND,
-        || {},
-    )
-    .await
 }
