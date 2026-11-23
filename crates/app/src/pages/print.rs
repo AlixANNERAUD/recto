@@ -8,7 +8,7 @@ use leptos_router::hooks::use_query_map;
 use super::failure_alert;
 use crate::{
     components::ui::{Alert, Card, Empty, Tone},
-    functions::{Allowances, list_printers, my_quotas},
+    functions::{Allowances, print_choices},
     islands::print_form::PrintForm,
     layout::Layout,
     refusal::Refusal,
@@ -43,8 +43,8 @@ pub fn PrintPage() -> impl IntoView {
         )
     };
     let max_upload_size = upload_limit();
-    let printers = OnceResource::new(list_printers());
-    let quotas = OnceResource::new(my_quotas());
+    // One listing of the printers serves the form and the quotas.
+    let choices = OnceResource::new(print_choices());
     let refusal = refusal.map(|refusal| {
         view! {
             <Suspense>
@@ -52,9 +52,10 @@ pub fn PrintPage() -> impl IntoView {
                     // A quota refusal names the rule and what is left of it, read now; only
                     // its id travels in the address.
                     let message = match (refusal, rule) {
-                        (Refusal::Quota, Some(rule)) => quotas
+                        (Refusal::Quota, Some(rule)) => choices
                             .await
                             .ok()
+                            .and_then(|choices| choices.quotas)
                             .and_then(|quotas| quota_refusal(&quotas, rule))
                             .unwrap_or_else(|| refusal.message()),
                         _ => refusal.message(),
@@ -69,7 +70,7 @@ pub fn PrintPage() -> impl IntoView {
             {refusal}
             <Suspense>
                 {move || Suspend::new(async move {
-                    match printers.await {
+                    match choices.await.map(|choices| choices.printers) {
                         Ok(printers) if printers.is_empty() => {
                             view! { <Empty title=t!("printers.empty") body=t!("printers.empty_body") /> }
                                 .into_any()
@@ -83,9 +84,10 @@ pub fn PrintPage() -> impl IntoView {
                 {move || Suspend::new(async move {
                     // Without rules there is nothing to show. A failure to read them shows
                     // nothing either: printing refuses on its own when quotas cannot be checked.
-                    quotas
+                    choices
                         .await
                         .ok()
+                        .and_then(|choices| choices.quotas)
                         .filter(|quotas| !quotas.allowances.is_empty())
                         .map(|quotas| view! { <Left quotas /> })
                 })}

@@ -79,6 +79,16 @@ pub struct Allowances {
     pub currency: Currency,
 }
 
+/// What the Print page shows, read from one listing of the printers.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PrintPageData {
+    /// The printers the user may use.
+    pub printers: Vec<Printer>,
+    /// Where the user stands against the quota rules; `None` when they cannot be read, and
+    /// printing then refuses on its own.
+    pub quotas: Option<Allowances>,
+}
+
 #[server(endpoint = "list_printers")]
 pub async fn list_printers() -> Result<Vec<Printer>, ServerFnError> {
     let context = server::Context::new()?;
@@ -99,6 +109,18 @@ pub async fn list_jobs() -> Result<Vec<Job>, ServerFnError> {
 pub async fn my_quotas() -> Result<Allowances, ServerFnError> {
     let context = server::Context::new()?;
     context.my_quotas().await
+}
+
+/// The printers the user may use and their quotas: [`list_printers`] and [`my_quotas`] with one
+/// request to CUPS instead of two.
+#[server(endpoint = "print_choices")]
+pub async fn print_choices() -> Result<PrintPageData, ServerFnError> {
+    let context = server::Context::new()?;
+    let printers = context.state.print.printers().await;
+    let printers = printers.map_err(|error| context.print_failure(&error))?;
+    let printers = context.usable_printers(printers).await?;
+    let quotas = context.quotas_on(&printers).await.ok();
+    Ok(PrintPageData { printers, quotas })
 }
 
 /// The signed-in user's device passwords, newest first; none with OS integration off.
@@ -305,28 +327,58 @@ mod server {
         /// The rules that apply to the user on any printer they may use, each once, with where
         /// the user stands in its current window.
         pub async fn my_quotas(&self) -> Result<Allowances, ServerFnError> {
-            let currency = self.state.currency.clone();
-            let database = &self.state.database;
-            let failed = |error: recto_domain::Error| {
-                tracing::error!(%error, "reading the print quotas failed");
-                self.try_again()
+            // Without rules, CUPS is not asked for the printers.
+            let Some(rules) = self.quota_rules().await? else {
+                return Ok(self.no_allowances());
             };
-            let rules = quotas::rules(database).await.map_err(failed)?;
-            if !rules.iter().any(|rule| rule.enabled) {
-                return Ok(Allowances {
-                    allowances: Vec::new(),
-                    currency,
-                });
-            }
-            let groups = access::group_ids_of(database, self.user.id)
-                .await
-                .map_err(failed)?;
             let printers = self.state.print.printers().await;
             let printers = printers.map_err(|error| self.print_failure(&error))?;
             let printers = self.usable_printers(printers).await?;
+            self.allowances(&rules, &printers).await
+        }
+
+        /// [`my_quotas`](Self::my_quotas) on these printers, the user's usable ones.
+        pub async fn quotas_on(&self, printers: &[Printer]) -> Result<Allowances, ServerFnError> {
+            match self.quota_rules().await? {
+                Some(rules) => self.allowances(&rules, printers).await,
+                None => Ok(self.no_allowances()),
+            }
+        }
+
+        fn no_allowances(&self) -> Allowances {
+            Allowances {
+                allowances: Vec::new(),
+                currency: self.state.currency.clone(),
+            }
+        }
+
+        fn quotas_failed(&self, error: recto_domain::Error) -> ServerFnError {
+            tracing::error!(%error, "reading the print quotas failed");
+            self.try_again()
+        }
+
+        /// The quota rules, `None` when none is enabled.
+        async fn quota_rules(&self) -> Result<Option<Vec<quotas::Rule>>, ServerFnError> {
+            let rules = quotas::rules(&self.state.database)
+                .await
+                .map_err(|error| self.quotas_failed(error))?;
+            Ok(rules.iter().any(|rule| rule.enabled).then_some(rules))
+        }
+
+        /// Where the user stands against `rules` on `printers`.
+        async fn allowances(
+            &self,
+            rules: &[quotas::Rule],
+            printers: &[Printer],
+        ) -> Result<Allowances, ServerFnError> {
+            let database = &self.state.database;
+            let failed = |error| self.quotas_failed(error);
+            let groups = access::group_ids_of(database, self.user.id)
+                .await
+                .map_err(failed)?;
             let mut applicable = BTreeMap::new();
-            for printer in &printers {
-                for rule in quotas::applicable(&rules, self.user.id, &groups, &printer.name) {
+            for printer in printers {
+                for rule in quotas::applicable(rules, self.user.id, &groups, &printer.name) {
                     applicable.insert(rule.id, rule);
                 }
             }
@@ -341,7 +393,7 @@ mod server {
             }
             Ok(Allowances {
                 allowances,
-                currency,
+                currency: self.state.currency.clone(),
             })
         }
 
