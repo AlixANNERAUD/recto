@@ -286,8 +286,11 @@ impl PrintService for Cups {
     }
 
     async fn jobs(&self) -> Result<Vec<Job>, PrintError> {
-        let mut jobs = self.jobs_with("not-completed", None).await?;
-        jobs.extend(self.jobs_with("completed", Some(COMPLETED_JOBS)).await?);
+        let (mut jobs, completed) = tokio::try_join!(
+            self.jobs_with("not-completed", None),
+            self.jobs_with("completed", Some(COMPLETED_JOBS)),
+        )?;
+        jobs.extend(completed);
         // CUPS orders the two lists differently, and ids only ever grow.
         jobs.sort_unstable_by_key(|job| std::cmp::Reverse(job.id));
         jobs.dedup_by_key(|job| job.id);
