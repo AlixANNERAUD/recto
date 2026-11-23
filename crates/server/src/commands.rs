@@ -1,8 +1,12 @@
-//! The administration commands of the binary: `migrate`, `backup`, `create-administrator` and
-//! `administrator`. They work on the database directly, without a signed-in user: whoever can run
-//! them can read the database anyway.
+//! The administration commands of the binary: `migrate`, `backup`, `create-administrator`,
+//! `administrator` and `dnssd-services`. They work on the database directly, without a signed-in
+//! user: whoever can run them can read the database anyway.
 
-use std::{io::BufRead, path::Path};
+use std::{
+    io::BufRead,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use recto_domain::{
     database::{self, BackupError},
@@ -11,8 +15,14 @@ use recto_domain::{
 };
 use sea_orm::DatabaseConnection;
 
+use recto_scanning::{SaneScanners, ScannerService};
+
 use crate::{
-    config::{AdministratorOptions, CreateAdministratorOptions, check_password_minimum_length},
+    config::{
+        AdministratorOptions, CreateAdministratorOptions, DnssdServicesOptions,
+        check_password_minimum_length,
+    },
+    dnssd::{self, Advertised},
     state::{cannot_open, open_database},
 };
 
@@ -144,4 +154,68 @@ pub async fn administrator(
     users::set_administrator_from_command_line(database, user.id, !options.remove)
         .await
         .map_err(|error| error.to_string())
+}
+
+/// Writes the Avahi service files of the printer and of the scanners open to everyone into
+/// `options.dir`, for the host's avahi-daemon. SANE is asked for the scanners as `recto serve`
+/// would; without it, only the printer is written.
+pub async fn dnssd_services(
+    database: &DatabaseConnection,
+    options: &DnssdServicesOptions,
+) -> Result<Vec<PathBuf>, String> {
+    let instance = options
+        .dnssd_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(&options.brand_name);
+    // The files name no host: the records point at the host's own name.
+    let printer = dnssd::printer(instance, "", options.port, &options.public_url);
+    let scanners: Option<Arc<dyn ScannerService>> =
+        match tokio::task::spawn_blocking(SaneScanners::start).await {
+            Ok(Ok(scanners)) => Some(Arc::new(scanners)),
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "SANE could not start; only the printer is written");
+                None
+            }
+            Err(error) => {
+                tracing::warn!(%error, "SANE crashed while starting; only the printer is written");
+                None
+            }
+        };
+    let mut advertised = printer;
+    if let Some(scan) = scanners {
+        advertised.scanners =
+            dnssd::open_scanners(&*scan, database, &options.public_url, &advertised.instance).await;
+    }
+    write_avahi_files(&advertised, &options.dir)
+}
+
+/// Writes [`dnssd::avahi_files`] into `dir`, created if missing, each through a temporary file
+/// so Avahi never reads half of one, and removes the scanner files of scanners no longer
+/// announced. Returns the files written.
+pub fn write_avahi_files(advertised: &Advertised, dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let failed = |path: &Path, error: std::io::Error| format!("{}: {error}", path.display());
+    std::fs::create_dir_all(dir).map_err(|error| failed(dir, error))?;
+    let files = dnssd::avahi_files(advertised);
+    let mut written = Vec::new();
+    for (name, contents) in &files {
+        let path = dir.join(name);
+        // Avahi reads only `*.service`.
+        let temporary = dir.join(format!(".{name}.tmp"));
+        std::fs::write(&temporary, contents).map_err(|error| failed(&temporary, error))?;
+        std::fs::rename(&temporary, &path).map_err(|error| failed(&path, error))?;
+        written.push(path);
+    }
+    let entries = std::fs::read_dir(dir).map_err(|error| failed(dir, error))?;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let stale = name.starts_with("recto-scanner-")
+            && name.ends_with(".service")
+            && !files.iter().any(|(file, _)| *file == name);
+        if stale {
+            std::fs::remove_file(entry.path()).map_err(|error| failed(&entry.path(), error))?;
+        }
+    }
+    Ok(written)
 }

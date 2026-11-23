@@ -80,16 +80,17 @@ a printer under **Documents from your devices** on the Account page (see
 2. In recto, on the Account page, press **Revoke** next to the device password. The address stops
    working, even where it was copied.
 
-## Planned: discovery and scanning
-
-> **In progress.** recto is gaining automatic discovery on the local network and scanning from
-> Windows. This section describes them as planned: names, steps and settings may still change.
+## Discovery and scanning
 
 - **Discovered printer.** Windows lists printers that announce themselves on the local network,
-  but cannot send them a password, so add recto with your personal address as above, even when
-  your administrator has recto announce itself.
-- **Scanning.** recto's scanners will appear under **Settings > Bluetooth & devices > Printers &
-  scanners > Add device** when recto announces them on the local network, and then in the
-  **Windows Scan** app. Windows finds scanners only this way and sends them no password, so this
-  needs your administrator to let your network scan without one; only scanners open to everyone
-  are offered that way.
+  but cannot send them a password, and refuses the self-signed certificate of recto's LAN
+  listener. Add recto with your personal address as above, even when your administrator has
+  recto announce itself (see [Let devices find recto](discovery.md)).
+- **Scanning.** When recto announces its scanners, they may appear under **Settings > Bluetooth &
+  devices > Printers & scanners > Add device**, and then in the **Windows Scan** app. Windows
+  finds scanners only this way and sends them no password, so this needs your administrator to
+  let your network scan without one; only scanners open to everyone are announced.
+
+  > **Not yet checked on Windows.** Whether Windows adds a scanner announced over a TLS-only
+  > connection with a self-signed certificate, as recto's is, is not known yet. Until it is,
+  > scan from the **Scan** page of recto in the browser.

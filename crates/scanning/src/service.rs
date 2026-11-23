@@ -43,4 +43,10 @@ pub trait ScannerService: Send + Sync + 'static {
     ) -> Result<Vec<ScannedPage>, ScanError> {
         self.scan(id, request).await
     }
+
+    /// The DNS-SD instance names recto announces its own scanners under, which a network
+    /// backend would list them by if it found them again: [`scanners`](Self::scanners) leaves
+    /// such devices out from then on. Replaces the previous names. The default ignores them,
+    /// right for a stack without network backends.
+    fn hide_advertised(&self, _names: Vec<String>) {}
 }

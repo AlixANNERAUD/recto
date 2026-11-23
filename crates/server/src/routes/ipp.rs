@@ -17,7 +17,9 @@
 //! the same path as the Jobs page; a refusal leaves it held and the device is told the job
 //! completed with errors. Job operations see only the jobs of the device password that sent
 //! them. Every URI in an answer is built on the address the request came in on, so a
-//! device that switches to the URI it is given keeps its personal address.
+//! device that switches to the URI it is given keeps its personal address. On the LAN listener
+//! the host is the request's `Host`, `ipps://recto-<hostname>.local:8631` for a device that
+//! found recto through DNS-SD, since the public URL may not lead there from the LAN.
 //!
 //! Reading a body is bounded in size, time and number: `RECTO_MAX_UPLOAD_SIZE` (64 KiB without
 //! credentials, since Get-Printer-Attributes carries no document), the device read timeout for
@@ -65,7 +67,7 @@ use url::Url;
 use super::held::release_held;
 use super::print::{Choices, FORM_SLACK, Rejected, Submitted, job_name};
 use crate::{
-    device_auth::{self, DeviceAuth, Uploads},
+    device_auth::{self, DeviceAuth, Listener, Uploads},
     state::AuthState,
 };
 
@@ -85,8 +87,9 @@ struct IppState {
     app: AppState,
     devices: DeviceAuth,
     printer: Arc<VirtualPrinter>,
-    /// `ipps://host:port` (or `ipp://` behind an `http` public URL): where devices reach recto.
-    address: Arc<str>,
+    /// `ipps://host:port` (or `ipp://` behind an `http` public URL): where devices reach recto
+    /// through the proxy. `None` on the LAN listener, where it is the `Host` the device used.
+    address: Option<Arc<str>>,
     tls: bool,
     /// The largest body read: the document and its IPP attributes.
     body_limit: usize,
@@ -117,8 +120,14 @@ pub fn printer_address(public_url: &Url) -> (String, bool) {
 
 /// The IPP routes, and the catch-alls answering 404 under `/ipp/`, `/device/` and `/eSCL/`.
 /// With OS integration off, everything there is a 404.
-pub fn router(app: AppState, auth: &AuthState) -> Router {
-    let (address, tls) = printer_address(&auth.public_url);
+pub fn router(app: AppState, auth: &AuthState, listener: Listener) -> Router {
+    let (address, tls) = match listener {
+        Listener::Main => {
+            let (address, tls) = printer_address(&auth.public_url);
+            (Some(Arc::from(address)), tls)
+        }
+        Listener::Lan => (None, true),
+    };
     let public = |path: &str| auth.public(path).to_string();
     let printer = VirtualPrinter {
         name: app.branding.name.clone(),
@@ -133,9 +142,9 @@ pub fn router(app: AppState, auth: &AuthState) -> Router {
         accepting_jobs: app.held.dir().is_dir(),
     };
     let state = IppState {
-        devices: DeviceAuth::new(auth, &app.branding.name),
+        devices: DeviceAuth::for_listener(auth, &app.branding.name, listener),
         printer: Arc::new(printer),
-        address: Arc::from(address),
+        address,
         tls,
         body_limit: app.max_upload_size.saturating_add(FORM_SLACK),
         read_timeout: auth.device_read_timeout,
@@ -189,9 +198,25 @@ fn job_segment(rest: &str) -> bool {
         .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
+/// `ipps://<Host>` on the LAN listener: devices there use recto's `.local` name or one of its
+/// addresses, and switch to the URI they are given. `None` without a usable `Host`, a bare
+/// authority without user information.
+fn lan_address(headers: &axum::http::HeaderMap) -> Option<String> {
+    let host = headers.get(header::HOST)?.to_str().ok()?;
+    let authority: axum::http::uri::Authority = host.parse().ok()?;
+    (!authority.as_str().contains('@')).then(|| format!("ipps://{authority}"))
+}
+
 /// Authenticates, reads and answers one IPP request.
 async fn serve(state: IppState, request: Request, secret: Option<String>) -> Response {
     let (parts, mut body) = request.into_parts();
+    let address = match &state.address {
+        Some(address) => address.to_string(),
+        None => match lan_address(&parts.headers) {
+            Some(address) => address,
+            None => return StatusCode::BAD_REQUEST.into_response(),
+        },
+    };
     let limit = state.body_limit;
     let announced = parts
         .headers
@@ -266,7 +291,7 @@ async fn serve(state: IppState, request: Request, secret: Option<String>) -> Res
         None => "/ipp/print".to_owned(),
     };
     let uri = PrinterUri {
-        uri: format!("{}{path}", state.address),
+        uri: format!("{address}{path}"),
         tls: state.tls,
         basic: secret.is_none(),
     };

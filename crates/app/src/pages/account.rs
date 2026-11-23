@@ -83,6 +83,16 @@ pub struct NewDevicePassword {
     /// The personal address, which carries the secret, for devices that cannot answer a
     /// password prompt.
     pub personal_address: String,
+    /// The eSCL address of each scanner the user may use, on the personal address.
+    pub scan_addresses: Vec<ScanAddress>,
+}
+
+/// A scanner's personal eSCL address: `https://host:port/device/<secret>/eSCL/<key>/`.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ScanAddress {
+    /// Vendor and model, as the scan page shows them.
+    pub scanner: String,
+    pub address: String,
 }
 
 /// A refused device form: why, and the name typed, which the form shows again.
@@ -359,6 +369,37 @@ fn CreatedPassword(created: NewDevicePassword) -> impl IntoView {
                             </span>
                         </dd>
                     </div>
+                    {(!created.scan_addresses.is_empty())
+                        .then(|| {
+                            view! {
+                                <div class="grid gap-1">
+                                    <dt class="font-semibold">
+                                        {t!("account.devices.created.scan_addresses")}
+                                    </dt>
+                                    <dd class="grid gap-2">
+                                        <ul class="grid gap-2">
+                                            {created
+                                                .scan_addresses
+                                                .into_iter()
+                                                .map(|scan| {
+                                                    view! {
+                                                        <li class="grid gap-1">
+                                                            <span>{scan.scanner}</span>
+                                                            <code class="font-mono break-all select-all">
+                                                                {scan.address}
+                                                            </code>
+                                                        </li>
+                                                    }
+                                                })
+                                                .collect_view()}
+                                        </ul>
+                                        <span class=HINT>
+                                            {t!("account.devices.created.scan_addresses_hint")}
+                                        </span>
+                                    </dd>
+                                </div>
+                            }
+                        })}
                 </dl>
                 <form method="post" action="/account/devices/profile" class="grid gap-2">
                     <input type="hidden" name="secret" value=secret />

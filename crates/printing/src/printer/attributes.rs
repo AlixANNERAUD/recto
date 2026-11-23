@@ -120,8 +120,8 @@ pub const REQUIRED_PRINTER_ATTRIBUTES: &[&str] = &[
 
 /// The Apple raster recto reads, as AirPrint clients expect it: version 1.4, copies, 8-bit grey
 /// and sRGB, 300 dpi, back sides upright (`DM1`) and one input slot. iOS lists only printers
-/// with it, and CUPS needs an `RS` value.
-const URF: [&str; 7] = ["V1.4", "CP1", "W8", "SRGB24", "RS300", "DM1", "IS1"];
+/// with it, and CUPS needs an `RS` value. Answered as `urf-supported`, and announced as `URF`.
+pub const URF_SUPPORTED: [&str; 7] = ["V1.4", "CP1", "W8", "SRGB24", "RS300", "DM1", "IS1"];
 
 /// The operations of PWG 5100.14 Table 4, in code order.
 const OPERATIONS: [i32; 11] = [
@@ -454,7 +454,7 @@ impl VirtualPrinter {
             "uri-security-supported",
             keyword(if uri.tls { "tls" } else { "none" }),
         );
-        put("urf-supported", keywords(&URF));
+        put("urf-supported", keywords(&URF_SUPPORTED));
         put(
             "which-jobs-supported",
             keywords(&["completed", "not-completed", "all"]),

@@ -31,7 +31,7 @@ use axum::{
 use leptos::prelude::provide_context;
 use recto_app::{
     pages::{
-        account::{DevicesProblem, DevicesRefusal, NewDevicePassword},
+        account::{DevicesProblem, DevicesRefusal, NewDevicePassword, ScanAddress},
         sign_in::SignInMethods,
     },
     state::{AppState, User},
@@ -42,6 +42,7 @@ use recto_domain::{
     device_passwords, users,
 };
 use recto_printing::printer::VirtualPrinter;
+use recto_scanning::escl;
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -58,6 +59,8 @@ struct DevicesState {
     methods: SignInMethods,
     /// Where devices reach the printer: `ipps://host:port`.
     printer_address: String,
+    /// Where devices reach the scanners: `https://host:port`, the port always written.
+    web_address: String,
     /// The printer as a profile names it: the public host, its port, and whether it is TLS.
     host: Arc<str>,
     port: u16,
@@ -71,15 +74,18 @@ struct DevicesState {
 /// `POST /account/direct-printer`.
 pub fn router(app: AppState, auth: &AuthState) -> Router {
     let (printer_address, tls) = super::ipp::printer_address(&auth.public_url);
+    let host = auth.public_url.host_str().unwrap_or("localhost");
+    let port = auth
+        .public_url
+        .port_or_known_default()
+        .unwrap_or(if tls { 443 } else { 80 });
     let state = DevicesState {
         app,
         methods: auth.sign_in_methods(),
         printer_address,
-        host: Arc::from(auth.public_url.host_str().unwrap_or("localhost")),
-        port: auth
-            .public_url
-            .port_or_known_default()
-            .unwrap_or(if tls { 443 } else { 80 }),
+        web_address: format!("{}://{host}:{port}", auth.public_url.scheme()),
+        host: Arc::from(host),
+        port,
         tls,
         printer_uuid: VirtualPrinter::uuid_for(auth.public_url.as_str()),
         tickets: ProfileTickets::default(),
@@ -139,6 +145,7 @@ async fn create(
         device_name = name,
         "device password created"
     );
+    let scan_addresses = scan_addresses(&state, &user, &created.secret).await;
     let shown = NewDevicePassword {
         name,
         print_address: format!("{}/ipp/print", state.printer_address),
@@ -146,6 +153,7 @@ async fn create(
             "{}/device/{}/ipp/print",
             state.printer_address, created.secret
         ),
+        scan_addresses,
         secret: created.secret,
         username: user.username,
     };
@@ -163,6 +171,49 @@ async fn create(
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
+}
+
+/// The personal eSCL address of each scanner `user` may use, as listed now. None when the list
+/// or the access rules cannot be read: the password is still shown, with its printer addresses.
+async fn scan_addresses(state: &DevicesState, user: &User, secret: &str) -> Vec<ScanAddress> {
+    let scanners = match state.app.scan.scanners(false).await {
+        Ok(scanners) => scanners,
+        Err(error) => {
+            tracing::info!(%error, "no scan addresses: the scanners could not be listed");
+            return Vec::new();
+        }
+    };
+    let usable = Usable::read(
+        &state.app.database,
+        DeviceKind::Scanner,
+        user.id,
+        user.is_administrator,
+    )
+    .await;
+    let usable = match usable {
+        Ok(usable) => usable,
+        Err(error) => {
+            tracing::error!(%error, "reading the scanner access rules failed");
+            return Vec::new();
+        }
+    };
+    scanners
+        .into_iter()
+        .filter(|scanner| usable.allows(&scanner.id))
+        .map(|scanner| ScanAddress {
+            scanner: [scanner.vendor.trim(), scanner.model.trim()]
+                .iter()
+                .filter(|part| !part.is_empty())
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" "),
+            address: format!(
+                "{}{PERSONAL_PREFIX}{secret}/eSCL/{}/",
+                state.web_address,
+                escl::scanner_key(&scanner.id)
+            ),
+        })
+        .collect()
 }
 
 /// The status and the problem a refused creation is shown with.

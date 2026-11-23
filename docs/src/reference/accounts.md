@@ -137,8 +137,10 @@ default). They are kept in the **Devices** section of the Account page, at `/acc
 
 - **Create** one per device, with a name of 1 to 64 characters on one line, such as
   `Work laptop`. recto draws a random password of 32 characters (letters `a` to `z` and digits
-  `2` to `7`, 160 bits) and shows it once, with your username, the printer's address and your
-  personal address (see below). Copy them then: the password is stored only as its SHA-256 and
+  `2` to `7`, 160 bits) and shows it once, with your username, the printer's address, your
+  personal address (see below), and the personal scan address of each scanner you may use,
+  `https://<host>:<port>/device/<password>/eSCL/<scanner>/` (see
+  [Scanning from computers and phones](scanning.md#scanning-from-computers-and-phones)). Copy them then: the password is stored only as its SHA-256 and
   cannot be shown again. The page that shows it is not cached by the browser.
 - **Download for iPhone, iPad and Mac**, on the page that shows a new password, downloads an
   Apple configuration profile that adds the printer with the personal address (see below). It

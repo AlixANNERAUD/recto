@@ -15,6 +15,7 @@
 - [Print from Linux](how-to/print-from-linux.md)
 - [Print from an iPhone or iPad](how-to/print-from-ios.md)
 - [Print from Android](how-to/print-from-android.md)
+- [Let devices find recto](how-to/discovery.md)
 - [Manage users and administrators](how-to/manage-users.md)
 - [Set up single sign-on](how-to/sign-in.md)
 - [Let only some people in](how-to/restrict-access.md)

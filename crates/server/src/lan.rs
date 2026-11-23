@@ -5,17 +5,23 @@
 //! self-signed one generated once and kept in `RECTO_DATA_DIR/lan-tls/`. Apple devices pin the
 //! first certificate they see, so the generated one never changes from one start to the next.
 //! Everything is on `ring`: the lockfile has no aws-lc-rs.
+//!
+//! The listener itself ([`TlsListener`], [`serve`]) runs each handshake in a task of its own,
+//! under [`HANDSHAKE_TIMEOUT`]: a device that connects and says nothing holds only its own
+//! connection, never the others'.
 
 use std::{
     fmt::Write as _,
     fs::{self, DirBuilder, OpenOptions},
+    future::Future,
     io::{self, Write as _},
-    net::IpAddr,
+    net::{IpAddr, SocketAddr},
     os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
+use axum::{Router, serve::ListenerExt as _};
 use chrono::{Datelike as _, Duration, Utc};
 use rcgen::{
     CertificateParams, DnType, ExtendedKeyUsagePurpose, KeyPair, PKCS_ECDSA_P256_SHA256,
@@ -26,7 +32,11 @@ use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject as _},
 };
 use sha2::{Digest as _, Sha256};
-use tokio_rustls::TlsAcceptor;
+use tokio::{
+    net::{TcpListener, TcpStream},
+    sync::{Semaphore, mpsc},
+};
+use tokio_rustls::{TlsAcceptor, server::TlsStream};
 
 use crate::dnssd::advertised_host;
 
@@ -267,6 +277,116 @@ pub fn fingerprint(der: &[u8]) -> String {
             let _ = write!(text, "{byte:02X}");
             text
         })
+}
+
+/// How long a device has to complete its TLS handshake.
+pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// How many handshakes may run at once; past that, connections wait in the kernel's backlog.
+const HANDSHAKES: usize = 128;
+
+/// TLS connections, ready for HTTP: an axum listener over a TCP listener, whose handshakes run
+/// in tasks of their own and reach [`accept`](axum::serve::Listener::accept) once complete.
+pub struct TlsListener {
+    ready: mpsc::Receiver<(TlsStream<TcpStream>, SocketAddr)>,
+    local: SocketAddr,
+}
+
+impl TlsListener {
+    /// Accepts on `tcp` in the background until the listener is dropped. A handshake that fails
+    /// or outlasts `handshake_timeout` closes its connection.
+    pub fn new(
+        tcp: TcpListener,
+        acceptor: TlsAcceptor,
+        handshake_timeout: std::time::Duration,
+    ) -> Self {
+        // Reading the address of a bound socket does not fail on Linux.
+        let local = tcp
+            .local_addr()
+            .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
+        let (sender, ready) = mpsc::channel(HANDSHAKES);
+        tokio::spawn(accept_connections(tcp, acceptor, handshake_timeout, sender));
+        Self { ready, local }
+    }
+}
+
+async fn accept_connections(
+    tcp: TcpListener,
+    acceptor: TlsAcceptor,
+    handshake_timeout: std::time::Duration,
+    ready: mpsc::Sender<(TlsStream<TcpStream>, SocketAddr)>,
+) {
+    let handshakes = Arc::new(Semaphore::new(HANDSHAKES));
+    loop {
+        let permit = tokio::select! {
+            permit = Arc::clone(&handshakes).acquire_owned() => permit,
+            () = ready.closed() => return,
+        };
+        // The semaphore is never closed.
+        let Ok(permit) = permit else { return };
+        let (stream, peer) = tokio::select! {
+            accepted = tcp.accept() => match accepted {
+                Ok(accepted) => accepted,
+                Err(error) => {
+                    // Out of file descriptors, most likely: wait for some to close.
+                    tracing::warn!(%error, "the LAN listener could not accept a connection");
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+            },
+            () = ready.closed() => return,
+        };
+        let acceptor = acceptor.clone();
+        let ready = ready.clone();
+        tokio::spawn(async move {
+            let _permit = permit;
+            match tokio::time::timeout(handshake_timeout, acceptor.accept(stream)).await {
+                Ok(Ok(stream)) => {
+                    let _ = ready.send((stream, peer)).await;
+                }
+                // Scanners on the LAN probe ports and give up halfway: not worth a warning.
+                Ok(Err(error)) => tracing::debug!(%error, %peer, "LAN TLS handshake failed"),
+                Err(_) => tracing::debug!(%peer, "LAN TLS handshake timed out"),
+            }
+        });
+    }
+}
+
+impl axum::serve::Listener for TlsListener {
+    type Io = TlsStream<TcpStream>;
+    type Addr = SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        match self.ready.recv().await {
+            Some(connection) => connection,
+            // The accepting task stops only when this listener is dropped.
+            None => std::future::pending().await,
+        }
+    }
+
+    fn local_addr(&self) -> io::Result<Self::Addr> {
+        Ok(self.local)
+    }
+}
+
+/// Serves `router` on `listener` until `shutdown` resolves, then lets requests in flight finish.
+/// Routes see the TCP peer as `ConnectInfo<SocketAddr>`, as on the main listener.
+pub async fn serve(
+    listener: TlsListener,
+    router: Router,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> io::Result<()> {
+    // axum hands the peer address to custom listeners only through `tap_io`; it also turns
+    // Nagle off, as small IPP and eSCL answers would otherwise wait for an acknowledgement.
+    let listener = listener.tap_io(|stream| {
+        let _ = stream.get_ref().0.set_nodelay(true);
+    });
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
 }
 
 #[cfg(test)]

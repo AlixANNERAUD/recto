@@ -351,6 +351,164 @@ fn a_failed_registration_withdraws_the_others() {
 }
 
 #[test]
+fn the_printer_is_announced_as_the_queue_describes_itself() {
+    let public_url = Url::parse("https://recto.example.org").unwrap();
+    let advertised = printer("Office", "recto-nas.local.", 8631, &public_url);
+    assert_eq!(advertised.instance, "Office");
+    assert_eq!(advertised.host, "recto-nas.local.");
+    assert_eq!(advertised.port, 8631);
+    // The LAN listener only speaks TLS.
+    assert!(advertised.tls);
+    assert_eq!(
+        advertised.printer_uuid,
+        recto_printing::printer::VirtualPrinter::uuid_for(public_url.as_str())
+    );
+    assert_eq!(
+        advertised.formats,
+        recto_printing::printer::DOCUMENT_FORMATS
+    );
+    // Apple raster is accepted, so iOS lists the printer.
+    assert_eq!(advertised.urf, recto_printing::printer::URF_SUPPORTED);
+    assert!(advertised.scanners.is_empty());
+    let txt = printer_txt(&advertised);
+    assert_eq!(value(&txt, "URF"), Some("V1.4,CP1,W8,SRGB24,RS300,DM1,IS1"));
+}
+
+fn info(id: &str, vendor: &str, model: &str) -> recto_scanning::ScannerInfo {
+    recto_scanning::ScannerInfo {
+        id: id.into(),
+        vendor: vendor.into(),
+        model: model.into(),
+        kind: "flatbed scanner".into(),
+    }
+}
+
+#[test]
+fn scanner_instances_name_the_scanner_and_recto() {
+    assert_eq!(
+        scanner_instance(&info("a", "Canon", "LiDE 300"), "recto"),
+        "Canon LiDE 300 (recto)"
+    );
+    assert_eq!(
+        scanner_instance(&info("a", " ", "LiDE 300 "), "Office"),
+        "LiDE 300 (Office)"
+    );
+    // At most 63 bytes, cut on a character, the instance name kept.
+    let long = scanner_instance(&info("a", "Épson", &"é".repeat(40)), "recto");
+    assert!(long.len() <= 63, "{long}");
+    assert!(long.starts_with("Épson éé"), "{long}");
+    assert!(long.ends_with(" (recto)"), "{long}");
+}
+
+#[test]
+fn a_scanner_is_announced_as_its_capabilities_say() {
+    use recto_scanning::{ScanMode, ScannerCapabilities, Source};
+    let public_url = Url::parse("https://recto.example.org").unwrap();
+    let caps = ScannerCapabilities {
+        resolutions: vec![300],
+        modes: vec![ScanMode::Gray, ScanMode::Lineart],
+        sources: vec![Source::new("Flatbed"), Source::new("ADF Duplex")],
+        area: None,
+    };
+    let scanner = advertised_scanner(
+        &info("canon:usb", "Canon", "LiDE 300"),
+        &caps,
+        &public_url,
+        "Canon LiDE 300 (recto)".into(),
+    );
+    assert_eq!(
+        scanner,
+        AdvertisedScanner {
+            key: escl::scanner_key("canon:usb"),
+            name: "Canon LiDE 300 (recto)".into(),
+            uuid: escl::scanner_uuid(public_url.as_str(), "canon:usb"),
+            make_and_model: "Canon LiDE 300".into(),
+            color: false,
+            grayscale: true,
+            binary: true,
+            platen: true,
+            adf: true,
+            duplex: true,
+        }
+    );
+    // A scanner that says nothing scans in colour from its glass, as eSCL describes it.
+    let bare = advertised_scanner(
+        &info("x", "", ""),
+        &ScannerCapabilities {
+            resolutions: vec![],
+            modes: vec![],
+            sources: vec![],
+            area: None,
+        },
+        &public_url,
+        "x".into(),
+    );
+    assert!(bare.color && bare.platen);
+    assert!(!bare.grayscale && !bare.adf && !bare.duplex);
+}
+
+/// A responder over `recorder` for the printer of recto.example.org and `scan`'s scanners.
+async fn announced(
+    scan: &recto_scanning::MockScannerService,
+    database: &sea_orm::DatabaseConnection,
+    recorder: Recorder,
+) -> Responder<Recorder> {
+    let public_url = Url::parse("https://recto.example.org").unwrap();
+    let printer = printer("recto", "recto-nas.local.", 8631, &public_url);
+    announce(printer, scan, database, recorder).await.unwrap()
+}
+
+#[tokio::test]
+async fn only_scanners_open_to_everyone_are_announced_and_sane_hides_them() {
+    use recto_domain::access::{self, Access, DeviceKind};
+    use recto_scanning::ScannerService as _;
+    let database = recto_domain::testing::database().await;
+    let caps = recto_scanning::MockScannerService::default()
+        .capabilities("mock:0")
+        .await
+        .unwrap();
+    let scan = recto_scanning::MockScannerService::new(
+        vec![
+            info("open:0", "Canon", "LiDE 300"),
+            info("closed:0", "Epson", "V39"),
+            // The same model twice: instance names must differ.
+            info("open:1", "Canon", "LiDE 300"),
+        ],
+        caps,
+    );
+    access::set(
+        &database,
+        DeviceKind::Scanner,
+        "closed:0",
+        Access::Groups(vec![]),
+    )
+    .await
+    .unwrap();
+    let responder = announced(&scan, &database, Recorder::default()).await;
+    let second = format!("Canon LiDE 300 {} (recto)", escl::scanner_key("open:1"));
+    assert_eq!(
+        responder.fullnames(),
+        [
+            "recto._ipps._tcp.local.".to_owned(),
+            "Canon LiDE 300 (recto)._uscans._tcp.local.".to_owned(),
+            format!("{second}._uscans._tcp.local."),
+        ]
+    );
+    // sane-airscan would list them under these names, were it to find them.
+    assert_eq!(scan.hidden(), ["Canon LiDE 300 (recto)".to_owned(), second]);
+}
+
+#[tokio::test]
+async fn without_scanners_the_printer_is_still_announced() {
+    let database = recto_domain::testing::database().await;
+    let scan = recto_scanning::MockScannerService::default();
+    scan.fail_with(Some(recto_scanning::ScanError::Device("no SANE".into())));
+    let responder = announced(&scan, &database, Recorder::default()).await;
+    assert_eq!(responder.fullnames(), ["recto._ipps._tcp.local."]);
+    assert!(scan.hidden().is_empty());
+}
+
+#[test]
 fn no_aws_lc_in_the_lockfile() {
     assert!(!include_str!("../../../../Cargo.lock").contains("aws-lc"));
 }

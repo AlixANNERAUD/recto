@@ -4412,3 +4412,6 @@ mod release;
 
 #[path = "server/escl.rs"]
 mod escl;
+
+#[path = "server/lan.rs"]
+mod lan;

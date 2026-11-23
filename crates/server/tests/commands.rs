@@ -190,3 +190,68 @@ async fn backup_refuses_a_missing_database_and_creates_nothing() {
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
     assert!(commands::require_existing_database(&url).is_err());
 }
+
+#[test]
+fn dnssd_services_takes_a_directory_and_the_published_port() {
+    use clap::Parser as _;
+    use recto::config::{Command, CommandLine};
+    let parse = |extra: &[&str]| {
+        let mut arguments = vec![
+            "recto",
+            "dnssd-services",
+            "/etc/avahi/services",
+            "--public-url",
+            "https://recto.example.org",
+        ];
+        arguments.extend_from_slice(extra);
+        match CommandLine::try_parse_from(arguments).unwrap().command {
+            Command::DnssdServices(options) => options,
+            _ => panic!("not dnssd-services"),
+        }
+    };
+    let options = parse(&[]);
+    assert_eq!(options.dir, std::path::Path::new("/etc/avahi/services"));
+    assert_eq!(options.port, 8631);
+    assert_eq!(parse(&["--port", "18631"]).port, 18631);
+}
+
+#[test]
+fn dnssd_services_writes_avahi_files_and_removes_stale_ones() {
+    use recto::dnssd::{self, AdvertisedScanner};
+    let directory = temporary_directory();
+    let stale = directory.path().join("recto-scanner-00000000.service");
+    let unrelated = directory.path().join("printer.service");
+    std::fs::write(&stale, "a scanner that is gone").unwrap();
+    std::fs::write(&unrelated, "kept").unwrap();
+    let public_url = url::Url::parse("https://recto.example.org").unwrap();
+    let mut advertised = dnssd::printer("recto", "recto-nas.local.", 8631, &public_url);
+    advertised.scanners.push(AdvertisedScanner {
+        key: "1a2b3c4d".into(),
+        name: "Canon LiDE 300 (recto)".into(),
+        uuid: uuid::Uuid::nil(),
+        make_and_model: "Canon LiDE 300".into(),
+        color: true,
+        grayscale: true,
+        binary: false,
+        platen: true,
+        adf: false,
+        duplex: false,
+    });
+
+    let written = commands::write_avahi_files(&advertised, directory.path()).unwrap();
+    let names: Vec<String> = written
+        .iter()
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        names,
+        ["recto-printer.service", "recto-scanner-1a2b3c4d.service"]
+    );
+    for (path, (_, contents)) in written.iter().zip(dnssd::avahi_files(&advertised)) {
+        assert_eq!(std::fs::read_to_string(path).unwrap(), contents);
+    }
+    assert!(!stale.exists());
+    assert_eq!(std::fs::read_to_string(&unrelated).unwrap(), "kept");
+    // Nothing half written is left behind.
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 3);
+}

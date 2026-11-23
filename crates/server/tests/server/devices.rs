@@ -741,6 +741,63 @@ async fn a_revoked_or_foreign_secret_gets_no_profile() {
 }
 
 #[tokio::test]
+async fn a_new_device_password_shows_the_scan_addresses_of_usable_scanners() {
+    use recto_domain::access::{self, Access, DeviceKind};
+    use recto_scanning::{ScannerInfo, ScannerService as _, escl};
+    let scanner = |id: &str, vendor: &str, model: &str| ScannerInfo {
+        id: id.into(),
+        vendor: vendor.into(),
+        model: model.into(),
+        kind: "flatbed scanner".into(),
+    };
+    let capabilities = MockScannerService::default()
+        .capabilities("mock:0")
+        .await
+        .unwrap();
+    let harness = Harness::with(Setup {
+        scanner: Some(MockScannerService::new(
+            vec![
+                scanner("canon:0", "Canon", "LiDE 300"),
+                scanner("epson:0", "Epson", "V39"),
+            ],
+            capabilities,
+        )),
+        ..Setup::default()
+    })
+    .await;
+    // Administrators only: carol may not use it.
+    access::set(
+        &harness.database,
+        DeviceKind::Scanner,
+        "epson:0",
+        Access::Groups(vec![]),
+    )
+    .await
+    .unwrap();
+    let cookie = harness.sign_in("carol-subject", "carol").await;
+    let response = harness
+        .send(form(
+            "/account/devices",
+            Some(&cookie),
+            &[("name", "Laptop")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    let secret = &secrets_in(&html)[0];
+    let canon = escl::scanner_key("canon:0");
+    assert!(html.contains("Canon LiDE 300"), "{html}");
+    assert!(
+        html.contains(&format!(
+            ">http://recto.test:80/device/{secret}/eSCL/{canon}/<"
+        )),
+        "{html}"
+    );
+    assert!(!html.contains(&escl::scanner_key("epson:0")), "{html}");
+    assert!(!html.contains("Epson V39"), "{html}");
+}
+
+#[tokio::test]
 async fn os_integration_off_offers_no_profile() {
     let harness = Harness::with(Setup {
         os_integration: false,

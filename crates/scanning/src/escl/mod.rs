@@ -230,6 +230,31 @@ impl<'a> Sources<'a> {
     }
 }
 
+/// What a scanner offers over eSCL, as its DNS-SD record announces it (`cs`, `is`, `duplex`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Offered {
+    pub color: bool,
+    pub grayscale: bool,
+    pub binary: bool,
+    pub platen: bool,
+    pub adf: bool,
+    pub duplex: bool,
+}
+
+/// The colour modes and sources [`capabilities_xml`] describes for a scanner.
+pub fn offered(caps: &ScannerCapabilities) -> Offered {
+    let modes = modes(caps);
+    let sources = Sources::of(caps);
+    Offered {
+        color: modes.contains(&ScanMode::Color),
+        grayscale: modes.contains(&ScanMode::Gray),
+        binary: modes.contains(&ScanMode::Lineart),
+        platen: sources.platen.is_some(),
+        adf: sources.simplex.is_some(),
+        duplex: sources.duplex.is_some(),
+    }
+}
+
 /// The resolutions offered over eSCL: those at which a full colour page fits the page budget,
 /// since an eSCL profile cannot hold one list per mode. 300 dpi for a scanner that does not say,
 /// whose resolution SANE then leaves alone; the lowest one if none fits, refused when scanned.

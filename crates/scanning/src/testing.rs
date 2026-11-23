@@ -26,6 +26,8 @@ pub struct MockScannerService {
     requests: Mutex<Vec<(String, ScanRequest)>>,
     /// Every id a caller tried to open, listed or not.
     opened: Mutex<Vec<String>>,
+    /// The names [`ScannerService::hide_advertised`] was last given.
+    hidden: Mutex<Vec<String>>,
 }
 
 impl Default for MockScannerService {
@@ -56,6 +58,7 @@ impl Default for MockScannerService {
             peak: AtomicUsize::new(0),
             requests: Mutex::new(Vec::new()),
             opened: Mutex::new(Vec::new()),
+            hidden: Mutex::new(Vec::new()),
         }
     }
 }
@@ -103,6 +106,11 @@ impl MockScannerService {
         self.opened.lock().unwrap().clone()
     }
 
+    /// The names recto last said it announces its scanners under.
+    pub fn hidden(&self) -> Vec<String> {
+        self.hidden.lock().unwrap().clone()
+    }
+
     fn check(&self, id: &str) -> Result<(), ScanError> {
         self.opened.lock().unwrap().push(id.to_owned());
         if let Some(error) = self.failure.lock().unwrap().clone() {
@@ -141,6 +149,10 @@ impl ScannerService for MockScannerService {
         request: ScanRequest,
     ) -> Result<Vec<ScannedPage>, ScanError> {
         self.scan_pages(id, request, true).await
+    }
+
+    fn hide_advertised(&self, names: Vec<String>) {
+        *self.hidden.lock().unwrap() = names;
     }
 }
 

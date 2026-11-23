@@ -127,7 +127,9 @@
         "print_address": "Printer address",
         "print_address_hint": "Add this printer on a computer that asks for a password, and give it the password above.",
         "personal_address": "Personal printer address",
-        "personal_address_hint": "For devices that cannot ask for a password, such as Windows computers. It holds the password: keep it as private, and revoke the password if it leaks."
+        "personal_address_hint": "For devices that cannot ask for a password, such as Windows computers. It holds the password: keep it as private, and revoke the password if it leaks.",
+        "scan_addresses": "Personal scan addresses",
+        "scan_addresses_hint": "One for each scanner you may use, for scan apps that take an address, such as sane-airscan on Linux. They hold the password too. For an app that asks for a password, leave out device/ and the password."
       },
       "profile": {
         "download": "Download for iPhone, iPad and Mac",

@@ -28,6 +28,11 @@ alone means port 631:
 public URL the addresses are `ipp://`. The Account page shows both when it creates a device
 password.
 
+With `RECTO_DNSSD`, recto also announces the printer on the local network as an `_ipps._tcp`
+service with the `_universal` subtype, named `RECTO_DNSSD_NAME`, pointing at the LAN listener:
+`ipps://recto-<hostname>.local:<port>/ipp/print`, with the same password prompt (see
+[Let devices find recto](../how-to/discovery.md)).
+
 What the device sees: one driverless IPP printer (IPP/2.0, IPP Everywhere and AirPrint), named
 after the brand, whatever printers CUPS has. It takes the formats below, recognized by their
 content as on the Print page, up to `RECTO_MAX_UPLOAD_SIZE`. It offers A4, Letter, Legal, A3 and

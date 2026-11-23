@@ -329,6 +329,15 @@ impl Drop for Upload {
     }
 }
 
+/// Which listener serves the device routes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Listener {
+    /// The main listener, behind the reverse proxy: credentials always.
+    Main,
+    /// The LAN listener, TLS from the device to recto: `RECTO_ESCL_OPEN_NETWORKS` applies.
+    Lan,
+}
+
 /// What device authentication needs.
 #[derive(Clone)]
 pub struct DeviceAuth {
@@ -356,6 +365,18 @@ impl DeviceAuth {
             plain_allowed: auth.public_url.scheme() == "https" || auth.ipp_allow_plain,
             brand_name: Arc::from(brand_name),
         }
+    }
+
+    /// Device authentication on `listener`. The LAN listener speaks TLS from the device to
+    /// recto, so credentials never cross the network in clear; and devices reach it directly,
+    /// so a forwarded header there was written by the client itself and never names it.
+    pub fn for_listener(auth: &AuthState, brand_name: &str, listener: Listener) -> Self {
+        let mut devices = Self::new(auth, brand_name);
+        if listener == Listener::Lan {
+            devices.plain_allowed = true;
+            devices.trust_forwarded_headers = false;
+        }
+        devices
     }
 
     /// The address failures are counted by: the peer's, or with trusted forwarded headers the

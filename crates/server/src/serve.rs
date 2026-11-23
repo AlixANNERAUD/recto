@@ -43,7 +43,8 @@ pub use crate::state::AuthState;
 use crate::{
     branding,
     config::Config,
-    device_auth,
+    device_auth::{self, Listener},
+    dnssd, lan,
     routes::{
         administration, auth, devices, escl, held as held_routes, ipp, password, print, pwa, scan,
     },
@@ -115,7 +116,7 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
     let devices = devices::router(state.clone(), &auth);
     let held_jobs = held_routes::router(state.clone(), &auth);
     let administration = administration::router(state.clone(), &auth);
-    let devices_ipp = device_routes(&state, &auth, escl::Listener::Main);
+    let devices_ipp = device_routes(&state, &auth, Listener::Main);
     let interface = Router::new()
         .route(
             "/print",
@@ -162,13 +163,13 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
 
 /// The routes of the LAN listener: the device addresses only, never a page or a session.
 pub fn lan_router(state: AppState, auth: AuthState) -> Router {
-    device_routes(&state, &auth, escl::Listener::Lan).layer(middleware::from_fn(security_headers))
+    device_routes(&state, &auth, Listener::Lan).layer(middleware::from_fn(security_headers))
 }
 
 /// The printer's and the scanners' addresses, and the bare 404 of any other device address.
-fn device_routes(state: &AppState, auth: &AuthState, listener: escl::Listener) -> Router {
+fn device_routes(state: &AppState, auth: &AuthState, listener: Listener) -> Router {
     escl::routes(
-        ipp::router(state.clone(), auth),
+        ipp::router(state.clone(), auth, listener),
         state.clone(),
         auth,
         listener,
@@ -250,6 +251,29 @@ pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     delete_expired_sessions(auth.sessions.clone());
     poll_jobs(Arc::clone(&state.print), state.database.clone());
     find_scanners(Arc::clone(&state.scan));
+    // Before serving: a certificate, an address or an interface that is wrong stops recto here.
+    let lan = match config.lan_listen_address {
+        Some(lan_address) => Some(prepare_lan(&config, lan_address, &state.branding.name).await?),
+        None => None,
+    };
+    let (stop, stopped) = tokio::sync::watch::channel(());
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = stop.send(());
+    });
+    let mut lan_server = None;
+    let mut announcing = None;
+    if let Some(lan) = lan {
+        if let Some(dnssd) = lan.dnssd {
+            announcing = Some(announce(&state, dnssd, stopped.clone()));
+        }
+        let routes = lan_router(state.clone(), auth.clone());
+        lan_server = Some(tokio::spawn(lan::serve(
+            lan.listener,
+            routes,
+            until(stopped.clone()),
+        )));
+    }
     #[cfg_attr(
         not(all(feature = "dev-mocks", debug_assertions)),
         expect(unused_mut, reason = "only the development mocks change the router")
@@ -266,9 +290,130 @@ pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(until(stopped))
     .await?;
+    if let Some(lan_server) = lan_server {
+        lan_server.await??;
+    }
+    // The goodbyes go out once nothing is served any more.
+    if let Some(announcing) = announcing {
+        let _ = announcing.await;
+    }
     Ok(())
+}
+
+/// Resolves once the server is told to stop.
+async fn until(mut stopped: tokio::sync::watch::Receiver<()>) {
+    // An error means the sender is gone, which also means stopping.
+    let _ = stopped.changed().await;
+}
+
+/// The LAN listener, bound and with its certificate, and what DNS-SD announces on it.
+struct Lan {
+    listener: lan::TlsListener,
+    dnssd: Option<Announcement>,
+}
+
+/// The printer to announce, and the responder that will, already listening.
+struct Announcement {
+    printer: dnssd::Advertised,
+    registry: dnssd::MdnsRegistry,
+}
+
+/// Loads or creates the LAN certificate, binds the LAN listener and, with `RECTO_DNSSD`, starts
+/// the mDNS responder on the chosen interfaces.
+async fn prepare_lan(
+    config: &Config,
+    address: SocketAddr,
+    brand_name: &str,
+) -> Result<Lan, Box<dyn std::error::Error>> {
+    let hostname = dnssd::system_hostname()?;
+    let certificate = config.lan_tls_certificate.clone();
+    let key = config.lan_tls_key.clone();
+    let data_dir = config.data_dir.clone();
+    let names = hostname.clone();
+    let tls = tokio::task::spawn_blocking(move || {
+        lan::load_or_create(
+            certificate.as_deref(),
+            key.as_deref(),
+            &data_dir,
+            &names,
+            &[address.ip()],
+        )
+    })
+    .await??;
+    let tcp = tokio::net::TcpListener::bind(address)
+        .await
+        .map_err(|error| format!("RECTO_LAN_LISTEN_ADDRESS {address}: {error}"))?;
+    // People compare it with what their device shows the first time it connects.
+    tracing::info!(%address, fingerprint = %tls.fingerprint, "LAN listener");
+    let listener = lan::TlsListener::new(tcp, tls.acceptor(), lan::HANDSHAKE_TIMEOUT);
+    if !config.dnssd {
+        return Ok(Lan {
+            listener,
+            dnssd: None,
+        });
+    }
+    let interfaces = dnssd::interfaces(&config.dnssd_interfaces, &dnssd::candidates()?)?;
+    if interfaces.is_empty() {
+        tracing::warn!(
+            "RECTO_DNSSD found no interface to announce on: set RECTO_DNSSD_INTERFACES, or run \
+             recto on the host's network"
+        );
+    }
+    // A listener bound to an IPv4 address would leave IPv6 clients at a closed port; `[::]` is
+    // dual stack on Linux.
+    let ipv6 = address.is_ipv6();
+    let started = interfaces.clone();
+    let registry =
+        tokio::task::spawn_blocking(move || dnssd::MdnsRegistry::start(&started, ipv6)).await??;
+    let instance = config.dnssd_name.as_deref().unwrap_or(brand_name);
+    let host = dnssd::advertised_host(&hostname);
+    tracing::info!(host, interfaces = interfaces.join(","), "DNS-SD responder");
+    Ok(Lan {
+        listener,
+        dnssd: Some(Announcement {
+            printer: dnssd::printer(instance, &host, address.port(), &config.public_url),
+            registry,
+        }),
+    })
+}
+
+/// Announces the printer and the scanners open to everyone until the server stops, then
+/// withdraws them. The scanner list may take seconds, so this runs in the background.
+fn announce(
+    state: &AppState,
+    announcement: Announcement,
+    stopped: tokio::sync::watch::Receiver<()>,
+) -> tokio::task::JoinHandle<()> {
+    let scan = Arc::clone(&state.scan);
+    let database = state.database.clone();
+    tokio::spawn(async move {
+        let announced = dnssd::announce(
+            announcement.printer,
+            &*scan,
+            &database,
+            announcement.registry,
+        )
+        .await;
+        let responder = match announced {
+            Ok(responder) => responder,
+            Err(error) => {
+                tracing::error!(%error, "announcing recto over DNS-SD failed");
+                return;
+            }
+        };
+        tracing::info!(
+            services = responder.fullnames().join(", "),
+            "announced over DNS-SD"
+        );
+        until(stopped).await;
+        // Unregistering waits for the goodbye packets.
+        let withdrawn = tokio::task::spawn_blocking(move || responder.shutdown()).await;
+        if let Err(error) = withdrawn {
+            tracing::warn!(%error, "withdrawing the DNS-SD services failed");
+        }
+    })
 }
 
 /// What no route matches: a file of the site root (scripts, styles, icons) for anyone, else

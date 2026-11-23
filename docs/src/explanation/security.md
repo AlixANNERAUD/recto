@@ -124,6 +124,35 @@ on, the limit counts by the forwarded client address, as the sign-in limit does,
 guesser waits. Whether plain HTTP is accepted always depends on the connection's address, never
 on a forwarded header, which a device could write itself.
 
+## The LAN listener
+
+Devices that find recto through DNS-SD connect to it directly, by its `.local` name or address,
+which the public certificate does not cover. So discovery points at a second listener,
+`RECTO_LAN_LISTEN_ADDRESS`, off by default. It speaks TLS only, never plain HTTP, and serves the
+printer's and the scanners' addresses alone: no page, no sign-in, no session, no file, every other
+address a bare `404`. Device passwords work there as behind the proxy, and the wrong ones count
+toward the same limit, by the connection's address: forwarded headers are never read there,
+since devices reach it without a proxy and a header would be the device's own claim. A device
+has 10 seconds to complete its handshake, each in a task of its own, so one that connects and
+says nothing holds nothing up.
+
+Its certificate is the operator's (`RECTO_LAN_TLS_CERTIFICATE`), or one recto makes itself at
+the first start and keeps in `RECTO_DATA_DIR/lan-tls/`, readable by recto alone. No device
+trusts a self-signed certificate on its own: Apple devices and sane-airscan accept it the first
+time and Apple devices then remember it, the usual AirPrint trust model. That protects against
+someone listening on the network, not against someone who answers in recto's place on that
+first connection. recto logs the certificate's SHA-256 fingerprint at each start (`LAN
+listener`), so it can be compared with what a device shows. Since devices remember it, recto
+never renews nor changes it; delete `lan-tls` to make a new one, and devices that remembered the
+old one must forget recto and add it again.
+
+The DNS-SD responder announces recto under its own name, `recto-<hostname>.local`, never the
+host's, which the host's avahi-daemon owns, and only on the interfaces of
+`RECTO_DNSSD_INTERFACES`: by default not on Docker's, virtual machines' or VPNs', whose addresses
+the LAN cannot reach and which would tell a VPN's peers about the printer. It announces where
+recto is, its name and the pages `/jobs` and `/scan`, as any network printer does, and no
+secret.
+
 ## Scanning without a password
 
 macOS, Windows and Mopria scan apps find scanners over DNS-SD and cannot carry a secret in the

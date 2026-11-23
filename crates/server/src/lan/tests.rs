@@ -164,3 +164,114 @@ fn the_fingerprint_is_written_like_openssl_s() {
                 .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_lowercase())
     }));
 }
+
+/// One HTTP request over TLS to `address`, trusting `trusted`; the whole answer.
+async fn get_over_tls(address: std::net::SocketAddr, trusted: &[u8]) -> String {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let mut roots = RootCertStore::empty();
+    roots.add(CertificateDer::from(trusted.to_vec())).unwrap();
+    let client =
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+    let tcp = tokio::net::TcpStream::connect(address).await.unwrap();
+    let name = ServerName::try_from("127.0.0.1").unwrap();
+    let mut stream = TlsConnector::from(Arc::new(client))
+        .connect(name, tcp)
+        .await
+        .unwrap();
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut answer = Vec::new();
+    stream.read_to_end(&mut answer).await.unwrap();
+    String::from_utf8(answer).unwrap()
+}
+
+/// A listener on loopback answering `/` with the peer's address, and its certificate.
+async fn listening(
+    timeout: std::time::Duration,
+) -> (
+    std::net::SocketAddr,
+    Vec<u8>,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<io::Result<()>>,
+    tempfile::TempDir,
+) {
+    use axum::{Router, extract::ConnectInfo, routing::get};
+    let data = recto_domain::testing::temporary_directory();
+    let tls = load_or_create(None, None, data.path(), "nas", &[LOOPBACK]).unwrap();
+    let der = certificate_der(&data.path().join(DIRECTORY).join("certificate.pem"));
+    let tcp = tokio::net::TcpListener::bind((LOOPBACK, 0)).await.unwrap();
+    let address = tcp.local_addr().unwrap();
+    let router = Router::new().route(
+        "/",
+        get(
+            |ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>| async move {
+                format!("peer {}", peer.ip())
+            },
+        ),
+    );
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(serve(
+        TlsListener::new(tcp, tls.acceptor(), timeout),
+        router,
+        async {
+            let _ = stopped.await;
+        },
+    ));
+    (address, der, stop, server, data)
+}
+
+#[tokio::test]
+async fn a_stalled_handshake_does_not_block_others_and_times_out() {
+    use tokio::io::AsyncReadExt as _;
+    let (address, der, stop, server, _data) =
+        listening(std::time::Duration::from_millis(300)).await;
+    // A client that connects and never says anything.
+    let mut stalled = tokio::net::TcpStream::connect(address).await.unwrap();
+    let answer = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        get_over_tls(address, &der),
+    )
+    .await
+    .expect("another client is served meanwhile");
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    // The routes see the TCP peer, as on the main listener.
+    assert!(answer.ends_with("peer 127.0.0.1"), "{answer}");
+    // The stalled one is dropped once its handshake time is up.
+    let mut byte = [0; 1];
+    let read = tokio::time::timeout(std::time::Duration::from_secs(5), stalled.read(&mut byte))
+        .await
+        .expect("the stalled connection is closed");
+    assert!(matches!(read, Ok(0) | Err(_)), "{read:?}");
+
+    let _ = stop.send(());
+    tokio::time::timeout(std::time::Duration::from_secs(5), server)
+        .await
+        .expect("the listener stops")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn plain_http_is_never_answered() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let (address, _der, _stop, _server, _data) = listening(HANDSHAKE_TIMEOUT).await;
+    let mut plain = tokio::net::TcpStream::connect(address).await.unwrap();
+    plain
+        .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        .await
+        .unwrap();
+    let mut answer = Vec::new();
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        plain.read_to_end(&mut answer),
+    )
+    .await
+    .expect("the connection is closed");
+    assert!(!answer.starts_with(b"HTTP/"), "{answer:?}");
+}

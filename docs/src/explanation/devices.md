@@ -75,6 +75,24 @@ unsigned; that changes nothing about what it does. Since it holds the password, 
 only to the person who owns the password, writes it to no file or log, and tells browsers not to
 keep it (`Cache-Control: no-store`).
 
+## Finding recto on the network
+
+Printers on a local network announce themselves over multicast DNS, and Print dialogs list what
+they hear. recto can do the same (`RECTO_DNSSD`), and for Android it is the only way in: Android
+adds printers it found, never one typed with a path.
+
+A discovered printer is reached directly, by a `.local` name, not through the reverse proxy and
+its public name, and the proxy's certificate does not cover that name. So discovery points at a
+listener of its own, the LAN listener, with a certificate recto makes for its `.local` name and
+keeps, since devices remember the certificate they first see. It serves the printer and the
+scanners, never a page. recto announces itself under its own name, `recto-<hostname>.local`,
+leaving the host's name to the host.
+
+Multicast stays on its network and does not cross Docker's bridge, so recto runs on the host's
+network to announce itself, or leaves the announcing to the host's avahi-daemon with the files
+`recto dnssd-services` writes. Only scanners open to everyone are announced: apps that find a
+scanner this way send no password, and only those scanners can work for them.
+
 ## What each system supports
 
 | System | How it adds recto | Status |
@@ -82,8 +100,8 @@ keep it (`Cache-Control: no-store`).
 | macOS | Printer address and a password prompt, or the personal address, by hand or with a profile | Supported |
 | Linux (CUPS, GNOME, KDE) | Printer address and a password prompt, or the personal address | Supported |
 | Windows 10 and 11 | Personal address only | Experimental |
-| iOS and iPadOS | A profile with the personal address; a discovered printer and a password is being built | Experimental |
-| Android | A discovered printer and a password, through Mopria Print Service | Experimental, being built |
+| iOS and iPadOS | A profile with the personal address, or a discovered printer and a password | Experimental |
+| Android | A discovered printer and a password, through Mopria Print Service | Experimental |
 
 A system is experimental until printing from it has passed its checks on real devices. On every
 system, printing from recto's Print page in the browser works.

@@ -12,7 +12,7 @@ use recto_domain::passwords;
 use recto_printing::printer::Media;
 use url::Url;
 
-use crate::branding::BrandOptions;
+use crate::{branding::BrandOptions, dnssd};
 
 /// Where the database is when `RECTO_DATABASE_URL` is not set: the container's data volume.
 pub const DEFAULT_DATABASE_URL: &str = "sqlite:///data/recto.db";
@@ -137,6 +137,49 @@ pub struct Config {
         value_parser = parse_open_networks
     )]
     pub escl_open_networks: OpenNetworks,
+    /// Where the LAN listener takes TLS connections from the devices that found recto through
+    /// DNS-SD, such as `[::]:8631`; unset or blank leaves it off.
+    // Read as text, so that a blank variable means off; `Config::normalized` parses it into
+    // `lan_listen_address`.
+    #[arg(
+        long = "lan-listen-address",
+        env = "RECTO_LAN_LISTEN_ADDRESS",
+        value_name = "LAN_LISTEN_ADDRESS"
+    )]
+    lan_listen_address_text: Option<String>,
+    #[arg(skip)]
+    pub lan_listen_address: Option<SocketAddr>,
+    /// The LAN listener's certificate chain, PEM; with `lan_tls_key`, or neither for a
+    /// self-signed certificate kept in the data directory.
+    #[arg(long, env = "RECTO_LAN_TLS_CERTIFICATE", value_parser = parse_path)]
+    pub lan_tls_certificate: Option<PathBuf>,
+    /// The private key of `lan_tls_certificate`, PEM.
+    #[arg(long, env = "RECTO_LAN_TLS_KEY", value_parser = parse_path)]
+    pub lan_tls_key: Option<PathBuf>,
+    /// Announce the LAN listener's printer and scanners over multicast DNS; needs the LAN
+    /// listener.
+    #[arg(
+        long,
+        env = "RECTO_DNSSD",
+        default_value = "false",
+        value_parser = boolean("RECTO_DNSSD"),
+        action = ArgAction::Set
+    )]
+    pub dnssd: bool,
+    /// The name Print dialogs show; the brand name when unset.
+    #[arg(long, env = "RECTO_DNSSD_NAME")]
+    pub dnssd_name: Option<String>,
+    /// The network interfaces to announce on, comma separated; when empty, every interface but
+    /// loopback, Docker's, virtual machines' and VPNs'.
+    // The fully qualified `Vec` keeps clap from reading one value per occurrence: the parser
+    // splits the list itself.
+    #[arg(
+        long,
+        env = "RECTO_DNSSD_INTERFACES",
+        default_value = "",
+        value_parser = parse_dnssd_interfaces
+    )]
+    pub dnssd_interfaces: ::std::vec::Vec<String>,
     #[arg(long, env = "RECTO_CUPS_URL", default_value = "http://localhost:631", value_parser = parse_cups_url)]
     pub cups_url: Url,
     /// CUPS's Unix socket, which lets administrators manage printers; unset or blank turns
@@ -197,6 +240,8 @@ impl Config {
             &mut config.oidc_administrator_value,
             &mut config.oidc_groups_claim,
             &mut config.brand.brand_short_name,
+            &mut config.lan_listen_address_text,
+            &mut config.dnssd_name,
         ] {
             if value.as_deref().is_some_and(|text| text.trim().is_empty()) {
                 *value = None;
@@ -207,6 +252,8 @@ impl Config {
             &mut config.cups_admin_socket,
             &mut config.brand.brand_logo,
             &mut config.brand.brand_icon,
+            &mut config.lan_tls_certificate,
+            &mut config.lan_tls_key,
         ] {
             if path
                 .as_ref()
@@ -264,6 +311,42 @@ impl Config {
         }
         if let Err(message) = check_password_minimum_length(config.password_minimum_length) {
             return invalid(&message);
+        }
+        config.lan_listen_address = match config.lan_listen_address_text.as_deref().map(str::trim) {
+            Some(text) => match text.parse() {
+                Ok(address) => Some(address),
+                Err(_) => {
+                    return invalid(&format!(
+                        "RECTO_LAN_LISTEN_ADDRESS must be an address and a port, such as \
+                         [::]:8631 or 0.0.0.0:8631, not {text}"
+                    ));
+                }
+            },
+            None => None,
+        };
+        // One file alone would quietly fall back to the self-signed certificate.
+        if config.lan_tls_certificate.is_some() != config.lan_tls_key.is_some() {
+            return invalid(
+                "RECTO_LAN_TLS_CERTIFICATE and RECTO_LAN_TLS_KEY go together: set both to use \
+                 your own certificate on the LAN listener, or neither for a self-signed one",
+            );
+        }
+        // The services announced point at the LAN listener: without it there is nothing to find.
+        if config.dnssd && config.lan_listen_address.is_none() {
+            return invalid(
+                "RECTO_DNSSD is true but RECTO_LAN_LISTEN_ADDRESS is not set: DNS-SD announces \
+                 the LAN listener, so set it too, such as [::]:8631",
+            );
+        }
+        if let Some(name) = &mut config.dnssd_name {
+            *name = name.trim().to_owned();
+            if name.len() > dnssd::INSTANCE_MAX {
+                return invalid(&format!(
+                    "RECTO_DNSSD_NAME must be at most {} bytes long, not {}",
+                    dnssd::INSTANCE_MAX,
+                    name.len()
+                ));
+            }
         }
         // Routes, redirects and the cookie path all assume recto is the whole site.
         if config.public_url.path() != "/" {
@@ -381,6 +464,12 @@ pub fn parse_open_networks(value: &str) -> Result<OpenNetworks, String> {
         .map(OpenNetworks)
 }
 
+fn parse_dnssd_interfaces(value: &str) -> Result<Vec<String>, String> {
+    dnssd::parse_interfaces(value).map_err(|error| {
+        format!("RECTO_DNSSD_INTERFACES must be interface names, comma separated: {error}")
+    })
+}
+
 fn parse_currency(value: &str) -> Result<String, String> {
     let code = value.trim();
     if code.len() == 3 && code.bytes().all(|byte| byte.is_ascii_alphabetic()) {
@@ -480,6 +569,25 @@ pub struct AdministratorOptions {
     pub database: DatabaseOptions,
 }
 
+#[derive(Clone, Debug, Args)]
+pub struct DnssdServicesOptions {
+    /// Where to write the `.service` files, such as `/etc/avahi/services`; created if missing.
+    pub dir: PathBuf,
+    /// The LAN listener's port as published on the host.
+    #[arg(long, default_value_t = 8631)]
+    pub port: u16,
+    /// The printer's UUID and the pages the records link to derive from it.
+    #[arg(long, env = "RECTO_PUBLIC_URL")]
+    pub public_url: Url,
+    /// The name Print dialogs show; the brand name when unset.
+    #[arg(long, env = "RECTO_DNSSD_NAME")]
+    pub dnssd_name: Option<String>,
+    #[arg(long, env = "RECTO_BRAND_NAME", default_value = crate::branding::DEFAULT_NAME)]
+    pub brand_name: String,
+    #[command(flatten)]
+    pub database: DatabaseOptions,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Run the web server.
@@ -495,6 +603,9 @@ pub enum Command {
     CreateAdministrator(CreateAdministratorOptions),
     /// Grant or remove administration of an existing user.
     Administrator(AdministratorOptions),
+    /// Write the DNS-SD records of the LAN listener as Avahi service files, for a host whose
+    /// avahi-daemon announces recto while it stays on a bridge network.
+    DnssdServices(DnssdServicesOptions),
 }
 
 #[cfg(test)]
@@ -696,6 +807,109 @@ mod tests {
                 "{error}"
             );
         }
+    }
+
+    #[test]
+    fn the_lan_listener_and_dns_sd_are_off_by_default() {
+        let config = parse(&[]).unwrap();
+        assert_eq!(config.lan_listen_address, None);
+        assert_eq!(config.lan_tls_certificate, None);
+        assert_eq!(config.lan_tls_key, None);
+        assert!(!config.dnssd);
+        assert_eq!(config.dnssd_name, None);
+        assert!(config.dnssd_interfaces.is_empty());
+        // Blank is unset, as for every setting.
+        let blank = parse(&[
+            "--lan-listen-address",
+            " ",
+            "--lan-tls-certificate",
+            "",
+            "--lan-tls-key",
+            "",
+            "--dnssd-name",
+            " ",
+            "--dnssd-interfaces",
+            "",
+        ])
+        .unwrap();
+        assert_eq!(blank.lan_listen_address, None);
+        assert_eq!(blank.lan_tls_certificate, None);
+        assert_eq!(blank.dnssd_name, None);
+    }
+
+    #[test]
+    fn lan_settings_are_read() {
+        let config = parse(&[
+            "--lan-listen-address",
+            "[::]:8631",
+            "--lan-tls-certificate",
+            "/certs/lan.pem",
+            "--lan-tls-key",
+            "/certs/lan.key",
+            "--dnssd",
+            "true",
+            "--dnssd-name",
+            " Office ",
+            "--dnssd-interfaces",
+            "eth0, wlan0",
+        ])
+        .unwrap();
+        assert_eq!(
+            config.lan_listen_address,
+            Some("[::]:8631".parse().unwrap())
+        );
+        assert_eq!(
+            config.lan_tls_certificate,
+            Some(PathBuf::from("/certs/lan.pem"))
+        );
+        assert_eq!(config.lan_tls_key, Some(PathBuf::from("/certs/lan.key")));
+        assert!(config.dnssd);
+        assert_eq!(config.dnssd_name.as_deref(), Some("Office"));
+        assert_eq!(config.dnssd_interfaces, ["eth0", "wlan0"]);
+    }
+
+    #[test]
+    fn wrong_lan_settings_are_refused_by_name() {
+        for (arguments, variable) in [
+            (
+                &["--lan-listen-address", "8631"][..],
+                "RECTO_LAN_LISTEN_ADDRESS",
+            ),
+            (&["--dnssd", "yes"][..], "RECTO_DNSSD"),
+            // DNS-SD announces the LAN listener: without it there is nothing to find.
+            (&["--dnssd", "true"][..], "RECTO_LAN_LISTEN_ADDRESS"),
+            (
+                &[
+                    "--lan-listen-address",
+                    "0.0.0.0:8631",
+                    "--lan-tls-certificate",
+                    "/certs/lan.pem",
+                ][..],
+                "RECTO_LAN_TLS_KEY",
+            ),
+            (
+                &[
+                    "--lan-listen-address",
+                    "0.0.0.0:8631",
+                    "--lan-tls-key",
+                    "/certs/lan.key",
+                ][..],
+                "RECTO_LAN_TLS_CERTIFICATE",
+            ),
+            (
+                &["--dnssd-interfaces", "eth 0"][..],
+                "RECTO_DNSSD_INTERFACES",
+            ),
+            // A DNS-SD instance name is one label of at most 63 bytes.
+            (&["--dnssd-name", &"é".repeat(32)][..], "RECTO_DNSSD_NAME"),
+        ] {
+            let error = parse(arguments).unwrap_err();
+            assert!(
+                error.to_string().contains(variable),
+                "{arguments:?}: {error}"
+            );
+        }
+        assert!(parse(&["--dnssd-name", &"é".repeat(31)]).is_ok());
     }
 
     #[test]

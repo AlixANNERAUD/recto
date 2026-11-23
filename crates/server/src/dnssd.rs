@@ -4,16 +4,26 @@
 //! `<hostname>.local`: the host's own responder (Avahi) owns that name, and records for it with
 //! other data start a conflict that can rename the host. The records point at the LAN listener.
 //!
-//! Two ways out: the built-in responder ([`start`], over `mdns-sd`, with host networking), or
+//! Two ways out: the built-in responder ([`announce`], over `mdns-sd`, with host networking), or
 //! Avahi `.service` files for the host's avahi-daemon when recto stays on a bridge network
-//! ([`avahi_files`]). Everything but [`MdnsRegistry`] is pure, so tests never send multicast.
+//! ([`avahi_files`]). Only [`MdnsRegistry`] sends multicast; tests register with a fake.
+//!
+//! The printer is always announced. Scanners are announced when they are open to everyone:
+//! the scan apps that find them this way send no password, so only those can work for them,
+//! from the networks of `RECTO_ESCL_OPEN_NETWORKS`.
 
 use std::{collections::BTreeSet, fmt::Write as _, io, time::Duration};
 
 use mdns_sd::{IfKind, ServiceDaemon, ServiceInfo};
-use recto_scanning::escl;
+use recto_domain::access::{self, DeviceKind};
+use recto_printing::printer::{DOCUMENT_FORMATS, URF_SUPPORTED, VirtualPrinter};
+use recto_scanning::{ScannerCapabilities, ScannerInfo, ScannerService, escl};
+use sea_orm::DatabaseConnection;
 use url::Url;
 use uuid::Uuid;
+
+/// The longest service instance name, in bytes: one DNS label.
+pub const INSTANCE_MAX: usize = 63;
 
 /// What is advertised, fed by the printer and scanner descriptions.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,6 +65,159 @@ pub struct AdvertisedScanner {
     pub platen: bool,
     pub adf: bool,
     pub duplex: bool,
+}
+
+/// recto's printer, as the IPP routes describe it, without scanners: the queue's formats and
+/// Apple raster values, its UUID, over TLS on the LAN listener's `port`. `instance` is cut to
+/// [`INSTANCE_MAX`] bytes.
+pub fn printer(instance: &str, host: &str, port: u16, public_url: &Url) -> Advertised {
+    Advertised {
+        instance: cut(instance.trim(), INSTANCE_MAX).to_owned(),
+        host: host.to_owned(),
+        port,
+        tls: true,
+        public_url: public_url.clone(),
+        printer_uuid: VirtualPrinter::uuid_for(public_url.as_str()),
+        formats: DOCUMENT_FORMATS
+            .iter()
+            .map(|&format| format.to_owned())
+            .collect(),
+        urf: URF_SUPPORTED
+            .iter()
+            .map(|&value| value.to_owned())
+            .collect(),
+        scanners: Vec::new(),
+    }
+}
+
+/// `text` cut to at most `max` bytes, on a character boundary.
+fn cut(text: &str, max: usize) -> &str {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// A scanner's vendor and model, as the scan page shows them.
+fn label(info: &ScannerInfo) -> String {
+    [info.vendor.trim(), info.model.trim()]
+        .iter()
+        .filter(|part| !part.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A scanner's instance name: `<vendor> <model> (<instance>)`, so that it differs from the name
+/// a network scanner announces itself under, at most [`INSTANCE_MAX`] bytes with the label cut.
+pub fn scanner_instance(info: &ScannerInfo, instance: &str) -> String {
+    let suffix = format!(" ({})", instance.trim());
+    let room = INSTANCE_MAX.saturating_sub(suffix.len());
+    format!("{}{suffix}", cut(&label(info), room).trim_end())
+}
+
+/// A scanner as its eSCL capabilities describe it, announced as `name`.
+pub fn advertised_scanner(
+    info: &ScannerInfo,
+    caps: &ScannerCapabilities,
+    public_url: &Url,
+    name: String,
+) -> AdvertisedScanner {
+    let offered = escl::offered(caps);
+    AdvertisedScanner {
+        key: escl::scanner_key(&info.id),
+        name,
+        uuid: escl::scanner_uuid(public_url.as_str(), &info.id),
+        make_and_model: label(info),
+        color: offered.color,
+        grayscale: offered.grayscale,
+        binary: offered.binary,
+        platen: offered.platen,
+        adf: offered.adf,
+        duplex: offered.duplex,
+    }
+}
+
+/// The scanners open to everyone whose capabilities can be read, named after `instance`.
+/// Nothing is announced when the list or the access rules cannot be read: a scanner restricted
+/// to some groups must not be announced by mistake.
+pub async fn open_scanners(
+    scan: &dyn ScannerService,
+    database: &DatabaseConnection,
+    public_url: &Url,
+    instance: &str,
+) -> Vec<AdvertisedScanner> {
+    let scanners = match scan.scanners(false).await {
+        Ok(scanners) => scanners,
+        Err(error) => {
+            tracing::warn!(%error, "listing the scanners to announce failed");
+            return Vec::new();
+        }
+    };
+    let rules = match access::rules(database, DeviceKind::Scanner).await {
+        Ok(rules) => rules,
+        Err(error) => {
+            tracing::error!(%error, "reading the scanner access rules to announce failed");
+            return Vec::new();
+        }
+    };
+    let open = scanners
+        .into_iter()
+        .filter(|scanner| access::allows(rules.get(&scanner.id), false, &[]));
+    let mut announced: Vec<AdvertisedScanner> = Vec::new();
+    for scanner in open {
+        let caps = match scan.capabilities(&scanner.id).await {
+            Ok(caps) => caps,
+            Err(error) => {
+                tracing::warn!(%error, scanner = scanner.id, "a scanner is not announced");
+                continue;
+            }
+        };
+        let mut name = scanner_instance(&scanner, instance);
+        // A second scanner of one model: the key tells it apart, as its eSCL address does.
+        if announced.iter().any(|known| known.name == name) {
+            let mut labelled = scanner.clone();
+            labelled.model = format!(
+                "{} {}",
+                scanner.model.trim(),
+                escl::scanner_key(&scanner.id)
+            );
+            name = scanner_instance(&labelled, instance);
+        }
+        announced.push(advertised_scanner(&scanner, &caps, public_url, name));
+    }
+    announced
+}
+
+/// How long the scanners may take to be listed and described before the printer is announced
+/// without them.
+const SCANNER_WAIT: Duration = Duration::from_secs(60);
+
+/// Announces `printer` and the scanners open to everyone on `registry`. SANE is told the
+/// scanners' names first, so that it never lists them back if a network backend finds them.
+pub async fn announce<R: Registry>(
+    mut printer: Advertised,
+    scan: &dyn ScannerService,
+    database: &DatabaseConnection,
+    registry: R,
+) -> Result<Responder<R>, DnssdError> {
+    let scanners = open_scanners(scan, database, &printer.public_url, &printer.instance);
+    // SANE's network backends can take long to answer: the printer must not wait for ever.
+    printer.scanners = tokio::time::timeout(SCANNER_WAIT, scanners)
+        .await
+        .unwrap_or_else(|_| {
+            tracing::warn!("the scanners did not answer in time and are not announced");
+            Vec::new()
+        });
+    scan.hide_advertised(
+        printer
+            .scanners
+            .iter()
+            .map(|scanner| scanner.name.clone())
+            .collect(),
+    );
+    start(&printer, registry)
 }
 
 /// The DNS-SD service types recto can announce.

@@ -48,7 +48,7 @@ use uuid::Uuid;
 
 use crate::{
     config::OpenNetworks,
-    device_auth::{self, DeviceAuth},
+    device_auth::{self, DeviceAuth, Listener},
     state::AuthState,
 };
 
@@ -60,15 +60,6 @@ const NEXT_DOCUMENT_WAIT: Duration = Duration::from_secs(30);
 const BUSY_RETRY: &str = "5";
 /// `Retry-After` while the job is still scanning.
 const SCANNING_RETRY: &str = "2";
-
-/// Which listener the routes serve.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Listener {
-    /// The main listener, behind the reverse proxy: credentials always.
-    Main,
-    /// The LAN listener, TLS from the device to recto: `RECTO_ESCL_OPEN_NETWORKS` applies.
-    Lan,
-}
 
 #[derive(Clone)]
 struct EsclState {
@@ -93,17 +84,12 @@ struct EsclState {
 
 /// The eSCL addresses in front of `devices`, the router of every other device address.
 pub fn routes(devices: Router, app: AppState, auth: &AuthState, listener: Listener) -> Router {
-    let mut device_auth = DeviceAuth::new(auth, &app.branding.name);
     let open_networks = match listener {
         Listener::Main => OpenNetworks::default(),
-        Listener::Lan => {
-            // The LAN listener only speaks TLS: credentials never cross the network in clear.
-            device_auth.plain_allowed = true;
-            auth.escl_open_networks.clone()
-        }
+        Listener::Lan => auth.escl_open_networks.clone(),
     };
     let state = EsclState {
-        devices: device_auth,
+        devices: DeviceAuth::for_listener(auth, &app.branding.name, listener),
         jobs: Arc::clone(&auth.escl_jobs),
         open_networks,
         public_url: Arc::from(auth.public_url.as_str()),

@@ -22,6 +22,11 @@ services:
       # The interfaces to announce on, comma separated; by default every one but loopback,
       # Docker's, virtual machines' and VPNs'.
       # RECTO_DNSSD_INTERFACES: eth0
+      # The name Print dialogs show; the brand name by default.
+      # RECTO_DNSSD_NAME: Office printer
+      # Scan apps that found a scanner this way send no password: let the devices of these
+      # networks scan on the scanners open to everyone (docs/src/how-to/discovery.md).
+      # RECTO_ESCL_OPEN_NETWORKS: 192.168.1.0/24
 
   cups:
     # Docker's port proxy makes recto's requests come from the network's gateway, which

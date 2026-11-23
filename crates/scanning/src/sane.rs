@@ -122,15 +122,6 @@ impl SaneScanners {
         })
     }
 
-    /// The DNS-SD instance names recto advertises its own scanners under. sane-airscan lists a
-    /// scanner it discovered under that name, so such devices are left out of [`scanners`]
-    /// along with those whose model starts with [`escl::MODEL`]. Replaces the previous names.
-    ///
-    /// [`scanners`]: ScannerService::scanners
-    pub fn hide_advertised(&self, names: Vec<String>) {
-        *self.advertised.lock().unwrap() = names;
-    }
-
     async fn current(&self) -> Result<Arc<Worker>, ScanError> {
         let mut slot = self.worker.lock().await;
         if let Some(worker) = slot.as_ref() {
@@ -212,6 +203,13 @@ impl ScannerService for SaneScanners {
     ) -> Result<Vec<ScannedPage>, ScanError> {
         self.ask(|reply| Command::Scan(id.to_owned(), request, true, reply))
             .await
+    }
+
+    /// sane-airscan lists a scanner it discovered under its DNS-SD instance name, so devices
+    /// named after one of recto's own are left out, along with those whose model starts with
+    /// [`escl::MODEL`].
+    fn hide_advertised(&self, names: Vec<String>) {
+        *self.advertised.lock().unwrap() = names;
     }
 }
 

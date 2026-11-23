@@ -117,6 +117,12 @@ for a body over the limit, `429` with `Retry-After: 1` after too many wrong pass
 address (see [Device password limit](accounts.md#device-password-limit)), `503` when the
 database cannot check the password.
 
+On the LAN listener (`RECTO_LAN_LISTEN_ADDRESS`, TLS only), these addresses and the scanners'
+below are the only ones: every other path answers a bare `404`, pages, sign-in and `/health`
+included. There, the URIs in IPP answers are built on the request's `Host`, such as
+`ipps://recto-nas.local:8631/ipp/print`, and a request without a usable `Host` answers `400`.
+Device passwords are accepted from any address, and never `403`, since the connection is TLS.
+
 ### Scanners
 
 Each scanner a device password's owner may use, over eSCL, the protocol of AirScan and Mopria

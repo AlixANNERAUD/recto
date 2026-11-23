@@ -14,6 +14,7 @@ Commands:
   backup                Copy the SQLite database to a new file (use pg_dump for PostgreSQL)
   create-administrator  Create a local administrator; the password is asked twice on a terminal, otherwise read from one line of standard input
   administrator         Grant or remove administration of an existing user
+  dnssd-services        Write the DNS-SD records of the LAN listener as Avahi service files, for a host whose avahi-daemon announces recto while it stays on a bridge network
   help                  Print this message or the help of the given subcommand(s)
 
 Options:
@@ -48,6 +49,12 @@ option given on the command line wins over its variable.
 | `--oidc-administrator-claim <CLAIM>` | `RECTO_OIDC_ADMINISTRATOR_CLAIM` |
 | `--oidc-administrator-value <VALUE>` | `RECTO_OIDC_ADMINISTRATOR_VALUE` |
 | `--oidc-groups-claim <CLAIM>` | `RECTO_OIDC_GROUPS_CLAIM` |
+| `--lan-listen-address <ADDRESS>` | `RECTO_LAN_LISTEN_ADDRESS` |
+| `--lan-tls-certificate <FILE>` | `RECTO_LAN_TLS_CERTIFICATE` |
+| `--lan-tls-key <FILE>` | `RECTO_LAN_TLS_KEY` |
+| `--dnssd <true\|false>` | `RECTO_DNSSD` |
+| `--dnssd-name <NAME>` | `RECTO_DNSSD_NAME` |
+| `--dnssd-interfaces <NAMES>` | `RECTO_DNSSD_INTERFACES` |
 | `--cups-url <URL>` | `RECTO_CUPS_URL` |
 | `--scan-output-dir <DIR>` | `RECTO_SCAN_OUTPUT_DIR` |
 | `--max-upload-size <BYTES>` | `RECTO_MAX_UPLOAD_SIZE` |
@@ -61,7 +68,8 @@ option given on the command line wins over its variable.
 | `--brand-icon <FILE>` | `RECTO_BRAND_ICON` |
 
 Exit status: `0` after a clean shutdown, `1` when it cannot start (a brand setting or file is
-refused, or the database cannot be opened) or stops on an error, `2` for invalid settings (with
+refused, the database cannot be opened, the LAN listener's certificate cannot be read or made, or
+its address or a DNS-SD interface cannot be used) or stops on an error, `2` for invalid settings (with
 a message naming the setting).
 
 ## recto healthcheck
@@ -126,3 +134,31 @@ Makes an existing user an administrator, or with `--remove` takes administration
 Users page, it refuses nothing: it can remove the last administrator, and administration that
 came from the identity provider (which the provider's claim may grant again at the next sign-in).
 It refuses a SQLite database that does not exist.
+
+## recto dnssd-services
+
+```text
+recto dnssd-services [--port <PORT>] <DIR>
+```
+
+Writes what `RECTO_DNSSD` would announce as Avahi service files into `DIR`, created if missing:
+`recto-printer.service`, and `recto-scanner-<scanner>.service` for each scanner open to everyone,
+whose capabilities it reads through SANE as the server does. It removes the
+`recto-scanner-*.service` files of scanners no longer announced, and leaves other files alone.
+The host's avahi-daemon then announces recto from `/etc/avahi/services`, while recto stays on a
+bridge network: see [Let devices find recto](../how-to/discovery.md#keep-the-bridge-network).
+It prints the path of each file written.
+
+The records name no host, so they point at the host's own name, and say the LAN listener is on
+`PORT`: the port published on the host, `8631` by default. Run it again after adding a scanner or
+changing who may use one.
+
+| Option | Variable | Default |
+| --- | --- | --- |
+| `--port <PORT>` | | `8631` |
+| `--public-url <URL>` | `RECTO_PUBLIC_URL` | required |
+| `--dnssd-name <NAME>` | `RECTO_DNSSD_NAME` | the brand name |
+| `--brand-name <NAME>` | `RECTO_BRAND_NAME` | `recto` |
+
+It refuses a SQLite database that does not exist. Without SANE, it writes the printer's file
+alone.

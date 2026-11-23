@@ -65,7 +65,14 @@ use it. Each scanner has two addresses (see [Pages and endpoints](endpoints.md#s
   such as sane-airscan on Linux.
 
 `<scanner>` is a key of 8 hex digits, the same across restarts as long as the scanner's SANE id
-stays. A scanner a person may not use does not exist for their devices.
+stays. A scanner a person may not use does not exist for their devices. The Account page shows the
+personal address of each scanner the person may use, under the public URL, next to a new device
+password.
+
+With `RECTO_DNSSD`, recto also announces the scanners open to everyone on the local network, as
+`_uscans._tcp` services pointing at the LAN listener, under the name `<vendor> <model> (<name>)`
+(see [Let devices find recto](../how-to/discovery.md)). Scan apps that find them that way send
+no password: they scan from the networks of `RECTO_ESCL_OPEN_NETWORKS` (below).
 
 The app's request maps onto the scanner as follows.
 

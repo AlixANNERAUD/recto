@@ -20,7 +20,7 @@ mod tests;
 #[cfg(feature = "service")]
 pub use attributes::{
     DOCUMENT_FORMATS, JobView, JobViewState, PrinterUri, REQUIRED_PRINTER_ATTRIBUTES,
-    VirtualPrinter,
+    URF_SUPPORTED, VirtualPrinter,
 };
 #[cfg(feature = "service")]
 pub use operations::{

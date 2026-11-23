@@ -221,7 +221,7 @@ pub async fn build(
     let state = AppState {
         print: Arc::new(Cups::new(config.cups_url.clone())),
         printer_admin: printer_admin(config),
-        scan: scanners(advertised_scanners(&branding)).await,
+        scan: scanners().await,
         results: Arc::new(results),
         output_dir: config.scan_output_dir.clone(),
         max_upload_size: config.max_upload_size,
@@ -268,22 +268,13 @@ pub async fn build(
     (state, auth)
 }
 
-/// The names recto's own scanners would be found under through SANE, which leaves them out: the
-/// brand name, the DNS-SD instance name until DNS-SD names each scanner.
-fn advertised_scanners(branding: &Branding) -> Vec<String> {
-    vec![branding.name.clone()]
-}
-
-/// The SANE scanners, without recto's own scanners found again under the `advertised` names,
-/// or a stand-in reporting why SANE could not start: printing must keep working on a machine
-/// without scanners or SANE configuration.
-async fn scanners(advertised: Vec<String>) -> Arc<dyn ScannerService> {
+/// The SANE scanners, or a stand-in reporting why SANE could not start: printing must keep
+/// working on a machine without scanners or SANE configuration. DNS-SD tells them the names
+/// recto's own scanners are announced under ([`crate::dnssd::announce`]).
+async fn scanners() -> Arc<dyn ScannerService> {
     // `sane_init` blocks while backends load.
     match tokio::task::spawn_blocking(SaneScanners::start).await {
-        Ok(Ok(scanners)) => {
-            scanners.hide_advertised(advertised);
-            Arc::new(scanners)
-        }
+        Ok(Ok(scanners)) => Arc::new(scanners),
         Ok(Err(error)) => {
             tracing::warn!(%error, "SANE could not start; scanning is off");
             Arc::new(NoScanners(error.to_string()))

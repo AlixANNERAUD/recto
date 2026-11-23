@@ -84,26 +84,26 @@ a printer under **Documents from your devices** on the Account page (see
 2. In recto, on the Account page, press **Revoke** next to the device password. The computer can
    no longer print as you, even with a copy of the address.
 
-## Planned: discovery and scanning
-
-> **In progress.** recto is gaining automatic discovery on the local network and scanning from
-> Linux applications. This section describes them as planned: names, steps and settings may still
-> change.
+## Discovery and scanning
 
 - **Discovered printer.** When your administrator has recto announce itself on the local
-  network, desktops that list network printers, such as GNOME's **Settings > Printers > Add
-  Printer**, show recto. Add it, then give your **Username** and the device password when asked.
+  network (see [Let devices find recto](discovery.md)), desktops that list network printers,
+  such as GNOME's **Settings > Printers > Add Printer**, show recto under the name your
+  administrator chose. Add it, then give your **Username** and the device password when asked.
+  `lpstat -e` or `avahi-browse -rt _ipps._tcp` list it too. Desktops have not all been checked
+  with recto yet: if yours does not show it, add the printer by its address as above.
 - **Scanning.** Linux scanning applications, such as **Document Scanner** (Simple Scan),
   **Skanlite** and `scanimage`, reach network scanners through sane-airscan. Point it at a
-  recto scanner with your personal address, in `/etc/sane.d/airscan.conf`:
+  recto scanner with your personal scan address, in `/etc/sane.d/airscan.conf`:
 
   ```ini
   [devices]
   "recto office" = https://recto.example.org:443/device/<password>/eSCL/<scanner>/, eSCL
   ```
 
-  The Account page will show the scan address of each scanner you may use, with its
+  The Account page shows the personal scan address of each scanner you may use, with its
   `<scanner>` part, next to a new device password. Check with `scanimage -L`, which lists
-  `recto office`. Scanners recto announces on the local network will also appear without this
-  line when your administrator lets your network scan without a password.
+  `recto office`. Scanners recto announces on the local network appear without this line, under
+  `<vendor> <model> (recto)`, when your administrator lets your network scan without a password:
+  sane-airscan sends none to a scanner it discovered.
 - **Removing a scanner.** Delete its line from `airscan.conf` and revoke the device password.

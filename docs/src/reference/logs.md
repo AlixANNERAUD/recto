@@ -19,6 +19,9 @@ only.
 | Level | Message | Fields |
 | --- | --- | --- |
 | info | `listening` | `address` |
+| info | `LAN listener`: the LAN listener's address, and its certificate's SHA-256 fingerprint, as `openssl x509 -fingerprint -sha256` writes it | `address`, `fingerprint` |
+| info | `DNS-SD responder` | `host` (the name announced), `interfaces` |
+| info | `announced over DNS-SD` | `services` (their full names) |
 | info | `scanners listed` | `count` |
 | info | `signed in` | `user` |
 | info | `signed in with a password` | `user` |
@@ -35,6 +38,7 @@ only.
 | info | `job canceled` | `user`, `job` |
 | info | `device access changed`, `device access forgotten` | `by`, `device` |
 | info | `device password created` | `user`, `device_password_id`, `device_name` |
+| info | `no scan addresses: the scanners could not be listed`: the new device password is shown with its printer addresses only | `error` |
 | info | `device password revoked` | `user`, `device_password_id` |
 | info | `device profile downloaded`: the Apple profile of a device password | `user`, `device_password_id`, `device_name` |
 | info | `printer added` | `by`, `printer`, `address` |
@@ -59,6 +63,10 @@ only.
 | info | `orphan held files removed`: documents no held job names, left by a crash or by deleting their owner | `count` |
 | info | `shutting down` | |
 | warn | `listing the scanners failed` | `error` |
+| warn | `RECTO_DNSSD found no interface to announce on` | |
+| warn | `listing the scanners to announce failed`, `a scanner is not announced`, `the scanners did not answer in time and are not announced`: the printer is announced without them | `error`, `scanner` |
+| warn | `withdrawing the DNS-SD services failed` | `error` |
+| warn | `the LAN listener could not accept a connection`: out of file descriptors, most likely; it tries again after a second | `error` |
 | warn | `the printing service failed`, `the printing service refused` | `error` |
 | warn | `scanning failed` | `error`, `user` |
 | warn | `eSCL scanning failed`, `escl scan failed` | `error`, `user`, `scanner` |
@@ -92,6 +100,8 @@ only.
 | warn | `printer administration failed` | `error`, and `by` and `printer` for a printer form |
 | warn | `listing the printers for the quotas page failed`: the page offers the printers rules already name | `error` |
 | error | `starting the session failed` | `error` |
+| error | `announcing recto over DNS-SD failed`: recto runs on without announcing | `error` |
+| error | `reading the scanner access rules to announce failed`: no scanner is announced | `error` |
 | error | `creating a device password failed`, `revoking a device password failed`, `checking a device password failed`: the last answers the device, or the profile download, `503` | `error` |
 | error | `password sign-in failed`, `changing a password failed`, `changing a user failed` | `error` |
 | error | `writing the ledger entry failed` | `error` |
@@ -129,7 +139,8 @@ Tokens, cookies, passwords, device passwords and file contents are never logged,
 a request to a personal address, which holds a device password: log lines name the device
 password's id. A device
 password refused again from memory is logged at `debug` only (`device password refused again`),
-so a phone polling with a revoked password does not fill the log. The password of a PostgreSQL URL
+so a phone polling with a revoked password does not fill the log, and so are TLS handshakes on the
+LAN listener that fail or time out (`LAN TLS handshake failed`, `LAN TLS handshake timed out`). The password of a PostgreSQL URL
 is hidden in messages.
 
 ## Health

@@ -51,6 +51,23 @@ async fn main() -> ExitCode {
                 },
             }
         }
+        Command::DnssdServices(options) => {
+            // Never start a database here: a wrong path would announce every scanner as open.
+            match commands::require_existing_database(&options.database.database_url) {
+                Err(error) => Err(error.into()),
+                Ok(()) => match open_for_command(&options.database).await {
+                    Ok(database) => commands::dnssd_services(&database, &options)
+                        .await
+                        .map(|written| {
+                            for path in written {
+                                println!("{}", path.display());
+                            }
+                        })
+                        .map_err(Into::into),
+                    Err(error) => Err(error.into()),
+                },
+            }
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

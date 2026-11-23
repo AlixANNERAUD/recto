@@ -96,17 +96,21 @@ a printer under **Documents from your devices** on the Account page (see
 If you ticked **Remember this password in my keychain**, delete the entry in **Keychain Access**
 too.
 
-## Planned: discovery and scanning
+## Discovery and scanning
 
-> **In progress.** recto is gaining automatic discovery on the local network and scanning from
-> the Mac. This section describes them as planned: names, steps and settings may still change.
+When your administrator has recto announce itself on the local network (see
+[Let devices find recto](discovery.md)), the Mac finds it by itself.
 
-- **Discovered printer.** When your administrator has recto announce itself on the local
-  network, recto appears under **System Settings > Printers & Scanners > Add Printer, Scanner or
-  Fax**, on the default tab. Select it and press **Add**. The Mac asks for a name and a password
-  the first time you print: give your **Username** and the device password, and keep them in the
-  keychain.
-- **Scanning.** recto's scanners will appear in **Image Capture** and in **Printers & Scanners**
-  when recto announces them on the local network. The Mac does not send a password to a
-  scanner it discovered, so this needs your administrator to let your network scan without one;
-  only scanners open to everyone are offered that way.
+> **Not yet checked on a Mac.** recto announces its printer and scanners as AirPrint and AirScan
+> devices do, but adding them this way has not yet passed its checks on real Macs.
+
+- **Discovered printer.** On the same network as recto, it appears under **System Settings >
+  Printers & Scanners > Add Printer, Scanner or Fax**, on the default tab, under the name your
+  administrator chose. Select it and press **Add**. The first time you print, the Mac asks for a
+  name and a password: give your **Username** and the device password, and keep them in the
+  keychain. The first connection also has the Mac accept recto's own certificate on the local
+  network, which it remembers.
+- **Scanning.** recto's scanners open to everyone appear in **Image Capture** and in **Printers
+  & Scanners**. The Mac does not send a password to a scanner it discovered, so scanning needs
+  your administrator to let your network scan without one; scanners limited to some groups are
+  not announced.

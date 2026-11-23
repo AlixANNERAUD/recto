@@ -1,8 +1,7 @@
 # Print from an iPhone or iPad
 
 > **Experimental.** Printing from iOS and iPadOS through AirPrint has not yet passed its checks on
-> real devices, and parts of it are still being built (below). Printing from recto's Print page in
-> Safari always works.
+> real devices. Printing from recto's Print page in Safari always works.
 
 ## Print from recto in Safari
 
@@ -51,13 +50,10 @@ or NAT loopback (it accepts its own public address from inside). Without either,
 only away from home.
 
 **As a discovered printer**, when your administrator has recto announce itself on the local
-network:
-
-> **In progress.** Announcing recto on the local network is still being built. This paragraph
-> describes it as planned: names, steps and settings may still change.
-
-recto appears in the **Print** menu's printer list while you are on that network. The first
-time, iOS asks for a name and a password: give your **Username** and the device password.
+network (see [Let devices find recto](discovery.md)): recto appears in the **Print** menu's
+printer list, under the name your administrator chose, while you are on that network. The first
+time, iOS asks for a name and a password: give your **Username** and the device password. Away
+from that network it is not listed; the profile works everywhere.
 
 ## Print
 
