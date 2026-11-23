@@ -4,12 +4,12 @@
 //! before it is sent.
 
 use leptos::prelude::*;
-use recto_printing::{Capabilities, ColorMode, Printer, Sides};
+use recto_printing::{Capabilities, Printer, Sides};
 
 use super::browser;
 use crate::{
     components::{
-        printer::{PrinterStatus, option_label},
+        printer::{PrinterStatus, color_label, option_label, sides_label},
         ui::{ButtonVariant, Card, FILE_INPUT, Field, INPUT, button_class},
     },
     display::file_size,
@@ -24,21 +24,6 @@ fn preselected(printers: &[Printer]) -> String {
         .or_else(|| printers.first())
         .map(|printer| printer.name.clone())
         .unwrap_or_default()
-}
-
-fn sides_label(sides: Sides) -> &'static str {
-    match sides {
-        Sides::OneSided => t!("print.sides.one_sided"),
-        Sides::TwoSidedLongEdge => t!("print.sides.long_edge"),
-        Sides::TwoSidedShortEdge => t!("print.sides.short_edge"),
-    }
-}
-
-fn color_label(mode: ColorMode) -> &'static str {
-    match mode {
-        ColorMode::Color => t!("print.color.color"),
-        ColorMode::Monochrome => t!("print.color.monochrome"),
-    }
 }
 
 /// Copies, duplex and color, each only when the printer offers a choice. A missing field means

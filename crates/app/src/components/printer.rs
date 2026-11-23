@@ -1,10 +1,27 @@
-//! A printer's status as the Print and Printers pages show it: state, reasons and supplies.
+//! A printer as the pages show it: its state, reasons and supplies, and the names of its options.
 
 use leptos::prelude::*;
-use recto_printing::{PrinterState, ReasonKind, Severity, StateReason, Supply};
+use recto_printing::{ColorMode, PrinterState, ReasonKind, Severity, Sides, StateReason, Supply};
 
 use super::ui::{Badge, Tone};
 use crate::{t, tf};
+
+/// The name of a duplex choice, as the print and release forms offer it.
+pub fn sides_label(sides: Sides) -> &'static str {
+    match sides {
+        Sides::OneSided => t!("print.sides.one_sided"),
+        Sides::TwoSidedLongEdge => t!("print.sides.long_edge"),
+        Sides::TwoSidedShortEdge => t!("print.sides.short_edge"),
+    }
+}
+
+/// The name of a color choice, as the print and release forms offer it.
+pub fn color_label(mode: ColorMode) -> &'static str {
+    match mode {
+        ColorMode::Color => t!("print.color.color"),
+        ColorMode::Monochrome => t!("print.color.monochrome"),
+    }
+}
 
 /// The overall state in one word, and its tone. An offline printer says so whatever its IPP
 /// state, since that is what decides whether the job comes out.

@@ -9,12 +9,15 @@
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_query_map;
-use recto_printing::Printer;
+use recto_printing::{ColorMode, Printer, Sides};
 
 use super::{failure_alert, refusal_alert};
 use crate::{
-    components::ui::{
-        Alert, Badge, ButtonVariant, Card, Field, INPUT, Tone, button_class, small_button_class,
+    components::{
+        printer::{color_label, sides_label},
+        ui::{
+            Alert, Badge, ButtonVariant, Card, Field, INPUT, Tone, button_class, small_button_class,
+        },
     },
     currency::Currency,
     display::{iso_time, relative_time, unix_now},
@@ -304,14 +307,11 @@ fn ReleaseForm(row: HeldRow, printers: Vec<String>, default: Option<String>) -> 
     let id = row.id;
     let field = move |name: &str| format!("held-{id}-{name}");
     let sides = [
-        ("one-sided", t!("print.sides.one_sided")),
-        ("two-sided-long-edge", t!("print.sides.long_edge")),
-        ("two-sided-short-edge", t!("print.sides.short_edge")),
+        Sides::OneSided,
+        Sides::TwoSidedLongEdge,
+        Sides::TwoSidedShortEdge,
     ];
-    let colors = [
-        ("color", t!("print.color.color")),
-        ("monochrome", t!("print.color.monochrome")),
-    ];
+    let colors = [ColorMode::Color, ColorMode::Monochrome];
     let chosen_sides = row.sides.clone();
     // On wide screens, columns sized for their longest choice: "Two-sided, flip on short edge"
     // and "Black and white" are cut in equal columns.
@@ -352,11 +352,11 @@ fn ReleaseForm(row: HeldRow, printers: Vec<String>, default: Option<String>) -> 
                 <select id=field("sides") name="sides" class=INPUT>
                     {sides
                         .into_iter()
-                        .map(|(value, label)| {
-                            let selected = chosen_sides.as_deref() == Some(value);
+                        .map(|sides| {
+                            let selected = chosen_sides.as_deref() == Some(sides.keyword());
                             view! {
-                                <option value=value selected=selected>
-                                    {label}
+                                <option value=sides.keyword() selected=selected>
+                                    {sides_label(sides)}
                                 </option>
                             }
                         })
@@ -369,11 +369,11 @@ fn ReleaseForm(row: HeldRow, printers: Vec<String>, default: Option<String>) -> 
                     <option value="">{t!("jobs.held.color_when_possible")}</option>
                     {colors
                         .into_iter()
-                        .map(|(value, label)| {
-                            let selected = chosen_color.as_deref() == Some(value);
+                        .map(|mode| {
+                            let selected = chosen_color.as_deref() == Some(mode.keyword());
                             view! {
-                                <option value=value selected=selected>
-                                    {label}
+                                <option value=mode.keyword() selected=selected>
+                                    {color_label(mode)}
                                 </option>
                             }
                         })
