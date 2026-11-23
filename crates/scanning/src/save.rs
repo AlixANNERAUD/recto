@@ -39,20 +39,22 @@ pub fn save_to_folder(dir: &Path, file_name: &str, bytes: &[u8]) -> Result<PathB
         return Err(storage(e));
     }
 
-    let result = publish(dir, file_name, stem, ext, &tmp).map_err(storage);
+    let result = publish(dir, file_name, stem, ext, &tmp, bytes).map_err(storage);
     // Gone already when it was renamed into place.
     let _ = fs::remove_file(&tmp);
     result
 }
 
-/// Gives the finished temp file its final name, from the best way to the last resort. None of
-/// them ever replaces an existing file; a taken name moves on to the next suffix.
+/// Gives the finished temp file, which holds `bytes`, its final name, from the best way to the
+/// last resort. None of them ever replaces an existing file; a taken name moves on to the next
+/// suffix.
 fn publish(
     dir: &Path,
     file_name: &str,
     stem: &str,
     ext: Option<&str>,
     tmp: &Path,
+    bytes: &[u8],
 ) -> std::io::Result<PathBuf> {
     // An atomic rename that refuses to replace: folder watchers see a file moved in
     // (`IN_MOVED_TO`), which every consume-folder watcher handles.
@@ -70,7 +72,7 @@ fn publish(
         Err(e) if links_unsupported(&e) => {}
         other => return other,
     }
-    publish_without_link(dir, file_name, tmp)
+    publish_without_link(dir, file_name, stem, ext, bytes)
 }
 
 /// Tries `put` on `file_name`, then `stem-1.ext`, `stem-2.ext`... while the name is taken.
@@ -127,15 +129,17 @@ fn links_unsupported(e: &std::io::Error) -> bool {
     ) || e.raw_os_error() == Some(95)
 }
 
-/// Last resort when neither renames nor hard links work: copy the finished temp file straight to the target
+/// Last resort when neither renames nor hard links work: write the scan straight to the target
 /// with `create_new`, which still never replaces a file. The trade-off is that the target is
 /// briefly partial; consumers such as Paperless act on close-after-write or on a stable file,
 /// so that is acceptable where a no-replace atomic publish is impossible.
-fn publish_without_link(dir: &Path, file_name: &str, tmp: &Path) -> std::io::Result<PathBuf> {
-    let bytes = fs::read(tmp)?;
-    let path = Path::new(file_name);
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("scan");
-    let ext = path.extension().and_then(|s| s.to_str());
+fn publish_without_link(
+    dir: &Path,
+    file_name: &str,
+    stem: &str,
+    ext: Option<&str>,
+    bytes: &[u8],
+) -> std::io::Result<PathBuf> {
     for n in 0.. {
         let target = dir.join(candidate_name(file_name, stem, ext, n));
         match fs::OpenOptions::new()
@@ -145,7 +149,7 @@ fn publish_without_link(dir: &Path, file_name: &str, tmp: &Path) -> std::io::Res
         {
             Ok(mut f) => {
                 // The file is ours (create_new), so a failed write may delete it safely.
-                if let Err(e) = f.write_all(&bytes).and_then(|()| f.sync_all()) {
+                if let Err(e) = f.write_all(bytes).and_then(|()| f.sync_all()) {
                     drop(f);
                     let _ = fs::remove_file(&target);
                     return Err(e);
@@ -195,11 +199,10 @@ mod tests {
     #[test]
     fn fallback_suffixes_clashes_and_never_overwrites() {
         let dir = temp_dir();
-        let tmp = dir.path().join(".src.tmp");
-        fs::write(&tmp, b"new").unwrap();
         fs::write(dir.path().join("scan.pdf"), b"original").unwrap();
-        let a = publish_without_link(dir.path(), "scan.pdf", &tmp).unwrap();
-        let b = publish_without_link(dir.path(), "scan.pdf", &tmp).unwrap();
+        let publish = || publish_without_link(dir.path(), "scan.pdf", "scan", Some("pdf"), b"new");
+        let a = publish().unwrap();
+        let b = publish().unwrap();
         assert_eq!(a, dir.path().join("scan-1.pdf"));
         assert_eq!(b, dir.path().join("scan-2.pdf"));
         assert_eq!(fs::read(dir.path().join("scan.pdf")).unwrap(), b"original");
@@ -229,7 +232,7 @@ mod tests {
         let tmp = dir.path().join(".scan.tmp");
         fs::write(&tmp, b"new").unwrap();
         fs::write(dir.path().join("scan.pdf"), b"original").unwrap();
-        let saved = publish(dir.path(), "scan.pdf", "scan", Some("pdf"), &tmp).unwrap();
+        let saved = publish(dir.path(), "scan.pdf", "scan", Some("pdf"), &tmp, b"new").unwrap();
         assert_eq!(saved, dir.path().join("scan-1.pdf"));
         assert!(!tmp.exists(), "renamed, not linked");
         assert_eq!(fs::read(&saved).unwrap(), b"new");
