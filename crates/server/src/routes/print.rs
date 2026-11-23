@@ -22,7 +22,7 @@ use recto_app::{
 use recto_domain::{
     access::{self, DeviceKind, Usable},
     database::begin_write,
-    jobs,
+    held, jobs,
     ledger::{self, NewEntry},
     prices::{self, Prices},
     quotas::{self, Metric, Rule, Verdict},
@@ -127,10 +127,14 @@ pub(crate) struct Choices {
     pub page_ranges: Option<String>,
 }
 
-/// A held job being released. Its row is claimed by the caller before the document is printed.
-#[expect(dead_code, reason = "held jobs cannot be released yet")]
+/// A held job being released, claimed by the caller ([`held::claim`]) before the document is
+/// printed. Its ledger entry is never best effort: the job is marked released in the
+/// transaction that writes the entry, so it can never be printed twice, and a release whose
+/// entry cannot be written is refused.
 pub(crate) struct HeldClaim {
     pub id: i64,
+    /// The claim the release holds, which marking it released or returning it must name.
+    pub claim: i64,
 }
 
 async fn submit_form(
@@ -161,13 +165,109 @@ async fn submit_form(
 /// Prints a document for a user: the access rules, the page count, the quota check and the
 /// ledger entry, then CUPS. The print form and the release of a held job both come here, so
 /// neither can print around the other's checks.
+///
+/// A held job refused before its ledger entry is committed goes back to `held` with the
+/// refusal; one CUPS refuses goes back with its entry refunded, in one transaction. One CUPS
+/// may have queued (`Unconfirmed`) stays released and counted, like a job of the form.
 pub(crate) async fn print_document(
     state: &AppState,
     user: &User,
     document: Document,
     choices: &Choices,
-    _held: Option<HeldClaim>,
+    held: Option<HeldClaim>,
 ) -> Result<Submitted, Rejected> {
+    let held = held.as_ref();
+    let (request, entry_id, over) = match counted(state, user, document, choices, held).await {
+        Ok(counted) => counted,
+        Err(rejected) => {
+            if let Some(held) = held {
+                give_back(state, held, &rejected).await;
+            }
+            return Err(rejected);
+        }
+    };
+    let id = match state.print.submit(request).await {
+        Ok(id) => id,
+        // CUPS may have queued the job and printed it: refunding it now would let it print for
+        // free. The entry stays counted, and the sweep refunds it if CUPS never shows it.
+        Err(PrintError::Unconfirmed(reason)) => {
+            tracing::warn!(
+                user = user.username,
+                entry = entry_id,
+                reason,
+                "the printing service did not confirm the job"
+            );
+            return Err(Refusal::Unconfirmed.into());
+        }
+        Err(error) => {
+            let refusal = refusal(error);
+            // CUPS turned the job down or never got it: nothing prints, so it must not count.
+            match (held, entry_id) {
+                (Some(held), Some(entry_id)) => {
+                    if let Err(error) = held::return_refunded(
+                        &state.database,
+                        held.id,
+                        held.claim,
+                        entry_id,
+                        refusal.code(),
+                        chrono::Utc::now(),
+                    )
+                    .await
+                    {
+                        tracing::error!(%error, "returning a refused held job failed");
+                    }
+                }
+                (None, Some(entry_id)) => {
+                    if let Err(error) = ledger::refund(&state.database, entry_id).await {
+                        tracing::error!(%error, "refunding the ledger entry failed");
+                    }
+                }
+                _ => {}
+            }
+            return Err(refusal.into());
+        }
+    };
+    // The job is printing already: failing to link it must not tell the user it failed.
+    if let Some(entry_id) = entry_id
+        && let Err(error) = ledger::attach(&state.database, entry_id, id).await
+    {
+        tracing::error!(
+            %error,
+            job = id,
+            "linking the CUPS job to its ledger entry failed"
+        );
+    }
+    Ok(Submitted { job: id, over })
+}
+
+/// Puts a held job refused before its ledger entry back to `held`, with why.
+async fn give_back(state: &AppState, held: &HeldClaim, rejected: &Rejected) {
+    let code = match rejected {
+        Rejected::Quota(_) => Refusal::Quota.code(),
+        Rejected::Refusal(refusal) => refusal.code(),
+    };
+    if let Err(error) = held::unclaim(
+        &state.database,
+        held.id,
+        held.claim,
+        Some(code),
+        chrono::Utc::now(),
+    )
+    .await
+    {
+        tracing::error!(%error, "returning a refused held job failed");
+    }
+}
+
+/// Everything before CUPS: the checks, and the ledger entry written. Returns the request to
+/// send, the entry's id when there is one, and the soft rules the job goes over.
+async fn counted(
+    state: &AppState,
+    user: &User,
+    document: Document,
+    choices: &Choices,
+    held: Option<&HeldClaim>,
+) -> Result<(PrintRequest, Option<i64>, Vec<i64>), Rejected> {
     let Document {
         name: file_name,
         bytes: document,
@@ -247,7 +347,7 @@ pub(crate) async fn print_document(
         uncounted,
         priced,
     };
-    let (entry_id, over) = enter(state, user, entry, prepared).await?;
+    let (entry_id, over) = enter(state, user, entry, prepared, held).await?;
     let request = PrintRequest {
         printer: printer.name,
         document,
@@ -256,40 +356,7 @@ pub(crate) async fn print_document(
         user: user.username.clone(),
         options,
     };
-    let id = match state.print.submit(request).await {
-        Ok(id) => id,
-        // CUPS may have queued the job and printed it: refunding it now would let it print for
-        // free. The entry stays counted, and the sweep refunds it if CUPS never shows it.
-        Err(PrintError::Unconfirmed(reason)) => {
-            tracing::warn!(
-                user = user.username,
-                entry = entry_id,
-                reason,
-                "the printing service did not confirm the job"
-            );
-            return Err(Refusal::Unconfirmed.into());
-        }
-        Err(error) => {
-            // CUPS turned the job down or never got it: nothing prints, so it must not count.
-            if let Some(entry_id) = entry_id
-                && let Err(error) = ledger::refund(&state.database, entry_id).await
-            {
-                tracing::error!(%error, "refunding the ledger entry failed");
-            }
-            return Err(refusal(error).into());
-        }
-    };
-    // The job is printing already: failing to link it must not tell the user it failed.
-    if let Some(entry_id) = entry_id
-        && let Err(error) = ledger::attach(&state.database, entry_id, id).await
-    {
-        tracing::error!(
-            %error,
-            job = id,
-            "linking the CUPS job to its ledger entry failed"
-        );
-    }
-    Ok(Submitted { job: id, over })
+    Ok((request, entry_id, over))
 }
 
 /// What a job was prepared under, before its write transaction.
@@ -308,16 +375,19 @@ struct Prepared {
 ///
 /// Whether the rules are enforced is decided on the rules read inside the transaction, so a rule
 /// enabled while the job was prepared applies to it. With a rule enabled, any failure refuses
-/// the job. Without one, a ledger that cannot be written does not stop printing. A failure before
-/// the rules are read again is judged by the rules the job was prepared under.
+/// the job. Without one, a ledger that cannot be written does not stop printing, except for a
+/// held job: it is marked released in this transaction ([`held::mark_released`]), so any failure
+/// refuses it. A failure before the rules are read again is judged by the rules the job was
+/// prepared under.
 async fn enter(
     state: &AppState,
     user: &User,
     entry: NewEntry,
     prepared: Prepared,
+    held: Option<&HeldClaim>,
 ) -> Result<(Option<i64>, Vec<i64>), Rejected> {
     let unchecked = |error: recto_domain::Error| {
-        if prepared.enforced {
+        if prepared.enforced || held.is_some() {
             Err(closed("checking the print quotas")(error).into())
         } else {
             tracing::error!(%error, "writing the ledger entry failed");
@@ -339,12 +409,17 @@ async fn enter(
     };
     if !rules.iter().any(|rule| rule.enabled) {
         let entered = async {
-            let id = ledger::insert(&transaction, entry, chrono::Utc::now()).await?;
+            let now = chrono::Utc::now();
+            let id = ledger::insert(&transaction, entry, now).await?;
+            if let Some(held) = held {
+                held::mark_released(&transaction, held.id, held.claim, id, now).await?;
+            }
             transaction.commit().await?;
             Ok::<_, recto_domain::Error>(id)
         };
         return match entered.await {
             Ok(id) => Ok((Some(id), Vec::new())),
+            Err(error) if held.is_some() => Err(lost_or_closed(error)),
             Err(error) => {
                 tracing::error!(%error, "writing the ledger entry failed");
                 Ok((None, Vec::new()))
@@ -388,6 +463,9 @@ async fn enter(
             Verdict::Allowed { warnings } => warnings,
         };
         let id = ledger::insert(&transaction, entry, now).await?;
+        if let Some(held) = held {
+            held::mark_released(&transaction, held.id, held.claim, id, now).await?;
+        }
         Ok::<_, recto_domain::Error>(Ok((id, warnings)))
     }
     .await;
@@ -404,7 +482,20 @@ async fn enter(
         }
         // Dropping the transaction rolls it back.
         Ok(Err(rule)) => Err(Rejected::Quota(rule)),
+        Err(error) if held.is_some() => Err(lost_or_closed(error)),
         Err(error) => Err(failed(error).into()),
+    }
+}
+
+/// Why a held job's ledger transaction failed: the claim was lost (the sweep returned the job
+/// and another release took it), or the database failed. Either way nothing was written.
+fn lost_or_closed(error: recto_domain::Error) -> Rejected {
+    match error {
+        recto_domain::Error::NotFound => {
+            tracing::warn!("a held job's release lost its claim");
+            Refusal::HeldGone.into()
+        }
+        error => closed("writing the ledger entry of a held job")(error).into(),
     }
 }
 

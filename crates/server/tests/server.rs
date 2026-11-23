@@ -4376,3 +4376,6 @@ mod held;
 
 #[path = "server/ipp.rs"]
 mod ipp_printer;
+
+#[path = "server/release.rs"]
+mod release;

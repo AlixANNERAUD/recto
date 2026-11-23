@@ -1,4 +1,4 @@
-//! Why a print or cancel form was refused. The server redirects back with the refusal's code in
+//! Why a print, cancel or release form was refused. The server redirects back with the refusal's code in
 //! the `error` query parameter (`/?error=too_large`), and the page shows its message. Only codes
 //! travel in the address, so a crafted link cannot put arbitrary text on the page.
 
@@ -28,10 +28,12 @@ pub enum Refusal {
     Uncountable,
     /// Quota rules count pages and recto was busy counting other documents.
     CountingBusy,
+    /// A held job is no longer waiting: released, deleted or expired.
+    HeldGone,
 }
 
 impl Refusal {
-    const ALL: [Refusal; 18] = [
+    const ALL: [Refusal; 19] = [
         Refusal::TooLarge,
         Refusal::NoFile,
         Refusal::EmptyFile,
@@ -50,6 +52,7 @@ impl Refusal {
         Refusal::Quota,
         Refusal::Uncountable,
         Refusal::CountingBusy,
+        Refusal::HeldGone,
     ];
 
     /// The value of the `error` query parameter.
@@ -73,6 +76,7 @@ impl Refusal {
             Refusal::Quota => "quota",
             Refusal::Uncountable => "uncountable",
             Refusal::CountingBusy => "counting_busy",
+            Refusal::HeldGone => "held_gone",
         }
     }
 
@@ -101,6 +105,7 @@ impl Refusal {
             Refusal::Quota => t!("print.errors.quota"),
             Refusal::Uncountable => t!("print.errors.uncountable"),
             Refusal::CountingBusy => t!("print.errors.counting_busy"),
+            Refusal::HeldGone => t!("print.errors.held_gone"),
         }
         .to_string()
     }

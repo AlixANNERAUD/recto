@@ -138,6 +138,13 @@ documents, and a device sees only what it sent itself, so a leaked phone passwor
 of what the person printed from their laptop. Whoever reads the data volume or its backups reads
 the documents waiting there: keep it as private as the database.
 
+Printing one goes through the same printer access rules, quotas and ledger as an upload on the
+Print page. The job is marked printed in the database transaction that counts it, and a held job
+whose count cannot be written is not printed, quota rules or not: a document from a device never
+prints uncounted, nor twice. Its owner's preview is sent with `Cache-Control: no-store` and
+`X-Content-Type-Options: nosniff`, so browsers keep no copy and never read it as another type,
+but without the sandbox of the brand logo, which would stop the browser's PDF viewer.
+
 Limits keep a device from filling the disk: a document is at most `RECTO_MAX_UPLOAD_SIZE`, and
 each person may have at most 20 waiting and 10 times that size in all, checked before anything
 is written. A body over the limit is refused without being kept. recto authenticates before

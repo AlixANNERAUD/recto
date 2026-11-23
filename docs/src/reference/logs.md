@@ -47,6 +47,9 @@ only.
 | info | `usage exported` | `by` (who downloaded it), `export` (the file name), `from`, `to` |
 | info | `job held`: a computer or phone sent a document, kept until its owner releases it | `user`, `device_password_id`, `job`, `pages` (absent when the PDF could not be counted), `format` |
 | info | `held job canceled by its device`: before its document arrived | `user`, `device_password_id`, `job` |
+| info | `held job released` | `user`, `held_job`, `job` (the CUPS job), `printer` |
+| info | `held job refused by a quota` | `user`, `rule` |
+| info | `held job deleted` | `user`, `held_job` |
 | info | `held jobs expired`: documents sent from computers and phones that nobody released in time, deleted | `count` |
 | info | `held jobs whose document never came were removed`: a device started a job and never sent its document | `count` |
 | info | `orphan held files removed`: documents no held job names, left by a crash or by deleting their owner | `count` |
@@ -72,6 +75,8 @@ only.
 | warn | `held jobs whose release never finished are held again`: recto stopped during a release, before the job was counted | `count` |
 | warn | `removing a held document failed`, `removing held documents failed`, `listing the held documents failed`: the next sweep tries again | `error`, and `file` or `dir` |
 | warn | `removing a held document that was not recorded failed`: the orphan sweep removes it within the hour | |
+| warn | `removing a released document failed`, `removing a deleted held document failed`: the sweep removes it | `job` |
+| warn | `a held job's release lost its claim`: a release took longer than 15 minutes and another took over; nothing was printed or counted by this one | |
 | warn | `printer administration is off` | `error` |
 | warn | `reading a job state failed` | `error`, `job` |
 | warn | `refunded ledger entries CUPS never received` | `count` |
@@ -104,6 +109,10 @@ only.
 | error | `exporting the usage failed`: the download answers `503` | `error` |
 | error | `an IPP request failed`: the device is answered `server-error-internal-error` | `error`, `user`, `device_password_id` |
 | error | `writing a held document failed`: the device is answered `server-error-internal-error` | `error` |
+| error | `listing the held jobs failed`: the Jobs page shows the error instead of the documents waiting | `error` |
+| error | `reading a held job failed`, `claiming a held job failed`, `reading a held document failed`, `deleting a held job failed` | `error`, `job` |
+| error | `writing the ledger entry of a held job failed`: the document is not printed and stays waiting | `error` |
+| error | `returning a refused held job failed`, `returning a held job failed`: the sweep returns it within 15 minutes, unless it has a ledger entry | `error` |
 | error | `sweeping the held jobs failed`, `reading the held documents' names failed`: the next sweep tries again | `error` |
 
 Commands such as `recto create-administrator` write their messages as text.

@@ -235,12 +235,24 @@ async fn a_refused_release_returns_the_job() {
     assert_eq!(held.state, HeldState::Held);
     assert_eq!(held.refusal.as_deref(), Some("quota"));
 
-    // Refused by CUPS after the ledger: the entry is refunded and the job returned.
+    // Refused by CUPS after the ledger: the entry is refunded and the job returned, together.
     let job = claim(&database, alice, id, noon()).await.unwrap().unwrap();
     // A new attempt forgets the last refusal.
     assert_eq!(job.refusal, None);
-    release(&database, &job, noon()).await.unwrap();
+    let entry = release(&database, &job, noon()).await.unwrap();
+    // A released job never goes back by a plain unclaim: it has a ledger entry.
     unclaim(&database, id, job.claim, Some("refused"), noon())
+        .await
+        .unwrap();
+    assert_eq!(state(&database, id).await, Some(HeldState::Released));
+    // Nor for another entry than its own.
+    assert!(matches!(
+        return_refunded(&database, id, job.claim, entry + 1, "refused", noon()).await,
+        Err(Error::NotFound)
+    ));
+    assert_eq!(state(&database, id).await, Some(HeldState::Released));
+    assert!(!refunded(&database, entry).await);
+    return_refunded(&database, id, job.claim, entry, "refused", noon())
         .await
         .unwrap();
     let held = get(&database, alice, id).await.unwrap().unwrap();
@@ -248,6 +260,16 @@ async fn a_refused_release_returns_the_job() {
     assert_eq!(held.ledger_entry_id, None);
     assert_eq!(held.refusal.as_deref(), Some("refused"));
     assert_eq!(held.file.as_deref(), Some("a"));
+    assert!(refunded(&database, entry).await);
+}
+
+async fn refunded(database: &DatabaseConnection, entry: i64) -> bool {
+    print_jobs::Entity::find_by_id(entry)
+        .one(database)
+        .await
+        .unwrap()
+        .unwrap()
+        .refunded
 }
 
 #[tokio::test]

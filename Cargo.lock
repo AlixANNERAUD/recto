@@ -4051,6 +4051,7 @@ dependencies = [
  "recto-scanning",
  "sea-orm",
  "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "uuid",

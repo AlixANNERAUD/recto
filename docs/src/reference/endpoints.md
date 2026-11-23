@@ -12,7 +12,7 @@ instead. A single sign-on user without the required claim, or disabled, is sent 
 | --- | --- |
 | `/` | Print: the print form, the chosen printer's status, and what the user has left of each quota rule that applies to them. `?error=<code>` shows why the last job was refused, with `&rule=<id>` for a quota. |
 | `/printers` | Printers: every printer the user may use, with its state and supplies. |
-| `/jobs` | Jobs: the print queue, with Cancel buttons, and the pages and cost of each job to its owner and to administrators. `?submitted=<id>` confirms a job, with `&over=<id>,<id>` naming the soft quota rules it went over. |
+| `/jobs` | Jobs: the documents waiting for you from your computers and phones (see [Held jobs](printing.md#held-jobs)), then the print queue, with Cancel buttons, and the pages and cost of each job to its owner and to administrators. `?submitted=<id>` confirms a job, with `&over=<id>,<id>` naming the soft quota rules it went over; `?error=<code>` shows why a cancel or a release was refused, with `&rule=<id>` for a quota; `?done=deleted` confirms a deleted document. |
 | `/scan` | Scan: scanners, options, preview and results. Needs JavaScript. |
 | `/account` | Account: change your password, for users with a password while local accounts are on, and keep your [device passwords](accounts.md#device-passwords), for everyone while `RECTO_OS_INTEGRATION` is on. `?changed=1` confirms a password change and `?done=revoked` a revoked device password. |
 | `/administration` | Redirects to `/administration/users`. Administrators only. |
@@ -36,6 +36,9 @@ These work without JavaScript and accept only requests from recto's own pages (s
 | Method and path | Does |
 | --- | --- |
 | `POST /print` | Sends the uploaded file to a printer, then redirects to `/jobs?submitted=<id>`, with `&over=<rule id>,<rule id>` when the job went over soft quota rules. A refused job redirects to `/?error=<code>`: `quota` with `&rule=<id>` for a hard quota rule, `uncountable` or `counting_busy` when a quota needs the pages of a PDF recto could not count, `unavailable` when the quota rules cannot be read, or the database fails while a rule is enabled, `unconfirmed` when CUPS may have received the job but did not confirm it (the job stays counted and may print). See [Quotas](quotas.md). |
+| `GET /jobs/held/{id}/document` | A document waiting for you, shown in the browser (`Content-Disposition: inline`), with its type, `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. |
+| `POST /jobs/held/{id}/release` | Prints a document waiting for you. Fields: `printer`, and `copies`, `sides`, `color_mode`, `page_ranges` as for `POST /print`, empty for the printer's default. Redirects to `/jobs?submitted=<id>`, or `/jobs?error=<code>` with the codes of `POST /print` (`&rule=<id>` for a quota), and `held_gone` when the document is no longer waiting: printed, being printed, deleted or expired. |
+| `POST /jobs/held/{id}/delete` | Deletes a document waiting for you, then redirects to `/jobs?done=deleted`; one being printed stays, with `/jobs?error=held_gone`. |
 | `POST /jobs/{id}/cancel` | Cancels a job, then redirects to `/jobs`. With `RECTO_JOB_VISIBILITY=own`, a job the user may not see redirects to `/jobs?error=job_not_found`, as a missing one does. |
 | `GET /scan/results/{id}` | The result of a scan, for the preview image. |
 | `GET /scan/results/{id}/download` | The scan as a file download. |
@@ -80,6 +83,11 @@ not above 0 or over 1000000000, a reason empty or over 200 characters, or a fiel
 grant of another user's rule, of a pool rule through a user's address, or of a rule that is not
 a pool through the Quotas page; `404` for a rule that does not exist; `503` when the database
 fails. A refused rule form keeps what was typed, and the form of the rule it changes is open.
+
+The three addresses of a held document answer `404`, with the not-found page, to anyone but its
+owner, administrators included, as for one that does not exist. They work whether or not
+`RECTO_OS_INTEGRATION` is on, so documents sent before it was turned off can still be printed or
+deleted.
 
 The administration pages and their forms answer `404`, with the not-found page, to anyone but an
 administrator. The account page answers `404` to users it has nothing for: without a password,

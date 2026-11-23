@@ -95,7 +95,7 @@ pub fn PrintPage() -> impl IntoView {
 }
 
 /// The message of a job refused by the rule `rule`, when it still applies to the user.
-fn quota_refusal(quotas: &Allowances, rule: i64) -> Option<String> {
+pub(crate) fn quota_refusal(quotas: &Allowances, rule: i64) -> Option<String> {
     let allowance = quotas
         .allowances
         .iter()

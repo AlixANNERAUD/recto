@@ -38,7 +38,8 @@ A document sent this way is **held**, not printed: recto keeps it under `RECTO_D
 tells the device the job is complete, with the message **Held in recto until you release it**
 (the brand's name for recto), so the device's queue moves on. Nothing is counted while a job is
 held: the ledger and quotas only know printed jobs. A held job is deleted after
-`RECTO_HELD_JOB_HOURS`, 24 hours by default.
+`RECTO_HELD_JOB_HOURS`, 24 hours by default, unless its owner prints or deletes it first (see
+[Held jobs](#held-jobs)).
 
 Each person may have at most 20 jobs waiting, and documents of at most 10 times
 `RECTO_MAX_UPLOAD_SIZE` in all; beyond that the device is answered `server-error-too-many-jobs`
@@ -59,6 +60,40 @@ Send-Document); a held job is complete for the device, and the IPP answer to can
 | A second document for one job | `server-error-multiple-document-jobs-not-supported` |
 | Too many jobs waiting | `server-error-too-many-jobs` |
 | `RECTO_DATA_DIR/held` cannot be used | `server-error-not-accepting-jobs`; the printer also says it is not accepting jobs |
+
+## Held jobs
+
+The Jobs page lists the documents waiting for you in **Waiting for you**, above the print jobs,
+newest first: your own only, administrators included, from all your devices. The section is
+absent when nothing waits. Each document shows its name, when it arrived, the device password it
+came with and its pages, with:
+
+- **Preview**, which opens the document in the browser's own viewer;
+- a form to print it, filled with what the device asked for (copies, sides, color, pages) and
+  the default printer: **Print** sends it as the Print page would, through the same printer
+  access rules, page count, quotas and ledger;
+- **Delete**, which deletes it at once.
+
+A refused print leaves the document waiting, with the reason shown at the top of the page and
+under the document (**Last attempt**), as on the Print page: a quota names the rule and what is
+left of it. A printed document is deleted from the data folder as soon as CUPS accepts it.
+
+Printing a held document can happen only once:
+
+- Two Print buttons pressed at once, in two tabs, print it once: the second is told **That
+  document is no longer waiting**.
+- The job is marked printed in the same database transaction that writes its ledger entry. If
+  that entry cannot be written, quota rules or not, the document is not printed and stays
+  waiting: a held document never prints without being counted.
+- If CUPS refuses it, the entry is refunded and the document goes back to waiting, together.
+- If recto stops after the job was counted but before CUPS answered, or CUPS does not confirm
+  it, the document is never offered again: it may have printed. The entry is refunded after ten
+  minutes if CUPS never shows the job (see [Refunds](#refunds)); send the document again if it
+  did not print.
+- A print that was interrupted before it was counted puts the document back to waiting within
+  15 minutes.
+
+An expired document can no longer be printed, even in the minutes before the sweep deletes it.
 
 ## Options
 

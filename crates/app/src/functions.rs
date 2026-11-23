@@ -39,6 +39,29 @@ pub struct DeviceRow {
     pub last_used_at: Option<i64>,
 }
 
+/// A held job as the Jobs page shows it: a document a computer or phone sent, waiting for its
+/// owner, with the options the device asked for.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldRow {
+    pub id: i64,
+    pub name: String,
+    /// In seconds since the Unix epoch.
+    pub received_at: i64,
+    /// The name of the device password it came with; `None` once that is revoked.
+    pub device: Option<String>,
+    pub pages: Option<i64>,
+    /// Being printed right now: no form applies to it.
+    pub releasing: bool,
+    /// Why its last release was refused, as a refusal code.
+    pub refusal: Option<String>,
+    pub copies: Option<u32>,
+    /// The keywords of the options the device asked for.
+    pub sides: Option<String>,
+    pub color_mode: Option<String>,
+    /// As the Print page's field takes them, such as `1-3, 5`.
+    pub page_ranges: Option<String>,
+}
+
 /// Where the signed-in user stands against the quota rules that apply to them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Allowances {
@@ -75,6 +98,13 @@ pub async fn my_quotas() -> Result<Allowances, ServerFnError> {
 pub async fn my_device_passwords() -> Result<Vec<DeviceRow>, ServerFnError> {
     let context = server::Context::new()?;
     context.my_device_passwords().await
+}
+
+/// The signed-in user's held jobs, newest first: their own only, administrators included.
+#[server(endpoint = "my_held_jobs")]
+pub async fn my_held_jobs() -> Result<Vec<HeldRow>, ServerFnError> {
+    let context = server::Context::new()?;
+    context.my_held_jobs().await
 }
 
 #[server(endpoint = "list_scanners")]
@@ -178,7 +208,7 @@ mod server {
         Selection,
     };
 
-    use super::{Allowances, DeviceRow, ScanOutcome, visible};
+    use super::{Allowances, DeviceRow, HeldRow, ScanOutcome, visible};
     use crate::{
         i18n, messages,
         quotas::Allowance,
@@ -319,6 +349,64 @@ mod server {
                     name: password.name,
                     created_at: password.created_at.timestamp(),
                     last_used_at: password.last_used_at.map(|time| time.timestamp()),
+                })
+                .collect())
+        }
+
+        /// The user's held jobs, with the names of the devices that sent them.
+        pub async fn my_held_jobs(&self) -> Result<Vec<HeldRow>, ServerFnError> {
+            let database = &self.state.database;
+            let failed = |error: recto_domain::Error| {
+                tracing::error!(%error, "listing the held jobs failed");
+                self.try_again()
+            };
+            let jobs = recto_domain::held::list(database, self.user.id)
+                .await
+                .map_err(failed)?;
+            if jobs.is_empty() {
+                return Ok(Vec::new());
+            }
+            let devices: BTreeMap<i64, String> =
+                recto_domain::device_passwords::list(database, self.user.id)
+                    .await
+                    .map_err(failed)?
+                    .into_iter()
+                    .map(|device| (device.id, device.name))
+                    .collect();
+            Ok(jobs
+                .into_iter()
+                .map(|job| {
+                    // Options that no longer read are not worth refusing the page for.
+                    let requested: recto_printing::printer::Requested =
+                        serde_json::from_str(&job.requested).unwrap_or_default();
+                    HeldRow {
+                        id: job.id,
+                        name: job.name,
+                        received_at: job.received_at.timestamp(),
+                        device: job
+                            .device_password_id
+                            .and_then(|id| devices.get(&id).cloned()),
+                        pages: job.document_pages,
+                        releasing: job.state == recto_domain::held::HeldState::Releasing,
+                        refusal: job.refusal,
+                        copies: requested.copies,
+                        sides: requested.sides.map(|sides| sides.keyword().to_owned()),
+                        color_mode: requested.color_mode.map(|mode| mode.keyword().to_owned()),
+                        page_ranges: requested.page_ranges.map(|ranges| {
+                            ranges
+                                .0
+                                .iter()
+                                .map(|&(first, last)| {
+                                    if first == last {
+                                        first.to_string()
+                                    } else {
+                                        format!("{first}-{last}")
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        }),
+                    }
                 })
                 .collect())
         }

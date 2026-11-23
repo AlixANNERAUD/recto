@@ -376,8 +376,8 @@ pub async fn get_for_device(
 }
 
 /// Claims the user's held job for one release: `held` to `releasing` in one conditional update,
-/// so of two releases at once exactly one gets `Some`. An expired job is not claimed. The job returned carries the claim the
-/// release must name to [`mark_released`] or [`unclaim`] it.
+/// so of two releases at once exactly one gets `Some`. An expired job is not claimed. The job
+/// returned carries the claim the release must name to [`mark_released`] or [`unclaim`] it.
 pub async fn claim(
     database: &impl ConnectionTrait,
     user_id: i64,
@@ -462,9 +462,10 @@ pub async fn mark_released(
     }
 }
 
-/// Puts a claimed job back to `held`, with why its release was refused, and clears its ledger
-/// entry. Only for a release refused before it reached the ledger, or whose entry CUPS refused
-/// and was refunded; nothing happens unless the job is still under this claim.
+/// Puts a claimed job back to `held`, with why its release was refused: for a release refused
+/// before it reached the ledger. Nothing happens unless the job is still `releasing` under this
+/// claim: a `released` job has a ledger entry and goes back only with it refunded, through
+/// [`return_refunded`].
 pub async fn unclaim(
     database: &impl ConnectionTrait,
     id: i64,
@@ -478,10 +479,6 @@ pub async fn unclaim(
             Expr::value(HeldState::Held.keyword()),
         )
         .col_expr(
-            held_jobs::Column::LedgerEntryId,
-            Expr::value(Option::<i64>::None),
-        )
-        .col_expr(
             held_jobs::Column::Refusal,
             Expr::value(refusal.map(str::to_owned)),
         )
@@ -491,12 +488,50 @@ pub async fn unclaim(
         )
         .filter(held_jobs::Column::Id.eq(id))
         .filter(held_jobs::Column::Claim.eq(claim))
-        .filter(held_jobs::Column::State.is_in([
-            HeldState::Releasing.keyword(),
-            HeldState::Released.keyword(),
-        ]))
+        .filter(held_jobs::Column::State.eq(HeldState::Releasing.keyword()))
         .exec(database)
         .await?;
+    Ok(())
+}
+
+/// Refunds the ledger entry of a released job that CUPS refused, and puts the job back to
+/// `held` with `refusal`, in one transaction: the entry and the job go back together or not at
+/// all. Refused with [`Error::NotFound`], changing nothing, unless the job is `released` under
+/// this claim with this entry.
+pub async fn return_refunded(
+    database: &(impl ConnectionTrait + TransactionTrait),
+    id: i64,
+    claim: i64,
+    ledger_entry_id: i64,
+    refusal: &str,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let transaction = begin_write(database).await?;
+    let returned = held_jobs::Entity::update_many()
+        .col_expr(
+            held_jobs::Column::State,
+            Expr::value(HeldState::Held.keyword()),
+        )
+        .col_expr(
+            held_jobs::Column::LedgerEntryId,
+            Expr::value(Option::<i64>::None),
+        )
+        .col_expr(held_jobs::Column::Refusal, Expr::value(Some(refusal)))
+        .col_expr(
+            held_jobs::Column::StateChangedAt,
+            Expr::value(now.fixed_offset()),
+        )
+        .filter(held_jobs::Column::Id.eq(id))
+        .filter(held_jobs::Column::Claim.eq(claim))
+        .filter(held_jobs::Column::State.eq(HeldState::Released.keyword()))
+        .filter(held_jobs::Column::LedgerEntryId.eq(ledger_entry_id))
+        .exec(&transaction)
+        .await?;
+    if returned.rows_affected != 1 {
+        return Err(Error::NotFound);
+    }
+    crate::ledger::refund(&transaction, ledger_entry_id).await?;
+    transaction.commit().await?;
     Ok(())
 }
 

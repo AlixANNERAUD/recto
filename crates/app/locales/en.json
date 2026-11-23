@@ -523,7 +523,8 @@
       "quota": "This job goes over a print quota.",
       "quota_rule": "This job needs more than you have left of “{rule}”: {left}.",
       "uncountable": "recto could not count the pages of this PDF, and your quotas count pages. Save it again as PDF and retry.",
-      "counting_busy": "recto is busy counting the pages of other documents, and your quotas count pages. Try again in a moment."
+      "counting_busy": "recto is busy counting the pages of other documents, and your quotas count pages. Try again in a moment.",
+      "held_gone": "That document is no longer waiting: it was printed, deleted or it expired."
     },
     "left": {
       "title": "What you have left"
@@ -585,7 +586,24 @@
       "completed": "Printed"
     },
     "over": "This job went over “{rule}”: {left}.",
-    "over_unknown": "This job went over a print quota."
+    "over_unknown": "This job went over a print quota.",
+    "held": {
+      "title": "Waiting for you",
+      "intro": "Sent from your computers and phones. Choose a printer to print them, or delete them. Nothing is counted until you print.",
+      "received": "Received {time}",
+      "from": "from {device}",
+      "preview": "Preview",
+      "preview_label": "Preview {name}",
+      "release": "Print",
+      "release_label": "Print {name}",
+      "delete": "Delete",
+      "delete_label": "Delete {name}",
+      "releasing": "Being printed",
+      "last_refusal": "Last attempt: {reason}",
+      "no_printers": "No printer is available to you right now.",
+      "deleted": "The document was deleted.",
+      "printer_default": "The printer's default"
+    }
   },
   "scan": {
     "title": "Scan",
