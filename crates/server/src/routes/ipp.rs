@@ -45,10 +45,7 @@ use axum::{
 };
 use chrono::Utc;
 use recto_app::i18n::Locale;
-use recto_app::{
-    refusal::Refusal,
-    state::{AppState, User},
-};
+use recto_app::{refusal::Refusal, state::AppState};
 use recto_domain::{
     Error, Problem,
     device_passwords::DeviceUser,
@@ -813,13 +810,7 @@ impl Job<'_> {
         let Some(printer) = user.direct_printer.clone() else {
             return held;
         };
-        let user = User {
-            id: user.id,
-            username: user.username,
-            name: user.display_name,
-            is_administrator: user.is_administrator,
-            has_password: user.password_hash.is_some(),
-        };
+        let user = crate::session::user(&user);
         let requested = requested.clone();
         let release = tokio::spawn(async move {
             // Fitted to the printer: the device laid the document out for a generic one.
