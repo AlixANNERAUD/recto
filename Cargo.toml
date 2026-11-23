@@ -30,7 +30,8 @@ reqwest = { version = "0.12.28", default-features = false, features = ["rustls-t
 url = "2.5"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["json", "env-filter"] }
-clap = { version = "4.6.7", features = ["derive", "env"] }
+getargs = "0.5.0"
+getargs-derive = { version = "0.1.1", features = ["std"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

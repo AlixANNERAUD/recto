@@ -193,18 +193,19 @@ async fn backup_refuses_a_missing_database_and_creates_nothing() {
 
 #[test]
 fn dnssd_services_takes_a_directory_and_the_published_port() {
-    use clap::Parser as _;
     use recto::config::{Command, CommandLine};
     let parse = |extra: &[&str]| {
         let mut arguments = vec![
-            "recto",
             "dnssd-services",
             "/etc/avahi/services",
             "--public-url",
             "https://recto.example.org",
         ];
         arguments.extend_from_slice(extra);
-        match CommandLine::try_parse_from(arguments).unwrap().command {
+        match CommandLine::from_args(arguments.into_iter())
+            .unwrap()
+            .command
+        {
             Command::DnssdServices(options) => options,
             _ => panic!("not dnssd-services"),
         }

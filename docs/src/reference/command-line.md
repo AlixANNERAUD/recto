@@ -5,7 +5,9 @@ other commands in the running container, such as
 `docker compose exec recto /app/recto migrate`.
 
 ```text
-recto <COMMAND>
+Self-hosted web app to print and scan, with local accounts or OpenID Connect sign-in.
+
+Usage: recto [OPTIONS] <COMMAND>
 
 Commands:
   serve                 Run the web server
@@ -15,7 +17,6 @@ Commands:
   create-administrator  Create a local administrator; the password is asked twice on a terminal, otherwise read from one line of standard input
   administrator         Grant or remove administration of an existing user
   dnssd-services        Write the DNS-SD records of the LAN listener as Avahi service files, for a host whose avahi-daemon announces recto while it stays on a bridge network
-  help                  Print this message or the help of the given subcommand(s)
 
 Options:
   -h, --help     Print help
@@ -24,7 +25,8 @@ Options:
 
 Every command but `healthcheck` works on the database of `RECTO_DATABASE_URL`, or of its
 `--database-url` option (default `sqlite:///data/recto.db`). The commands other than `serve` exit
-`0` on success and `1` with a message on standard error otherwise.
+`0` on success and `1` with a message on standard error otherwise. `recto <COMMAND> --help` lists
+the options of a command; a wrong command line exits `2`.
 
 ## recto serve
 

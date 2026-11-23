@@ -15,8 +15,6 @@ use image::{
 };
 pub use recto_app::branding::{BrandFile, BrandIcons, Branding, DEFAULT_COLOR, DEFAULT_NAME};
 
-use crate::config::parse_path;
-
 const MEBIBYTE: u64 = 1024 * 1024;
 const LOGO_LIMIT: u64 = MEBIBYTE;
 const ICON_LIMIT: u64 = 5 * MEBIBYTE;
@@ -37,23 +35,23 @@ const DARK_CARD: [u8; 3] = [0x29; 3];
 const DARK_BACKGROUND: [u8; 3] = [0x1f; 3];
 
 /// The branding settings of `recto serve`.
-#[derive(Clone, Debug, clap::Args)]
+#[derive(Clone, Debug, getargs_derive::GetArgs)]
 pub struct BrandOptions {
     /// The name in the header, the page titles and the installed app; 1 to 64 characters.
-    #[arg(long, env = "RECTO_BRAND_NAME", default_value = DEFAULT_NAME)]
+    #[arg(long, env = "RECTO_BRAND_NAME", default_value = "recto")]
     pub brand_name: String,
     /// The installed app's label where space is short; 1 to 32 characters, the name by default.
     #[arg(long, env = "RECTO_BRAND_SHORT_NAME")]
     pub brand_short_name: Option<String>,
     /// The accent color, `#rrggbb`, dark enough for white text on it (4.5:1).
-    #[arg(long, env = "RECTO_BRAND_COLOR", default_value = DEFAULT_COLOR)]
+    #[arg(long, env = "RECTO_BRAND_COLOR", default_value = "#0f6cbd")]
     pub brand_color: String,
     /// A PNG, JPEG or SVG file of at most 1 MiB shown in the header instead of the glyph.
-    #[arg(long, env = "RECTO_BRAND_LOGO", value_parser = parse_path)]
+    #[arg(long, env = "RECTO_BRAND_LOGO")]
     pub brand_logo: Option<PathBuf>,
     /// A square PNG or JPEG file of 512 to 4096 pixels a side and at most 5 MiB for the app
     /// icons, which are otherwise drawn in the accent color.
-    #[arg(long, env = "RECTO_BRAND_ICON", value_parser = parse_path)]
+    #[arg(long, env = "RECTO_BRAND_ICON")]
     pub brand_icon: Option<PathBuf>,
 }
 

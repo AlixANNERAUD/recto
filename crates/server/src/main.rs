@@ -2,7 +2,6 @@
 
 use std::process::ExitCode;
 
-use clap::Parser;
 use recto::{
     commands,
     config::{Command, CommandLine, Config, DatabaseOptions, LogFormat},
@@ -12,10 +11,20 @@ use recto::{
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let command_line = CommandLine::parse();
+    let command_line = match CommandLine::from_args_os() {
+        Ok(command_line) => command_line,
+        Err(error) if error.is_help() || error.is_version() => {
+            println!("{error}");
+            return ExitCode::SUCCESS;
+        }
+        Err(error) => return usage_error(&error),
+    };
     let result: Result<(), Box<dyn std::error::Error>> = match command_line.command {
-        Command::Serve(config) => {
-            let config = Config::normalized(*config).unwrap_or_else(|error| error.exit());
+        Command::Serve(arguments) => {
+            let config = match Config::try_from(arguments) {
+                Ok(config) => config,
+                Err(message) => return usage_error(&message),
+            };
             initialize_logging(config.log_format);
             serve::run(config).await
         }
@@ -76,6 +85,12 @@ async fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// A wrong command line or setting exits with 2, as command-line tools do.
+fn usage_error(error: &dyn std::fmt::Display) -> ExitCode {
+    eprintln!("error: {error}");
+    ExitCode::from(2)
 }
 
 /// Opens the database for a command that changes it; the messages of `tracing` (a created user)
