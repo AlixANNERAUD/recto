@@ -1,7 +1,8 @@
 //! Routes that belong to the browser rather than to a page: the language and theme switches, the
 //! brand's icons and logo, the web app manifest and the service worker. They are open to anyone, so the
 //! sign-in page can offer the switches and show the brand too, and browsers can fetch the manifest
-//! and worker without cookies; the cross-site check still applies.
+//! and worker without cookies. The switches go through the cross-site check; the files
+//! ([`assets`]) are served without a session, see [`crate::serve::router`].
 
 use std::{
     collections::hash_map::DefaultHasher,
@@ -45,20 +46,25 @@ const SERVICE_WORKER: &str = include_str!("sw.js");
 struct PwaState {
     /// Whether cookies get the `Secure` attribute, as the session cookie does.
     secure_cookies: bool,
-    branding: Arc<Branding>,
 }
 
-/// `POST /theme`, `POST /language`, `GET /brand/*`, `/manifest.webmanifest` and `/sw.js`. `secure_cookies` is
-/// whether recto is served over HTTPS.
-pub fn router(branding: Arc<Branding>, secure_cookies: bool) -> Router {
-    let icon = |pick: fn(&Branding) -> &Bytes| {
-        get(move |State(state): State<PwaState>| async move {
-            brand_file(pick(&state.branding).clone(), "image/png")
-        })
-    };
+/// `POST /theme` and `POST /language`. `secure_cookies` is whether recto is served over HTTPS.
+pub fn router(secure_cookies: bool) -> Router {
     Router::new()
         .route("/theme", post(choose_theme))
         .route("/language", post(choose_language))
+        .with_state(PwaState { secure_cookies })
+}
+
+/// `GET /brand/*`, `/manifest.webmanifest` and `/sw.js`: what they serve changes only with a
+/// restart, whoever asks.
+pub fn assets(branding: Arc<Branding>) -> Router {
+    let icon = |pick: fn(&Branding) -> &Bytes| {
+        get(move |State(branding): State<Arc<Branding>>| async move {
+            brand_file(pick(&branding).clone(), "image/png")
+        })
+    };
+    Router::new()
         .route(
             "/brand/icon-192.png",
             icon(|branding| &branding.icons.any_192),
@@ -78,10 +84,7 @@ pub fn router(branding: Arc<Branding>, secure_cookies: bool) -> Router {
         .route("/brand/logo", get(logo))
         .route("/manifest.webmanifest", get(web_manifest))
         .route("/sw.js", get(worker))
-        .with_state(PwaState {
-            secure_cookies,
-            branding,
-        })
+        .with_state(branding)
 }
 
 /// The web app manifest: what browsers read to install recto as an app.
@@ -139,25 +142,25 @@ fn fingerprint(branding: &Branding) -> String {
     format!("{:08x}", hasher.finish() as u32)
 }
 
-async fn web_manifest(State(state): State<PwaState>) -> Response {
+async fn web_manifest(State(branding): State<Arc<Branding>>) -> Response {
     (
         [
             (header::CONTENT_TYPE, "application/manifest+json"),
             (header::CACHE_CONTROL, "no-cache"),
         ],
-        manifest(&state.branding).to_string(),
+        manifest(&branding).to_string(),
     )
         .into_response()
 }
 
 /// `no-cache` lets browsers check for a new worker on every load, which is how updates arrive.
-async fn worker(State(state): State<PwaState>) -> Response {
+async fn worker(State(branding): State<Arc<Branding>>) -> Response {
     (
         [
             (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
             (header::CACHE_CONTROL, "no-cache"),
         ],
-        service_worker(&state.branding),
+        service_worker(&branding),
     )
         .into_response()
 }
@@ -174,8 +177,8 @@ fn brand_file(bytes: Bytes, content_type: &'static str) -> Response {
 }
 
 /// The operator's logo, or 404 without one.
-async fn logo(State(state): State<PwaState>) -> Response {
-    let Some(logo) = &state.branding.logo else {
+async fn logo(State(branding): State<Arc<Branding>>) -> Response {
+    let Some(logo) = &branding.logo else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let mut response = brand_file(logo.bytes.clone(), logo.content_type);

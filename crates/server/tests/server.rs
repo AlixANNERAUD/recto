@@ -1471,6 +1471,33 @@ async fn fallback_never_renders_the_interface_for_anonymous_visitors() {
     assert!(text(response).await.contains("Page not found"));
 }
 
+#[tokio::test]
+async fn static_files_leave_the_session_alone() {
+    let harness = Harness::new().await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    for path in [
+        "/pkg/recto.css",
+        "/sw.js",
+        "/manifest.webmanifest",
+        "/brand/icon-192.png",
+    ] {
+        let mut request = get(path);
+        request
+            .headers_mut()
+            .insert(header::COOKIE, cookie.parse().unwrap());
+        let response = harness.send(request).await;
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        // A request through the session layer renews the cookie of a signed-in session.
+        assert!(session_cookie(response.headers()).is_none(), "{path}");
+        assert_eq!(
+            response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+            "nosniff"
+        );
+    }
+    let response = harness.send(get("/pkg/missing.js")).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
 /// A server function call from recto's own pages.
 fn api(endpoint: &str, cookie: &str) -> Request<Body> {
     Request::post(format!("/api/{endpoint}"))

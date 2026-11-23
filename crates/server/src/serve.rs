@@ -34,7 +34,7 @@ use recto_printing::PrintService;
 use recto_scanning::{ResultStore, ScannerService};
 use sea_orm::DatabaseConnection;
 use tower::ServiceExt;
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_sessions::session_store::ExpiredDeletion;
 
 use crate::session_store::DatabaseSessionStore;
@@ -83,9 +83,8 @@ pub fn leptos_options(config: &Config) -> LeptosOptions {
 /// `/no-access`), `POST /theme`, `/brand/*`, `/manifest.webmanifest`, `/sw.js`, `/pwa.js`,
 /// `/offline`, the printer's and scanners' addresses for devices under `/ipp/`, `/eSCL/` and
 /// `/device/` (which authenticate devices themselves, see [`ipp`] and [`escl`]), and the static
-/// files the fallback serves
-/// (see `fallback`). The
-/// `/administration` pages and forms need an administrator.
+/// files of the site root (see `site_files` and `fallback`). The `/administration` pages and
+/// forms need an administrator.
 ///
 /// Must be called inside a Tokio runtime: the sign-in rate limit forgets old clients in the
 /// background.
@@ -108,7 +107,6 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
     );
     let shell_options = state.leptos_options.clone();
     let branding = Arc::clone(&state.branding);
-    let branding_for_refusal = Arc::clone(&branding);
     let body_limit = state.max_upload_size.saturating_add(print::FORM_SLACK);
     let methods = auth.sign_in_methods();
     let context = move || provide_context(methods);
@@ -117,6 +115,7 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
     let held_jobs = held_routes::router(state.clone(), &auth);
     let administration = administration::router(state.clone(), &auth);
     let devices_ipp = device_routes(&state, &auth, Listener::Main);
+    let assets = site_files(&state.leptos_options).merge(pwa::assets(Arc::clone(&branding)));
     let interface = Router::new()
         .route(
             "/print",
@@ -139,7 +138,7 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         .merge(password)
         .merge(devices)
         .merge(held_jobs)
-        .merge(pwa::router(branding, auth.secure_cookies))
+        .merge(pwa::router(auth.secure_cookies))
         .merge(administration)
         .merge(interface)
         .layer(middleware::from_fn_with_state(
@@ -148,17 +147,42 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         ))
         .layer(session::layer(auth.sessions.clone(), auth.secure_cookies))
         .layer(middleware::from_fn_with_state(
-            (AllowedOrigin::new(&auth.public_url), branding_for_refusal),
+            (AllowedOrigin::new(&auth.public_url), branding),
             refuse_cross_site,
         ));
+    // The pages load these files on every visit. Outside the session, they cost no session read,
+    // user lookup and session write each; only reads route to them, which the cross-site check
+    // always lets through.
+    //
     // Devices have no session and send no `Origin`: they authenticate in their routes. Any
     // other address under theirs is a bare 404, never the sign-in redirect or the not-found
     // page of the fallback, which would carry a secret into a `Location` header or the
     // browser's history.
     Router::new()
         .merge(devices_ipp)
+        .merge(assets)
         .merge(web)
         .layer(middleware::from_fn(security_headers))
+}
+
+/// The interface's scripts and styles under `/pkg`, and `/pwa.js`, which registers the service
+/// worker. A missing file under `/pkg` is a bare 404.
+fn site_files(options: &LeptosOptions) -> Router {
+    let root = std::path::Path::new(&*options.site_root);
+    let pkg = &*options.site_pkg_dir;
+    Router::new()
+        .nest_service(
+            &format!("/{pkg}"),
+            ServeDir::new(root.join(pkg))
+                .precompressed_gzip()
+                .precompressed_br(),
+        )
+        .route_service(
+            "/pwa.js",
+            ServeFile::new(root.join("pwa.js"))
+                .precompressed_gzip()
+                .precompressed_br(),
+        )
 }
 
 /// The routes of the LAN listener: the device addresses only, never a page or a session.
@@ -432,8 +456,8 @@ fn announce(
     })
 }
 
-/// What no route matches: a file of the site root (scripts, styles, icons) for anyone, else
-/// the not-found page for a signed-in user. The interface's router is lenient (`/jobs/` renders
+/// What no route matches: a file of the site root that `site_files` does not route for anyone,
+/// else the not-found page for a signed-in user. The interface's router is lenient (`/jobs/` renders
 /// `/jobs`), so rendering it here for an anonymous visitor would bypass the routes' user check:
 /// anonymous visitors get the sign-in redirect or 401 instead.
 async fn fallback(
