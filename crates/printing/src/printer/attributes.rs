@@ -275,7 +275,7 @@ impl VirtualPrinter {
         put("identify-actions-default", keyword("display"));
         put("identify-actions-supported", keyword("display"));
         put("ipp-features-supported", keyword("ipp-everywhere"));
-        put("ipp-versions-supported", keywords(&["1.1", "2.0"]));
+        put("ipp-versions-supported", keywords(&["1.0", "1.1", "2.0"]));
         put(
             "job-creation-attributes-supported",
             keywords(&[

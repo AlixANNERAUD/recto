@@ -286,6 +286,119 @@ async fn create_job_then_send_document_holds_the_job() {
 }
 
 #[tokio::test]
+async fn the_other_operations_are_answered() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let laptop = device(&harness, alice, "Laptop").await;
+    let phone = device(&harness, alice, "Phone").await;
+    let send = |device: &Device, body: Vec<u8>| {
+        post_ipp("/ipp/print", Some(&device.secret), Body::from(body))
+    };
+    let answered = async |device: &Device, request: &IppRequestResponse| {
+        status(&ipp(&harness, send(device, body(request, b""))).await)
+    };
+    let create = async || {
+        job_id(
+            &ipp(
+                &harness,
+                send(&laptop, body(&request(IppOperation::CreateJob), b"")),
+            )
+            .await,
+        )
+    };
+    // The laptop's jobs still waiting for their document, which the Jobs page does not list.
+    let waiting = async || {
+        held::list_for_device(&harness.database, laptop.id)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|job| job.state == HeldState::Incoming)
+            .count()
+    };
+
+    assert_eq!(
+        answered(&laptop, &request(IppOperation::ValidateJob)).await,
+        0x0000
+    );
+    assert_eq!(
+        answered(&laptop, &request(IppOperation::IdentifyPrinter)).await,
+        0x0000
+    );
+    // server-error-operation-not-supported.
+    let mut unknown = request(IppOperation::GetJobs);
+    unknown.header_mut().operation_or_status = 0x0045;
+    assert_eq!(answered(&laptop, &unknown).await, 0x0501);
+
+    // Close-Job on a job that never got its document ends it.
+    let closed = create().await;
+    assert_eq!(
+        answered(&laptop, &job_request(IppOperation::CloseJob, closed)).await,
+        0x0000
+    );
+    assert_eq!(waiting().await, 0);
+    // So does an empty last document.
+    let ended = create().await;
+    let mut last = job_request(IppOperation::SendDocument, ended);
+    operation_attribute(&mut last, "last-document", IppValue::Boolean(true));
+    assert_eq!(answered(&laptop, &last).await, 0x0000);
+    assert_eq!(waiting().await, 0);
+
+    // Another device's job is not there.
+    let theirs = create().await;
+    let mut document = job_request(IppOperation::SendDocument, theirs);
+    operation_attribute(&mut document, "last-document", IppValue::Boolean(true));
+    let answer = ipp(&harness, send(&phone, body(&document, &sample_pdf(1)))).await;
+    assert_eq!(status(&answer), 0x0406);
+    // Its own: held, and an empty last document after it is fine.
+    let answer = ipp(&harness, send(&laptop, body(&document, &sample_pdf(1)))).await;
+    assert_eq!(status(&answer), 0x0000);
+    assert_eq!(answered(&laptop, &last_of(theirs)).await, 0x0000);
+    let held_job = held::get(&harness.database, alice, i64::from(theirs))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(held_job.state, HeldState::Held);
+
+    // Cancel-My-Jobs: those named, then every one still waiting, never a held one.
+    let first = create().await;
+    let second = create().await;
+    let mut named = request(IppOperation::CancelMyJobs);
+    operation_attribute(&mut named, "job-ids", IppValue::Integer(first));
+    assert_eq!(answered(&laptop, &named).await, 0x0000);
+    assert_eq!(waiting().await, 1);
+    // The phone's Cancel-My-Jobs leaves the laptop's alone.
+    assert_eq!(
+        answered(&phone, &request(IppOperation::CancelMyJobs)).await,
+        0x0000
+    );
+    assert_eq!(waiting().await, 1);
+    assert_eq!(
+        answered(&laptop, &request(IppOperation::CancelMyJobs)).await,
+        0x0000
+    );
+    assert_eq!(waiting().await, 0);
+    assert!(
+        held::get(&harness.database, alice, i64::from(second))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        held::get(&harness.database, alice, i64::from(theirs))
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+/// An empty Send-Document that ends job `id`.
+fn last_of(id: i32) -> IppRequestResponse {
+    let mut last = job_request(IppOperation::SendDocument, id);
+    operation_attribute(&mut last, "last-document", IppValue::Boolean(true));
+    last
+}
+
+#[tokio::test]
 async fn attributes_are_open_and_jobs_need_credentials() {
     let harness = Harness::new().await;
     // From the network, over plain HTTP, without credentials: what the printer is.

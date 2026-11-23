@@ -105,6 +105,10 @@ pub enum Operation {
     IdentifyPrinter,
     /// Answered with `server-error-operation-not-supported`.
     Unsupported(u16),
+    /// A job refused for its attributes: compression, or a value recto does not offer with
+    /// `ipp-attribute-fidelity`. Answered with this status and, through [`response`], the
+    /// unsupported attributes, which RFC 8011 section 4.1.7 asks a refusal to name.
+    Refused(StatusCode),
 }
 
 /// A decoded request.
@@ -125,7 +129,8 @@ pub fn decode(body: Bytes) -> Result<Incoming, StatusCode> {
 
     let first: &[u8; 8] = body.get(..8).and_then(|b| b.try_into().ok()).ok_or(Bad)?;
     let head = header(first);
-    if !matches!(head.version, (1, 0..=1) | (2, 0..=2)) {
+    // The versions of `ipp-versions-supported`.
+    if !matches!(head.version, (1, 0..=1) | (2, 0)) {
         return Err(StatusCode::ServerErrorVersionNotSupported);
     }
     if head.request_id == 0 || i32::try_from(head.request_id).is_err() {
@@ -158,34 +163,46 @@ pub fn decode(body: Bytes) -> Result<Incoming, StatusCode> {
     };
     let mut unsupported = Vec::new();
     let operation = match head.operation {
-        0x02 => {
-            request.compression()?;
-            Operation::PrintJob {
+        0x02 => match request
+            .compression(&mut unsupported)
+            .and_then(|()| request.requested(&mut unsupported))
+        {
+            Ok(requested) => Operation::PrintJob {
                 name: request.name(),
                 format: request.format(),
-                requested: request.requested(&mut unsupported)?,
+                requested,
                 document,
-            }
-        }
-        0x04 => {
-            request.compression()?;
-            request.requested(&mut unsupported)?;
-            Operation::ValidateJob {
+            },
+            Err(status) => Operation::Refused(status),
+        },
+        0x04 => match request
+            .compression(&mut unsupported)
+            .and_then(|()| request.requested(&mut unsupported))
+        {
+            Ok(_) => Operation::ValidateJob {
                 format: request.format(),
-            }
-        }
-        0x05 => Operation::CreateJob {
-            name: request.name(),
-            requested: request.requested(&mut unsupported)?,
+            },
+            Err(status) => Operation::Refused(status),
+        },
+        0x05 => match request.requested(&mut unsupported) {
+            Ok(requested) => Operation::CreateJob {
+                name: request.name(),
+                requested,
+            },
+            Err(status) => Operation::Refused(status),
         },
         0x06 => {
-            request.compression()?;
             let last = request.operation("last-document").ok_or(Bad)?;
-            Operation::SendDocument {
-                job_id: request.job_id()?,
-                format: request.format(),
-                last: *last.as_boolean().ok_or(Bad)?,
-                document,
+            let last = *last.as_boolean().ok_or(Bad)?;
+            let job_id = request.job_id()?;
+            match request.compression(&mut unsupported) {
+                Ok(()) => Operation::SendDocument {
+                    job_id,
+                    format: request.format(),
+                    last,
+                    document,
+                },
+                Err(status) => Operation::Refused(status),
             }
         }
         0x08 => Operation::CancelJob {
@@ -496,11 +513,15 @@ impl Request<'_> {
         self.operation("document-format").and_then(string)
     }
 
-    /// Only uncompressed documents: recto would otherwise inflate untrusted data before any limit.
-    fn compression(&self) -> Result<(), StatusCode> {
+    /// Only uncompressed documents: recto would otherwise inflate untrusted data before any
+    /// limit. A refusal names the attribute in `unsupported`.
+    fn compression(&self, unsupported: &mut Vec<IppAttribute>) -> Result<(), StatusCode> {
         match self.keyword("compression").as_deref() {
             None | Some("none") => Ok(()),
-            Some(_) => Err(StatusCode::ClientErrorCompressionNotSupported),
+            Some(_) => {
+                unsupported.extend(self.operation.get("compression").map(echoable));
+                Err(StatusCode::ClientErrorCompressionNotSupported)
+            }
         }
     }
 
@@ -607,6 +628,24 @@ impl Request<'_> {
                 Err(()) => false,
             });
         }
+        // Advertised in `job-creation-attributes-supported` with one or a few values, kept
+        // nowhere since the document is already laid out, but checked like the others.
+        read("orientation-requested", &mut |value| {
+            matches!(value, IppValue::Enum(3..=6))
+        });
+        read("print-quality", &mut |value| {
+            matches!(value, IppValue::Enum(4))
+        });
+        read("printer-resolution", &mut |value| {
+            matches!(
+                value,
+                IppValue::Resolution {
+                    cross_feed: 300,
+                    feed: 300,
+                    units: 3
+                }
+            )
+        });
 
         let fidelity = self
             .operation("ipp-attribute-fidelity")

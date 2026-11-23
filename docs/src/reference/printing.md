@@ -33,7 +33,8 @@ service with the `_universal` subtype, named `RECTO_DNSSD_NAME`, pointing at the
 `ipps://recto-<hostname>.local:<port>/ipp/print`, with the same password prompt (see
 [Let devices find recto](../how-to/discovery.md)).
 
-What the device sees: one driverless IPP printer (IPP/2.0, IPP Everywhere and AirPrint), named
+What the device sees: one driverless IPP printer (IPP/2.0, also answering IPP/1.0 and 1.1
+requests, IPP Everywhere and AirPrint), named
 after the brand, whatever printers CUPS has. It takes the formats below, recognized by their
 content as on the Print page, up to `RECTO_MAX_UPLOAD_SIZE`. It offers A4, Letter, Legal, A3 and
 A5 paper (the default from `RECTO_DEFAULT_MEDIA`), color and black and white, one- and two-sided,
@@ -107,7 +108,10 @@ Send-Document); a held job is complete for the device, and the IPP answer to can
 | A request without a document, or without credentials (only printer attributes are answered without), over 64 KiB | HTTP `413` |
 | Collections nested more than 4 deep, more than 1,000 attributes, or more than 64 values for one attribute | `client-error-bad-request` |
 | The first bytes of a request, or a later piece of its body, not arriving within 30 seconds; a whole request without a document taking more than 30 seconds, or one with a document more than 10 minutes | HTTP `408` |
-| Empty document | `client-error-bad-request` |
+| Empty document | `client-error-bad-request`, except an empty last Send-Document, which ends the job as Close-Job does |
+| A compressed document | `client-error-compression-not-supported`, naming `compression` |
+| A value the printer does not offer, with `ipp-attribute-fidelity` | `client-error-attributes-or-values-not-supported`, naming the attributes; without fidelity, the value is dropped and named in a successful answer |
+| IPP/2.1 or later | `server-error-version-not-supported`, after which CUPS retries in IPP/2.0 |
 | Document over `RECTO_MAX_UPLOAD_SIZE` | `client-error-request-entity-too-large` |
 | A job of another device, or none | `client-error-not-found` |
 | Cancelling a held job | `client-error-not-possible` |

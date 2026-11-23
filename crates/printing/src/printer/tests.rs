@@ -98,6 +98,14 @@ fn parse(bytes: &Bytes) -> IppRequestResponse {
         .unwrap()
 }
 
+fn names_of(incoming: &Incoming) -> Vec<&str> {
+    incoming
+        .unsupported
+        .iter()
+        .map(|a| a.name().as_str())
+        .collect()
+}
+
 fn job(state: JobViewState) -> JobView {
     JobView {
         id: 7,
@@ -136,7 +144,7 @@ fn every_required_attribute_is_answered() {
 
     assert_eq!(
         values(find(&attributes, "ipp-versions-supported").unwrap()),
-        vec![keyword("1.1"), keyword("2.0")]
+        vec![keyword("1.0"), keyword("1.1"), keyword("2.0")]
     );
     let operations: Vec<IppValue> = [
         0x02, 0x04, 0x05, 0x06, 0x08, 0x09, 0x0A, 0x0B, 0x39, 0x3B, 0x3C,
@@ -389,10 +397,94 @@ fn job_template_attributes_are_read() {
         "ipp-attribute-fidelity",
         IppValue::Boolean(true),
     );
-    assert_eq!(
-        decode(odd.to_bytes()).unwrap_err(),
-        StatusCode::ClientErrorAttributesOrValuesNotSupported
+    // With fidelity, the job is refused, and the refusal names what was not supported
+    // (RFC 8011 section 4.1.7).
+    let refused = decode(odd.to_bytes()).unwrap();
+    assert!(matches!(
+        refused.operation,
+        Operation::Refused(StatusCode::ClientErrorAttributesOrValuesNotSupported)
+    ));
+    let answer = parse(&response(
+        &refused,
+        StatusCode::ClientErrorAttributesOrValuesNotSupported as u16,
+        Vec::new(),
+    ));
+    assert_eq!(answer.header().operation_or_status, 0x040B);
+    let group = answer
+        .attributes()
+        .first_of(DelimiterTag::UnsupportedAttributes)
+        .unwrap();
+    assert_eq!(group.attributes().len(), 2);
+
+    // What the printer advertises for job creation is read, and checked against what it
+    // supports, even though the document is already laid out.
+    let mut advertised = request(IppOperation::CreateJob);
+    add(&mut advertised, job, "print-quality", IppValue::Enum(4));
+    add(
+        &mut advertised,
+        job,
+        "orientation-requested",
+        IppValue::Enum(4),
     );
+    add(
+        &mut advertised,
+        job,
+        "printer-resolution",
+        IppValue::Resolution {
+            cross_feed: 300,
+            feed: 300,
+            units: 3,
+        },
+    );
+    assert!(
+        decode(advertised.to_bytes())
+            .unwrap()
+            .unsupported
+            .is_empty()
+    );
+    let mut unoffered = request(IppOperation::CreateJob);
+    add(&mut unoffered, job, "print-quality", IppValue::Enum(5));
+    add(
+        &mut unoffered,
+        job,
+        "orientation-requested",
+        IppValue::Enum(7),
+    );
+    add(
+        &mut unoffered,
+        job,
+        "printer-resolution",
+        IppValue::Resolution {
+            cross_feed: 600,
+            feed: 600,
+            units: 3,
+        },
+    );
+    let names = |incoming: &Incoming| -> Vec<String> {
+        incoming
+            .unsupported
+            .iter()
+            .map(|a| a.name().as_str().to_owned())
+            .collect()
+    };
+    assert_eq!(
+        names(&decode(unoffered.to_bytes()).unwrap()),
+        [
+            "orientation-requested",
+            "print-quality",
+            "printer-resolution"
+        ]
+    );
+    add(
+        &mut unoffered,
+        DelimiterTag::OperationAttributes,
+        "ipp-attribute-fidelity",
+        IppValue::Boolean(true),
+    );
+    assert!(matches!(
+        decode(unoffered.to_bytes()).unwrap().operation,
+        Operation::Refused(StatusCode::ClientErrorAttributesOrValuesNotSupported)
+    ));
 
     let mut ranges = request(IppOperation::CreateJob);
     add(
@@ -493,8 +585,8 @@ fn unknown_operations_and_versions_are_refused() {
         decode(future.to_bytes()).unwrap_err(),
         StatusCode::ServerErrorVersionNotSupported
     );
-    // Only the versions recto speaks: 1.0 and 1.1, 2.0 to 2.2.
-    for version in [0x0102, 0x0203, 0x0209] {
+    // Only the versions recto speaks, as ipp-versions-supported says: 1.0, 1.1 and 2.0.
+    for version in [0x0102, 0x0201, 0x0202, 0x0203, 0x0209] {
         let mut odd = request(IppOperation::GetPrinterAttributes);
         odd.header_mut().version = IppVersion(version);
         assert_eq!(
@@ -503,7 +595,7 @@ fn unknown_operations_and_versions_are_refused() {
             "{version:x}"
         );
     }
-    for version in [IppVersion::v1_0(), IppVersion::v2_1(), IppVersion::v2_2()] {
+    for version in [IppVersion::v1_0(), IppVersion::v1_1(), IppVersion::v2_0()] {
         let mut old = request(IppOperation::GetPrinterAttributes);
         old.header_mut().version = version;
         assert_eq!(decode(old.to_bytes()).unwrap().version, version);
@@ -578,10 +670,12 @@ fn malformed_requests_are_bad_requests() {
         "compression",
         keyword("gzip"),
     );
-    assert_eq!(
-        decode(compressed.to_bytes()).unwrap_err(),
-        StatusCode::ClientErrorCompressionNotSupported
-    );
+    let refused = decode(compressed.to_bytes()).unwrap();
+    assert!(matches!(
+        refused.operation,
+        Operation::Refused(StatusCode::ClientErrorCompressionNotSupported)
+    ));
+    assert_eq!(names_of(&refused), ["compression"]);
 
     // A printer group, then a job group. Built by hand: `to_bytes` reorders groups.
     let get = request(IppOperation::GetJobs).to_bytes();

@@ -461,6 +461,13 @@ impl Job<'_> {
                 let name = job_name(name.as_deref().unwrap_or_default());
                 self.create(device, &name, &requested).await
             }
+            // No document, only the end of the job's: as Close-Job (RFC 8011 section 4.3.1).
+            Operation::SendDocument {
+                job_id,
+                last: true,
+                document,
+                ..
+            } if document.is_empty() => self.close(device, job_id).await,
             Operation::SendDocument {
                 job_id,
                 format,
@@ -480,6 +487,7 @@ impl Job<'_> {
             } => self.jobs(device, which, limit, &requested).await,
             Operation::IdentifyPrinter => Ok(status(OK)),
             Operation::Unsupported(_) => Ok(status(OPERATION_NOT_SUPPORTED)),
+            Operation::Refused(refused) => Ok(status(refused as u16)),
         };
         result.unwrap_or_else(|error| {
             tracing::error!(
@@ -762,9 +770,11 @@ impl Job<'_> {
             format = received_mime,
             "job held"
         );
+        // Before it is released: past that, a failure would hide a job already printing.
+        let ipp_job = ipp_id(id)?;
         let (state, message) = self.print_directly(device, id, &requested).await;
         let view = JobView {
-            id: ipp_id(id)?,
+            id: ipp_job,
             name,
             device: device.device_name.clone(),
             state,
