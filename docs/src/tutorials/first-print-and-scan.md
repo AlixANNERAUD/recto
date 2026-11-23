@@ -65,9 +65,7 @@ YAML
 docker compose up -d --wait
 ```
 
-The command returns once recto reports itself healthy. Before the first release is published,
-the image may not exist yet; if Compose says so, run `docker compose up -d --wait --build` to
-build it from the checkout (it takes several minutes).
+The command returns once recto reports itself healthy.
 
 recto created its database, a SQLite file with no users yet, in the `recto-data` volume.
 

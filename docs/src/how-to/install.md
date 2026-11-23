@@ -58,7 +58,7 @@ creates its database, `/data/recto.db` in the `recto-data` volume, at the first 
 Compose uses the image `ghcr.io/alixanneraud/recto:latest`. To pin a version, set
 `RECTO_IMAGE=ghcr.io/alixanneraud/recto:0.1` in `.env` (see
 [Container image](../reference/container-image.md) for the tags). To build the image from your
-checkout instead, for example to run your own changes or before the first release exists:
+checkout instead, for example to run your own changes:
 
 ```sh
 docker compose up -d --wait --build

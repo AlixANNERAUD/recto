@@ -149,8 +149,9 @@ for sign-in limits), and [`examples/proxy`](examples/proxy) has a working file f
 | HAProxy | [Setup](https://alixanneraud.github.io/recto/how-to/reverse-proxy.html#haproxy) | [`haproxy/haproxy.cfg`](examples/proxy/haproxy/haproxy.cfg) |
 | Cloudflare Tunnel | [Setup](https://alixanneraud.github.io/recto/how-to/reverse-proxy.html#cloudflare-tunnel) | [`cloudflared/config.yml`](examples/proxy/cloudflared/config.yml) |
 
-Images are published as `ghcr.io/alixanneraud/recto` once a release exists; until then, build
-from the checkout with `docker compose up -d --wait --build`.
+Images are published as `ghcr.io/alixanneraud/recto` and `alixanneraud/recto` on Docker Hub, for
+amd64 and arm64. To
+run your own changes, build from the checkout with `docker compose up -d --wait --build`.
 
 ## Documentation
 
