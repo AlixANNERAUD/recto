@@ -124,7 +124,9 @@ came with and its pages, with:
 
 A refused print leaves the document waiting, with the reason shown at the top of the page and
 under the document (**Last attempt**), as on the Print page: a quota names the rule and what is
-left of it. A printed document is deleted from the data folder as soon as CUPS accepts it.
+left of it. A printed document is deleted from the data folder as soon as CUPS accepts it, or
+as soon as CUPS fails to confirm it (below), since it is never offered again. **Preview** shows a
+document only while it waits or is being printed, and not once it expired.
 
 Printing a held document can happen only once:
 

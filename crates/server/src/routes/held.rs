@@ -90,7 +90,12 @@ async fn document(
         Ok(None) => return not_found(&state, parts).await,
         Err(status) => return status.into_response(),
     };
-    let (Some(file), Some(format)) = (job.file.clone(), job.stored_format.clone()) else {
+    // Only while it waits: a released job is never offered again, and an expired one waits
+    // only for the sweep.
+    let waiting = matches!(job.state, HeldState::Held | HeldState::Releasing)
+        && job.expires_at > chrono::Utc::now();
+    let (true, Some(file), Some(format)) = (waiting, job.file.clone(), job.stored_format.clone())
+    else {
         return not_found(&state, parts).await;
     };
     let files = Arc::clone(&state.app.held);
@@ -213,14 +218,20 @@ pub(crate) async fn release_held(
         give_back(app, &claim, Refusal::InvalidForm).await;
         return Err(Refusal::InvalidForm.into());
     }
-    match print_document(app, user, document, &choices, Some(claim)).await {
+    let printed = print_document(app, user, document, &choices, Some(claim)).await;
+    // Printed, or perhaps printed: never offered again, so the document has no reason to stay.
+    if matches!(
+        printed,
+        Ok(_) | Err(Rejected::Refusal(Refusal::Unconfirmed))
+    ) {
+        let files = Arc::clone(&app.held);
+        let removed = tokio::task::spawn_blocking(move || files.remove(&file)).await;
+        if !matches!(removed, Ok(Ok(()))) {
+            tracing::warn!(job = claimed.id, "removing a released document failed");
+        }
+    }
+    match printed {
         Ok(submitted) => {
-            // Printed: the document has no reason to stay.
-            let files = Arc::clone(&app.held);
-            let removed = tokio::task::spawn_blocking(move || files.remove(&file)).await;
-            if !matches!(removed, Ok(Ok(()))) {
-                tracing::warn!(job = claimed.id, "removing a released document failed");
-            }
             tracing::info!(
                 user = user.username,
                 held_job = claimed.id,

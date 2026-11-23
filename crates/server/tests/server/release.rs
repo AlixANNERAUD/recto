@@ -118,7 +118,7 @@ async fn releasing_prints_through_quotas_and_the_ledger() {
 async fn released_and_counted_in_one_transaction() {
     let harness = Harness::new().await;
     let (alice, cookie) = alice(&harness).await;
-    let (id, _) = hold(&harness, alice).await;
+    let (id, file) = hold(&harness, alice).await;
     // CUPS may have queued the job and never said so, as when recto stops right after it was
     // counted.
     harness.print.lose_answers("timed out");
@@ -131,6 +131,8 @@ async fn released_and_counted_in_one_transaction() {
     let released = job(&harness, alice, id).await.unwrap();
     assert_eq!(released.state, HeldState::Released);
     assert_eq!(released.ledger_entry_id, Some(rows[0].id));
+    // Never offered again, so not kept for a day either.
+    assert!(harness.held.read(&file).is_err());
 
     // A job with a ledger entry never goes back to be printed again.
     let later = Utc::now() + held::CLAIM_LIFETIME + TimeDelta::minutes(1);
@@ -424,5 +426,71 @@ async fn the_jobs_page_shows_what_waits() {
     assert!(
         html.contains("<option value=\"monochrome\" selected"),
         "{html}"
+    );
+}
+
+#[tokio::test]
+async fn only_waiting_documents_are_shown() {
+    let harness = Harness::new().await;
+    let (alice, cookie) = alice(&harness).await;
+    let document = |id: i64| page(&format!("/jobs/held/{id}/document"), Some(&cookie));
+
+    // Released, its file not yet gone: no longer the owner's to look at.
+    let (released, _) = hold(&harness, alice).await;
+    recto_entity::held_jobs::Entity::update_many()
+        .col_expr(
+            recto_entity::held_jobs::Column::State,
+            sea_orm::sea_query::Expr::value("released"),
+        )
+        .filter(recto_entity::held_jobs::Column::Id.eq(released))
+        .exec(&harness.database)
+        .await
+        .unwrap();
+    assert_eq!(
+        harness.send(document(released)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // Expired, before the sweep reaches it.
+    let file = harness.held.write(&sample_pdf(1)).unwrap();
+    let expired = held::receive(
+        &harness.database,
+        NewHeld {
+            user_id: alice,
+            device_password_id: None,
+            name: "old.pdf".into(),
+            requested: "{}".into(),
+            stored: Stored {
+                file,
+                stored_format: "application/pdf".into(),
+                received_format: None,
+                document_pages: Some(1),
+                size: 10,
+            },
+            now: Utc::now() - TimeDelta::hours(25),
+            lifetime: TimeDelta::hours(24),
+        },
+        i64::MAX,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        harness.send(document(expired)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // Waiting, or being printed: shown.
+    let (waiting, _) = hold(&harness, alice).await;
+    assert_eq!(
+        harness.send(document(waiting)).await.status(),
+        StatusCode::OK
+    );
+    held::claim(&harness.database, alice, waiting, Utc::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        harness.send(document(waiting)).await.status(),
+        StatusCode::OK
     );
 }
