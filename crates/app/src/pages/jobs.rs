@@ -378,7 +378,8 @@ fn ReleaseForm(row: HeldRow, printers: Vec<String>, default: Option<String>) -> 
             </Field>
             <Field label=t!("print.color.label") input_id=field("color")>
                 <select id=field("color") name="color_mode" class=INPUT>
-                    <option value="">{t!("jobs.held.printer_default")}</option>
+                    // What the server does without a choice: color on a color printer.
+                    <option value="">{t!("jobs.held.color_when_possible")}</option>
                     {colors
                         .into_iter()
                         .map(|(value, label)| {

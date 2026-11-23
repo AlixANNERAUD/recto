@@ -627,7 +627,7 @@
       "last_refusal": "Last attempt: {reason}",
       "no_printers": "No printer is available to you right now.",
       "deleted": "The document was deleted.",
-      "printer_default": "The printer's default"
+      "color_when_possible": "Color when the printer has it"
     }
   },
   "scan": {
