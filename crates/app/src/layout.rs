@@ -90,7 +90,7 @@ fn user_name() -> Option<(String, bool)> {
     None
 }
 
-const NAV_ITEM: &str = "relative flex flex-col items-center gap-0.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors hover:bg-muted md:flex-row md:gap-3 md:px-3 md:py-2 md:text-sm";
+const NAV_ITEM: &str = "relative flex flex-col items-center gap-0.5 rounded-md px-0.5 py-1.5 text-[11px] font-medium transition-colors hover:bg-muted md:flex-row md:gap-3 md:px-3 md:py-2 md:text-sm";
 
 /// The current page's item: the accent color and a bar, under the item on phones and before it
 /// on the side rail.
@@ -141,7 +141,9 @@ pub fn Layout(
                     >
                         {current.then(|| view! { <span aria-hidden="true" class=NAV_INDICATOR></span> })}
                         <Icon kind=icon />
-                        <span>{label}</span>
+                        // A label too long for its cell (French, a narrow phone) is cut short
+                        // rather than running into the next one.
+                        <span class="max-w-full truncate">{label}</span>
                     </a>
                 </li>
             }

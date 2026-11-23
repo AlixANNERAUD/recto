@@ -78,9 +78,9 @@ pub fn current() -> Theme {
     Theme::System
 }
 
-/// The current page's path and query, for the `next` field of the theme and language switches,
+/// The current page's path and query, for the `next` field of the switches,
 /// which return to it.
-pub(crate) fn return_path() -> String {
+fn return_path() -> String {
     let location = use_location();
     // The router's search has no leading `?` when the server renders the page.
     let search = location.search.get_untracked();
@@ -92,13 +92,11 @@ pub(crate) fn return_path() -> String {
     format!("{}{separator}{search}", location.pathname.get_untracked())
 }
 
-/// Three buttons posting to `/theme`, which stores the choice and returns to this page. A plain
-/// form, so it works without JavaScript.
+/// Three buttons posting to `/theme`, which stores the choice and returns to this page.
 #[component]
 pub fn ThemeSwitch() -> impl IntoView {
-    let next = return_path();
     let current = current();
-    let button = |theme: Theme, icon: IconKind, label: &'static str| {
+    let button = move |theme: Theme, icon: IconKind, label: &'static str| {
         let pressed = current == theme;
         view! {
             <button
@@ -108,24 +106,45 @@ pub fn ThemeSwitch() -> impl IntoView {
                 aria-label=label
                 title=label
                 aria-pressed=pressed.to_string()
-                class=format!(
-                    "inline-flex size-8 items-center justify-center rounded-sm hover:cursor-pointer {}",
-                    if pressed { "bg-muted text-foreground" } else { "text-muted-foreground hover:text-foreground" },
-                )
+                class=format!("inline-flex size-8 items-center justify-center {}", choice_class(pressed))
             >
                 <Icon kind=icon class="size-4" />
             </button>
         }
     };
     view! {
-        <form method="post" action="/theme">
-            <input type="hidden" name="next" value=next />
-            <div role="group" aria-label=t!("theme.label") class="flex items-center gap-0.5 rounded-md border p-0.5">
-                {button(Theme::System, IconKind::Desktop, t!("theme.system"))}
-                {button(Theme::Light, IconKind::Sun, t!("theme.light"))}
-                {button(Theme::Dark, IconKind::Moon, t!("theme.dark"))}
+        <Switch action="/theme" label=t!("theme.label")>
+            {button(Theme::System, IconKind::Desktop, t!("theme.system"))}
+            {button(Theme::Light, IconKind::Sun, t!("theme.light"))}
+            {button(Theme::Dark, IconKind::Moon, t!("theme.dark"))}
+        </Switch>
+    }
+}
+
+/// A switch of the header (theme, language): a group of buttons posting one choice to `action`,
+/// which stores it and returns to this page. A plain form, so it works without JavaScript.
+#[component]
+pub(crate) fn Switch(
+    action: &'static str,
+    label: &'static str,
+    children: Children,
+) -> impl IntoView {
+    view! {
+        <form method="post" action=action>
+            <input type="hidden" name="next" value=return_path() />
+            <div role="group" aria-label=label class="flex items-center gap-0.5 rounded-md border p-0.5">
+                {children()}
             </div>
         </form>
+    }
+}
+
+/// The classes shared by a switch's buttons: the pressed one stands out.
+pub(crate) fn choice_class(pressed: bool) -> &'static str {
+    if pressed {
+        "rounded-sm hover:cursor-pointer bg-muted text-foreground"
+    } else {
+        "rounded-sm hover:cursor-pointer text-muted-foreground hover:text-foreground"
     }
 }
 
