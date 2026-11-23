@@ -5,7 +5,6 @@
 use std::{
     io::BufRead,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use recto_domain::{
@@ -14,8 +13,6 @@ use recto_domain::{
     users::{self, NewLocalUser},
 };
 use sea_orm::DatabaseConnection;
-
-use recto_scanning::{SaneScanners, ScannerService};
 
 use crate::{
     config::{
@@ -171,22 +168,11 @@ pub async fn dnssd_services(
         .unwrap_or(&options.brand_name);
     // The files name no host: the records point at the host's own name.
     let printer = dnssd::printer(instance, "", options.port, &options.public_url);
-    let scanners: Option<Arc<dyn ScannerService>> =
-        match tokio::task::spawn_blocking(SaneScanners::start).await {
-            Ok(Ok(scanners)) => Some(Arc::new(scanners)),
-            Ok(Err(error)) => {
-                tracing::warn!(%error, "SANE could not start; only the printer is written");
-                None
-            }
-            Err(error) => {
-                tracing::warn!(%error, "SANE crashed while starting; only the printer is written");
-                None
-            }
-        };
+    let scanners = crate::state::start_sane("only the printer is written").await;
     let mut advertised = printer;
-    if let Some(scan) = scanners {
+    if let Ok(scan) = scanners {
         advertised.scanners =
-            dnssd::open_scanners(&*scan, database, &options.public_url, &advertised.instance).await;
+            dnssd::open_scanners(&scan, database, &options.public_url, &advertised.instance).await;
     }
     write_avahi_files(&advertised, &options.dir)
 }

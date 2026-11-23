@@ -260,16 +260,24 @@ pub async fn build(
 /// working on a machine without scanners or SANE configuration. DNS-SD tells them the names
 /// recto's own scanners are announced under ([`crate::dnssd::announce`]).
 async fn scanners() -> Arc<dyn ScannerService> {
-    // `sane_init` blocks while backends load.
+    match start_sane("scanning is off").await {
+        Ok(scanners) => Arc::new(scanners),
+        Err(reason) => Arc::new(NoScanners(reason)),
+    }
+}
+
+/// Starts SANE on the blocking pool, since `sane_init` blocks while backends load. A failure is
+/// logged with `then`, what the caller does without SANE, and returned as the reason to show.
+pub(crate) async fn start_sane(then: &str) -> Result<SaneScanners, String> {
     match tokio::task::spawn_blocking(SaneScanners::start).await {
-        Ok(Ok(scanners)) => Arc::new(scanners),
+        Ok(Ok(scanners)) => Ok(scanners),
         Ok(Err(error)) => {
-            tracing::warn!(%error, "SANE could not start; scanning is off");
-            Arc::new(NoScanners(error.to_string()))
+            tracing::warn!(%error, "SANE could not start; {then}");
+            Err(error.to_string())
         }
         Err(error) => {
-            tracing::warn!(%error, "SANE crashed while starting; scanning is off");
-            Arc::new(NoScanners("SANE crashed while starting".into()))
+            tracing::warn!(%error, "SANE crashed while starting; {then}");
+            Err("SANE crashed while starting".into())
         }
     }
 }
