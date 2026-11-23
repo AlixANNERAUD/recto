@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::sync::{Arc, Mutex};
 
 use super::*;
 
@@ -275,7 +275,7 @@ fn the_printer_has_the_universal_subtype_and_scanners_none() {
 
 #[derive(Clone, Default)]
 struct Recorder {
-    calls: Rc<RefCell<Vec<String>>>,
+    calls: Arc<Mutex<Vec<String>>>,
     refuse: Option<&'static str>,
 }
 
@@ -285,20 +285,22 @@ impl Registry for Recorder {
             return Err(DnssdError::Mdns(mdns_sd::Error::Again));
         }
         self.calls
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .push(format!("register {}", service.get_fullname()));
         Ok(())
     }
 
     fn unregister(&self, fullname: &str) -> Result<(), DnssdError> {
         self.calls
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .push(format!("unregister {fullname}"));
         Ok(())
     }
 
     fn shutdown(self) {
-        self.calls.borrow_mut().push("shutdown".into());
+        self.calls.lock().unwrap().push("shutdown".into());
     }
 }
 
@@ -316,7 +318,7 @@ fn the_responder_registers_every_service_and_unregisters_them() {
     );
     responder.shutdown();
     assert_eq!(
-        *calls.borrow(),
+        *calls.lock().unwrap(),
         [
             "register recto._ipps._tcp.local.",
             "register Office scanner._uscans._tcp.local.",
@@ -336,7 +338,7 @@ fn a_failed_registration_withdraws_the_others() {
     let calls = recorder.calls.clone();
     assert!(start(&advertised(), recorder).is_err());
     assert_eq!(
-        *calls.borrow(),
+        *calls.lock().unwrap(),
         [
             "register recto._ipps._tcp.local.",
             "unregister recto._ipps._tcp.local.",

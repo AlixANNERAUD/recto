@@ -198,7 +198,7 @@ const SCANNER_WAIT: Duration = Duration::from_secs(60);
 
 /// Announces `printer` and the scanners open to everyone on `registry`. SANE is told the
 /// scanners' names first, so that it never lists them back if a network backend finds them.
-pub async fn announce<R: Registry>(
+pub async fn announce<R: Registry + Send + 'static>(
     mut printer: Advertised,
     scan: &dyn ScannerService,
     database: &DatabaseConnection,
@@ -219,7 +219,11 @@ pub async fn announce<R: Registry>(
             .map(|scanner| scanner.name.clone())
             .collect(),
     );
-    start(&printer, registry)
+    // A service that fails makes `start` unregister the others, which waits for their goodbyes:
+    // never on the runtime's threads.
+    tokio::task::spawn_blocking(move || start(&printer, registry))
+        .await
+        .unwrap_or_else(|panicked| std::panic::resume_unwind(panicked.into_panic()))
 }
 
 /// The DNS-SD service types recto can announce.
