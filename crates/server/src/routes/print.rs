@@ -682,6 +682,9 @@ pub(crate) fn job_name(file_name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use recto_printing::{Printer, PrinterState, testing::MockPrintService};
+    use sea_orm::{EntityTrait, PaginatorTrait};
+
     use super::*;
 
     fn capabilities() -> Capabilities {
@@ -710,6 +713,167 @@ mod tests {
             ..Choices::default()
         };
         assert!(options(&fields, &unknown, DocumentFormat::Pdf).is_ok());
+    }
+
+    /// The state of the print path over a fresh database, mock CUPS with an `office` printer,
+    /// and held documents under `dir`.
+    async fn app(dir: &std::path::Path) -> (AppState, std::sync::Arc<MockPrintService>) {
+        use std::sync::Arc;
+        let print = Arc::new(MockPrintService::new().with_printers(vec![Printer {
+            name: "office".into(),
+            description: None,
+            location: None,
+            make_and_model: None,
+            is_default: true,
+            state: PrinterState::Idle,
+            reasons: vec![],
+            accepting_jobs: true,
+            supplies: vec![],
+            capabilities: capabilities(),
+        }]));
+        let state = AppState {
+            print: print.clone(),
+            printer_admin: None,
+            scan: Arc::new(recto_scanning::MockScannerService::default()),
+            results: Arc::new(recto_scanning::ResultStore::new(
+                dir.join("results"),
+                std::time::Duration::from_secs(60),
+            )),
+            output_dir: None,
+            max_upload_size: 1024 * 1024,
+            leptos_options: leptos::config::LeptosOptions::builder()
+                .output_name("recto")
+                .build(),
+            database: recto_domain::testing::database().await,
+            branding: Arc::new(crate::branding::default_branding()),
+            job_visibility: JobVisibility::All,
+            currency: recto_app::state::Currency::new("EUR"),
+            timezone: chrono_tz::UTC,
+            page_counter: Default::default(),
+            raster: Default::default(),
+            os_integration: true,
+            held: Arc::new(held::files::HeldFiles::new(&dir.join("data")).unwrap()),
+            held_lifetime: chrono::TimeDelta::hours(24),
+        };
+        (state, print)
+    }
+
+    #[tokio::test]
+    async fn a_lost_claim_rolls_the_ledger_entry_back() {
+        let dir = recto_domain::testing::temporary_directory();
+        let (state, print) = app(dir.path()).await;
+        let alice = recto_domain::users::create_local(
+            &state.database,
+            recto_domain::users::NewLocalUser {
+                username: "alice".into(),
+                display_name: String::new(),
+                email: None,
+                password: "correct horse battery staple".into(),
+                is_administrator: false,
+            },
+            &recto_domain::passwords::PasswordPolicy { minimum_length: 12 },
+        )
+        .await
+        .unwrap();
+        let user = User {
+            id: alice.id,
+            username: alice.username,
+            name: alice.display_name,
+            is_administrator: false,
+            has_password: true,
+        };
+        let document = recto_printing::testing::sample_pdf(1);
+        let file = state.held.write(&document).unwrap();
+        let id = held::receive(
+            &state.database,
+            held::NewHeld {
+                user_id: user.id,
+                device_password_id: None,
+                name: "minutes.pdf".into(),
+                requested: "{}".into(),
+                stored: held::Stored {
+                    file,
+                    stored_format: "application/pdf".into(),
+                    received_format: None,
+                    document_pages: Some(1),
+                    size: document.len() as i64,
+                },
+                now: chrono::Utc::now(),
+                lifetime: chrono::TimeDelta::hours(24),
+            },
+            i64::MAX,
+        )
+        .await
+        .unwrap();
+        // A release claims the job, stalls, and the sweep gives it back; another release
+        // claims it again.
+        let stale = held::claim(&state.database, user.id, id, chrono::Utc::now())
+            .await
+            .unwrap()
+            .unwrap();
+        held::unclaim(&state.database, id, stale.claim, None, chrono::Utc::now())
+            .await
+            .unwrap();
+        let current = held::claim(&state.database, user.id, id, chrono::Utc::now())
+            .await
+            .unwrap()
+            .unwrap();
+
+        // The stale release reaches the ledger: its entry must not stay, with quota rules or
+        // without.
+        for rules in [false, true] {
+            if rules {
+                quotas::create(
+                    &state.database,
+                    quotas::NewRule {
+                        name: "Monthly pages".into(),
+                        enabled: true,
+                        subject: quotas::Subject::Everyone,
+                        printers: vec![],
+                        metric: Metric::Pages,
+                        period: quotas::Period::Month,
+                        limit: 100,
+                        enforcement: quotas::Enforcement::Hard,
+                    },
+                )
+                .await
+                .unwrap();
+            }
+            let printed = print_document(
+                &state,
+                &user,
+                Document {
+                    name: "minutes.pdf".into(),
+                    bytes: Bytes::from(document.clone()),
+                    format: DocumentFormat::Pdf,
+                },
+                &Choices {
+                    printer: "office".into(),
+                    ..Choices::default()
+                },
+                Some(HeldClaim {
+                    id,
+                    claim: stale.claim,
+                }),
+            )
+            .await;
+            assert!(
+                matches!(printed, Err(Rejected::Refusal(Refusal::HeldGone))),
+                "rules: {rules}"
+            );
+            assert!(print.submitted().is_empty());
+            let entries = recto_entity::print_jobs::Entity::find()
+                .count(&state.database)
+                .await
+                .unwrap();
+            assert_eq!(entries, 0, "rules: {rules}");
+            let job = held::get(&state.database, user.id, id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(job.state, held::HeldState::Releasing);
+            assert_eq!(job.claim, current.claim);
+        }
     }
 
     #[test]

@@ -96,6 +96,9 @@ struct Setup {
     os_integration: bool,
     /// How long a device may leave its request's body idle; 30 seconds, as the server's.
     device_read_timeout: Duration,
+    /// Whether the held documents' directory can be used; when not, the server starts anyway
+    /// and its printer accepts no jobs.
+    held_usable: bool,
 }
 
 impl Default for Setup {
@@ -116,6 +119,7 @@ impl Default for Setup {
             managed: false,
             os_integration: true,
             device_read_timeout: Duration::from_secs(30),
+            held_usable: true,
         }
     }
 }
@@ -172,7 +176,12 @@ impl Harness {
         std::fs::create_dir_all(site.join("pkg")).unwrap();
         std::fs::write(site.join("pkg/recto.css"), STYLESHEET).unwrap();
         let admin = Arc::new(MockPrinterAdmin::new());
-        let held = Arc::new(HeldFiles::new(&dir.path().join("data")).unwrap());
+        let held = Arc::new(if setup.held_usable {
+            HeldFiles::new(&dir.path().join("data")).unwrap()
+        } else {
+            // Never created, as when the data volume is missing or read-only.
+            HeldFiles::at(&dir.path().join("missing"))
+        });
         let state = AppState {
             printer_admin: setup
                 .managed

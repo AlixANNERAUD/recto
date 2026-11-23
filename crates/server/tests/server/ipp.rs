@@ -553,6 +553,10 @@ async fn the_cap_refuses_before_writing() {
         .await
         .unwrap();
     }
+    // A write would fail, and answer server-error-internal-error: the cap must refuse first.
+    use std::os::unix::fs::PermissionsExt;
+    let dir = harness.held.dir().to_owned();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
     let answer = ipp(
         &harness,
         post_ipp(
@@ -562,6 +566,7 @@ async fn the_cap_refuses_before_writing() {
         ),
     )
     .await;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(status(&answer), 0x050B);
     assert_eq!(held_files(&harness), 0);
 }
@@ -1209,4 +1214,94 @@ async fn an_unknown_which_jobs_is_named_in_the_refusal() {
             .map(|value| text_of(&value)),
         Some("fetchable".to_owned())
     );
+}
+
+#[tokio::test]
+async fn a_printer_that_cannot_keep_documents_refuses_jobs() {
+    let harness = Harness::with(Setup {
+        held_usable: false,
+        ..Setup::default()
+    })
+    .await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let laptop = device(&harness, alice, "Laptop").await;
+    let send = |body: Vec<u8>| post_ipp("/ipp/print", Some(&laptop.secret), Body::from(body));
+
+    let answer = ipp(&harness, send(print_job("minutes.pdf", &sample_pdf(1)))).await;
+    assert_eq!(status(&answer), 0x0506, "Print-Job");
+    let mut create = request(IppOperation::CreateJob);
+    operation_attribute(
+        &mut create,
+        "job-name",
+        IppValue::new_name_without_language("minutes.pdf").unwrap(),
+    );
+    let answer = ipp(&harness, send(create.to_bytes().to_vec())).await;
+    assert_eq!(status(&answer), 0x0506, "Create-Job");
+    let validate = request(IppOperation::ValidateJob);
+    let answer = ipp(&harness, send(validate.to_bytes().to_vec())).await;
+    assert_eq!(status(&answer), 0x0506, "Validate-Job");
+
+    // Devices are told before they send.
+    let answer = ipp(
+        &harness,
+        post_ipp(
+            "/ipp/print",
+            None,
+            Body::from(
+                request(IppOperation::GetPrinterAttributes)
+                    .to_bytes()
+                    .to_vec(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(
+        printer_attribute(&answer, "printer-is-accepting-jobs"),
+        IppValue::Boolean(false)
+    );
+    assert!(
+        held::list(&harness.database, alice)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn guessing_device_passwords_never_locks_out_sign_in() {
+    let harness = Harness::new().await;
+    harness.local_user("alice", ALICE_PASSWORD).await;
+    let job = print_job("minutes.pdf", &sample_pdf(1));
+    // Every guess a different secret, so none is refused from memory without being counted.
+    let mut refused = None;
+    for guess in 0..40 {
+        let secret = format!("{guess:032}");
+        let response = harness
+            .send(post_ipp(
+                "/ipp/print",
+                Some(&secret),
+                Body::from(job.clone()),
+            ))
+            .await;
+        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+            refused = Some(guess);
+            break;
+        }
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "guess {guess}");
+    }
+    assert_eq!(refused, Some(30), "the 31st guess is refused");
+
+    // Password sign-in from the same address has its own limit, untouched.
+    let response = harness
+        .send(from_address(
+            form(
+                "/sign-in",
+                None,
+                &[("login", "alice"), ("password", ALICE_PASSWORD)],
+            ),
+            LOOPBACK,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(session_cookie(response.headers()).is_some());
 }

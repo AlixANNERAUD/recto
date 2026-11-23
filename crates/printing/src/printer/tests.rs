@@ -862,7 +862,7 @@ fn extra_operation_attributes_join_the_operation_group() {
 }
 
 #[test]
-fn long_job_names_are_cut_and_a_full_queue_refuses() {
+fn long_job_names_are_cut_and_a_closed_queue_says_so() {
     let printer = VirtualPrinter {
         accepting_jobs: false,
         ..printer()
