@@ -122,6 +122,7 @@ pub fn Layout(
 ) -> impl IntoView {
     let path = use_location().pathname.get_untracked();
     let administrator = is_administrator();
+    let switches = use_context::<ShownOnce>().is_none();
     // Rendered twice, for the phone row and the side rail; CSS shows one of them.
     let items = |phone: bool| {
         destinations(administrator)
@@ -212,8 +213,7 @@ pub fn Layout(
                     <span class="truncate">{app_name()}</span>
                 </a>
                 <div class="ml-auto flex items-center gap-2">
-                    <LanguageSwitch />
-                    <ThemeSwitch />
+                    {switches.then(|| view! { <Switches /> })}
                     {user}
                 </div>
             </div>
@@ -241,6 +241,22 @@ pub fn Layout(
     .into_any()
 }
 
+/// Marks a page that cannot be shown again, such as one holding a secret shown once: its header
+/// leaves out the switches, which reload the page with a GET and would lose what it shows.
+#[derive(Clone, Copy, Debug)]
+pub struct ShownOnce;
+
+/// The language and theme switches.
+#[component]
+fn Switches() -> impl IntoView {
+    view! {
+        <div class="flex items-center gap-2">
+            <LanguageSwitch />
+            <ThemeSwitch />
+        </div>
+    }
+}
+
 /// The frame of the pages shown without a signed-in user (sign-in errors, no access): the app's
 /// logo and name and one centered card.
 #[component]
@@ -261,15 +277,7 @@ pub fn Bare(
                     <Mark />
                     <span class="truncate">{app_name()}</span>
                 </p>
-                {switch
-                    .then(|| {
-                        view! {
-                            <div class="flex items-center gap-2">
-                                <LanguageSwitch />
-                                <ThemeSwitch />
-                            </div>
-                        }
-                    })}
+                {switch.then(|| view! { <Switches /> })}
             </div>
             <section class="bg-card grid gap-4 rounded-lg border p-6 shadow-[0_1px_2px_rgba(0,0,0,0.08)]">
                 <h1 class="text-xl font-semibold">{title}</h1>

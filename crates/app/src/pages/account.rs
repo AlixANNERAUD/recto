@@ -23,7 +23,7 @@ use crate::{
     },
     display::{iso_time, relative_time, unix_now},
     functions::{DeviceRow, DirectPrinting, my_device_passwords, my_direct_printing},
-    layout::Layout,
+    layout::{Layout, ShownOnce},
     t, tf,
 };
 
@@ -228,7 +228,10 @@ pub fn AccountPage() -> impl IntoView {
     };
     let created = use_context::<NewDevicePassword>()
         .filter(|_| sections.devices)
-        .map(|created| view! { <CreatedPassword created /> });
+        .map(|created| {
+            provide_context(ShownOnce);
+            view! { <CreatedPassword created /> }
+        });
     let password = sections
         .password
         .then(|| view! { <PasswordForm username=username.clone() /> });
