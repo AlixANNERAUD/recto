@@ -43,6 +43,12 @@ option given on the command line wins over its variable.
 | `--local-accounts <true\|false>` | `RECTO_LOCAL_ACCOUNTS` |
 | `--password-minimum-length <LENGTH>` | `RECTO_PASSWORD_MINIMUM_LENGTH` |
 | `--trust-forwarded-headers <true\|false>` | `RECTO_TRUST_FORWARDED_HEADERS` |
+| `--os-integration <true\|false>` | `RECTO_OS_INTEGRATION` |
+| `--ipp-allow-plain <true\|false>` | `RECTO_IPP_ALLOW_PLAIN` |
+| `--data-dir <DIR>` | `RECTO_DATA_DIR` |
+| `--held-job-hours <HOURS>` | `RECTO_HELD_JOB_HOURS` |
+| `--default-media <MEDIA>` | `RECTO_DEFAULT_MEDIA` |
+| `--escl-open-networks <CIDRS>` | `RECTO_ESCL_OPEN_NETWORKS` |
 | `--oidc-issuer <URL>` | `RECTO_OIDC_ISSUER` |
 | `--oidc-client-id <ID>` | `RECTO_OIDC_CLIENT_ID` |
 | `--oidc-scopes <SCOPES>` | `RECTO_OIDC_SCOPES` |
@@ -58,10 +64,14 @@ option given on the command line wins over its variable.
 | `--dnssd-name <NAME>` | `RECTO_DNSSD_NAME` |
 | `--dnssd-interfaces <NAMES>` | `RECTO_DNSSD_INTERFACES` |
 | `--cups-url <URL>` | `RECTO_CUPS_URL` |
+| `--cups-admin-socket <FILE>` | `RECTO_CUPS_ADMIN_SOCKET` |
 | `--scan-output-dir <DIR>` | `RECTO_SCAN_OUTPUT_DIR` |
 | `--max-upload-size <BYTES>` | `RECTO_MAX_UPLOAD_SIZE` |
 | `--listen-address <ADDRESS>` | `RECTO_LISTEN_ADDRESS` |
 | `--site-root <DIR>` | `RECTO_SITE_ROOT` |
+| `--job-visibility <all\|own>` | `RECTO_JOB_VISIBILITY` |
+| `--currency <CODE>` | `RECTO_CURRENCY` |
+| `--timezone <ZONE>` | `RECTO_TIMEZONE` |
 | `--log-format <json\|text>` | `RECTO_LOG_FORMAT` |
 | `--brand-name <NAME>` | `RECTO_BRAND_NAME` |
 | `--brand-short-name <NAME>` | `RECTO_BRAND_SHORT_NAME` |
