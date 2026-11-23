@@ -15,7 +15,7 @@ use recto_entity::{group_memberships, groups, user_identities, users};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait,
     QueryFilter, QueryOrder, SqlErr, TransactionSession, TransactionTrait,
-    prelude::DateTimeWithTimeZone,
+    prelude::DateTimeWithTimeZone, sea_query::Expr,
 };
 
 use crate::{
@@ -430,6 +430,30 @@ pub async fn set_disabled(
     Ok(())
 }
 
+/// Sets the printer the user's computers and phones print to directly; `None`, or a blank name,
+/// holds their documents until the user releases them. Whether the user may use the printer is
+/// the caller's to check, and checked again at each job.
+pub async fn set_direct_printer(
+    database: &impl ConnectionTrait,
+    user_id: i64,
+    printer: Option<&str>,
+) -> Result<()> {
+    let printer = printer
+        .map(str::trim)
+        .filter(|printer| !printer.is_empty())
+        .map(str::to_owned);
+    let updated = users::Entity::update_many()
+        .col_expr(users::Column::DirectPrinter, Expr::value(printer))
+        .filter(users::Column::Id.eq(user_id))
+        .exec(database)
+        .await?;
+    if updated.rows_affected == 1 {
+        Ok(())
+    } else {
+        Err(Error::NotFound)
+    }
+}
+
 /// Grants or removes administration by hand. The grant is marked as manual, so a later
 /// administrator claim of `false` does not take it back. Refused on the actor's own account, and
 /// on administration the claim granted ([`Problem::AdministratorFromClaim`]): removing it would
@@ -643,6 +667,38 @@ mod tests {
             .find(|summary| summary.user.id == user_id)
             .expect("the user is listed")
             .groups
+    }
+
+    #[tokio::test]
+    async fn the_direct_printer_is_set_and_cleared() {
+        let database = crate::testing::database().await;
+        let alice = create_local(&database, local("alice", None), &POLICY)
+            .await
+            .unwrap();
+        assert_eq!(reload(&database, alice.id).await.direct_printer, None);
+
+        set_direct_printer(&database, alice.id, Some("office"))
+            .await
+            .unwrap();
+        assert_eq!(
+            reload(&database, alice.id).await.direct_printer.as_deref(),
+            Some("office")
+        );
+        // Blank holds, as no printer does.
+        set_direct_printer(&database, alice.id, Some("  "))
+            .await
+            .unwrap();
+        assert_eq!(reload(&database, alice.id).await.direct_printer, None);
+        set_direct_printer(&database, alice.id, Some("office"))
+            .await
+            .unwrap();
+        set_direct_printer(&database, alice.id, None).await.unwrap();
+        assert_eq!(reload(&database, alice.id).await.direct_printer, None);
+
+        assert!(matches!(
+            set_direct_printer(&database, alice.id + 1, Some("office")).await,
+            Err(Error::NotFound)
+        ));
     }
 
     #[tokio::test]

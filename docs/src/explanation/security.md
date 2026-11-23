@@ -153,6 +153,24 @@ reading a document: a personal address is checked before any byte of the body, a
 have sent part of its document by then, and some proxies read whole bodies anyway: recto only
 promises not to read or keep it.
 
+Printing directly (**Documents from your devices** on the Account page) changes only when a
+document is released, not how: the same access rules, quotas and ledger apply as on the Jobs
+page, checked again at each document, so a printer the person may no longer use holds it
+instead. It cannot reach a printer the person could not choose on the Print page.
+
+### Rasters
+
+Phones and Windows send rasters, pictures of each page, which recto decodes itself to make a
+PDF: with IPP and the eSCL XML, the only parsers of untrusted input recto adds, and written in
+safe Rust. Their line coding lets a few bytes stand for a whole page, so the bounds are on
+decoded pixels, read from each page's header before a byte of it is decoded: 160 MiB per page,
+4 GiB and 500 pages per document, with every size computed so that it cannot overflow. Decoded
+lines go straight into a compressor, so memory holds one line and the compressed result, which
+stops at `RECTO_MAX_UPLOAD_SIZE`. Two rasters convert at once, each for at most 60 seconds; the
+deadline is checked inside the decoder, because a blocking thread cannot be stopped from outside.
+A raster cut short is refused, never padded. The bounds and the IPP answers are listed in
+[Printing](../reference/printing.md#printing-from-computers-and-phones).
+
 The personal address puts the device password in a URL. recto never logs it and never redirects
 with it, and any unknown address under `/device/` is a bare `404`. Your reverse proxy's access
 log will record it unless told not to (see

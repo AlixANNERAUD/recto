@@ -293,6 +293,7 @@ mod tests {
             sessions_valid_after: sessions_valid_after.map(|cutoff| cutoff.fixed_offset()),
             created_at: Utc::now().fixed_offset(),
             last_sign_in_at: None,
+            direct_printer: None,
         }
     }
 

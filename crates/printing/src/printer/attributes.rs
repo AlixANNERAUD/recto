@@ -12,10 +12,13 @@ use uuid::Uuid;
 
 use super::Media;
 
-/// The formats the queue takes today. `application/octet-stream` asks recto to detect the
-/// format from the content, which it does for every document anyway.
+/// The formats the queue takes. Rasters (`image/pwg-raster` for IPP Everywhere, `image/urf`
+/// for AirPrint) become a PDF when they arrive. `application/octet-stream` asks recto to detect
+/// the format from the content, which it does for every document anyway.
 pub const DOCUMENT_FORMATS: &[&str] = &[
     "application/pdf",
+    "image/pwg-raster",
+    "image/urf",
     "image/jpeg",
     "image/png",
     "application/octet-stream",
@@ -103,13 +106,22 @@ pub const REQUIRED_PRINTER_ATTRIBUTES: &[&str] = &[
     "printer-up-time",
     "printer-uri-supported",
     "printer-uuid",
+    "pwg-raster-document-resolution-supported",
+    "pwg-raster-document-sheet-back",
+    "pwg-raster-document-type-supported",
     "queued-job-count",
     "sides-default",
     "sides-supported",
     "uri-authentication-supported",
     "uri-security-supported",
+    "urf-supported",
     "which-jobs-supported",
 ];
+
+/// The Apple raster recto reads, as AirPrint clients expect it: version 1.4, copies, 8-bit grey
+/// and sRGB, 300 dpi, back sides upright (`DM1`) and one input slot. iOS lists only printers
+/// with it, and CUPS needs an `RS` value.
+const URF: [&str; 7] = ["V1.4", "CP1", "W8", "SRGB24", "RS300", "DM1", "IS1"];
 
 /// The operations of PWG 5100.14 Table 4, in code order.
 const OPERATIONS: [i32; 11] = [
@@ -180,8 +192,11 @@ pub struct PrinterUri {
 pub enum JobViewState {
     /// A Create-Job still waiting for its document.
     Pending,
-    /// Held in recto: the device's part is done.
+    /// Held in recto, or printed: the device's part is done.
     Completed,
+    /// Printing directly was refused and the job is held instead. Still completed, so the
+    /// device does not wait or stop its queue, but not successfully.
+    CompletedWithErrors,
 }
 
 /// A job as a device sees it.
@@ -416,6 +431,14 @@ impl VirtualPrinter {
             "printer-uuid",
             uri_value(&format!("urn:uuid:{}", self.uuid)),
         );
+        // The rasters recto converts to PDF (`raster`): back sides arrive upright, as a PDF
+        // page wants them.
+        put("pwg-raster-document-resolution-supported", Some(dpi(300)));
+        put("pwg-raster-document-sheet-back", keyword("normal"));
+        put(
+            "pwg-raster-document-type-supported",
+            keywords(&["sgray_8", "srgb_8"]),
+        );
         put("queued-job-count", Some(IppValue::Integer(clamp(queued))));
         put("sides-default", keyword("one-sided"));
         put(
@@ -431,6 +454,7 @@ impl VirtualPrinter {
             "uri-security-supported",
             keyword(if uri.tls { "tls" } else { "none" }),
         );
+        put("urf-supported", keywords(&URF));
         put(
             "which-jobs-supported",
             keywords(&["completed", "not-completed", "all"]),
@@ -453,7 +477,7 @@ impl VirtualPrinter {
                 .iter()
                 .any(|name| JOB_GROUPS.contains(&name.as_str()));
         let wanted = |name: &str| everything || requested.iter().any(|asked| asked == name);
-        let completed = job.state == JobViewState::Completed;
+        let completed = job.state != JobViewState::Pending;
         let when_completed = |value: IppValue| if completed { value } else { IppValue::NoValue };
 
         let mut out = Attributes::default();
@@ -474,10 +498,10 @@ impl VirtualPrinter {
         );
         put("job-name", name(&truncate(&job.name, 255)));
         put("job-originating-user-name", name(&job.device));
-        let (state, reason) = if completed {
-            (9, "job-completed-successfully")
-        } else {
-            (3, "job-incoming")
+        let (state, reason) = match job.state {
+            JobViewState::Pending => (3, "job-incoming"),
+            JobViewState::Completed => (9, "job-completed-successfully"),
+            JobViewState::CompletedWithErrors => (9, "job-completed-with-errors"),
         };
         put("job-state", Some(IppValue::Enum(state)));
         put("job-state-reasons", keyword(reason));

@@ -77,10 +77,9 @@ passwords over plain HTTP. `-t` prints a report, `-I` goes on after a failure, `
 attribute.
 
 The **PWG 5100.14 section 5.1/5.2** block of `ipp-everywhere.test` fails, for expected reasons
-only: `image/pwg-raster` and the `pwg-raster-*` attributes (recto does not take rasters yet),
-`printer-supply*` (recto has no ink to report, and does not make levels up), and
+only: `printer-supply*` (recto has no ink to report, and does not make levels up), and
 `overrides-supported WITH-VALUE "document-number"`, a typo in CUPS 2.4's test file that fails
-CUPS's own `ippeveprinter` too. Every other test passes. Documents sent this way are held for the
+CUPS's own `ippeveprinter` too. Every other test passes, the PWG raster ones included. Documents sent this way are held for the
 development user, under `target/dev-data/held`.
 
 ## Where things are

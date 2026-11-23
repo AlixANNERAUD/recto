@@ -64,6 +64,21 @@ pub fn held_job(state: HeldState, name: &str, locale: Locale) -> String {
     }
 }
 
+/// The `job-state-message` of a job its owner prints directly that was refused, so it is held
+/// instead; `reason` is why, a refusal's message.
+#[cfg(feature = "ssr")]
+pub fn direct_refused(reason: &str, name: &str, locale: Locale) -> String {
+    format!(
+        "{}",
+        t!(
+            "ipp.direct_refused",
+            reason = reason,
+            name = name,
+            locale = locale
+        )
+    )
+}
+
 /// What went wrong while scanning or storing a scan, readable by the user. `name` is the app's
 /// name.
 pub fn scan_error(error: &ScanError, name: &str, locale: Locale) -> String {

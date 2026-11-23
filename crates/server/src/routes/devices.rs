@@ -1,7 +1,7 @@
-//! The device password forms of the Account page: `POST /account/devices` creates one and
-//! `POST /account/devices/{id}/revoke` revokes one. Both are plain forms, behind the session and
-//! the cross-site check like every other form, and answer the not-found page when OS
-//! integration is off.
+//! The device forms of the Account page: `POST /account/devices` creates a device password,
+//! `POST /account/devices/{id}/revoke` revokes one, and `POST /account/direct-printer` sets
+//! where documents from devices go. All are plain forms, behind the session and the cross-site
+//! check like every other form, and answer the not-found page when OS integration is off.
 //!
 //! A new password is answered with the Account page showing it once, with
 //! `Cache-Control: no-store`, never with a redirect: the secret must not enter an address, the
@@ -23,7 +23,11 @@ use recto_app::{
     },
     state::{AppState, User},
 };
-use recto_domain::{Error, Problem, device_passwords};
+use recto_domain::{
+    Error, Problem,
+    access::{DeviceKind, Usable},
+    device_passwords, users,
+};
 use serde::Deserialize;
 
 use super::render;
@@ -47,6 +51,7 @@ pub fn router(app: AppState, auth: &AuthState) -> Router {
     Router::new()
         .route("/account/devices", post(create))
         .route("/account/devices/{id}/revoke", post(revoke))
+        .route("/account/direct-printer", post(direct_printer))
         .route_layer(middleware::from_fn(session::require_user))
         .with_state(state)
 }
@@ -178,6 +183,76 @@ async fn revoke(
                 move || provide_context(refusal.clone()),
             )
             .await
+        }
+    }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct DirectPrinterFields {
+    printer: String,
+}
+
+/// Sets the printer documents from the user's devices print to at once; empty holds them.
+/// Answers `303 /account?done=direct`, or `/account?error=direct_printer` for a printer CUPS
+/// does not have or the user may not use (the same answer, so the form does not reveal which
+/// printers exist), or `/account?error=direct_unavailable`.
+async fn direct_printer(
+    State(state): State<DevicesState>,
+    Extension(user): Extension<User>,
+    parts: Parts,
+    Form(fields): Form<DirectPrinterFields>,
+) -> Response {
+    if !state.app.os_integration {
+        return not_found(&state, parts).await;
+    }
+    let app = &state.app;
+    let wanted = fields.printer.trim();
+    let printer = if wanted.is_empty() {
+        None
+    } else {
+        let usable = match Usable::read(
+            &app.database,
+            DeviceKind::Printer,
+            user.id,
+            user.is_administrator,
+        )
+        .await
+        {
+            Ok(usable) => usable,
+            Err(error) => {
+                tracing::error!(%error, "reading the printer access rules failed");
+                return Redirect::to("/account?error=direct_unavailable").into_response();
+            }
+        };
+        if !usable.allows(wanted) {
+            return Redirect::to("/account?error=direct_printer").into_response();
+        }
+        match app.print.printer(wanted).await {
+            // Kept under the name CUPS answered with, whose rule is checked again: CUPS
+            // ignores the case of printer names.
+            Ok(printer) if usable.allows(&printer.name) => Some(printer.name),
+            Ok(_) | Err(recto_printing::PrintError::PrinterNotFound(_)) => {
+                return Redirect::to("/account?error=direct_printer").into_response();
+            }
+            Err(error) => {
+                tracing::warn!(%error, "checking the direct printer failed");
+                return Redirect::to("/account?error=direct_unavailable").into_response();
+            }
+        }
+    };
+    match users::set_direct_printer(&app.database, user.id, printer.as_deref()).await {
+        Ok(()) => {
+            tracing::info!(
+                user = user.username,
+                printer = printer.as_deref().unwrap_or("none"),
+                "direct printer set"
+            );
+            Redirect::to("/account?done=direct").into_response()
+        }
+        Err(error) => {
+            tracing::error!(%error, "setting the direct printer failed");
+            Redirect::to("/account?error=direct_unavailable").into_response()
         }
     }
 }

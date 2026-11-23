@@ -10,15 +10,18 @@
 //! since the operation is in the body, and credentials are required unless it is
 //! Get-Printer-Attributes, which clients send before they know they need any.
 //!
-//! Documents are **held**, never printed here: written to the held documents' directory and
-//! reported completed to the device, they wait on the Jobs page until their owner releases or
-//! deletes them, or they expire. Job operations see only the jobs of the device password that
-//! sent them. Every URI in an answer is built on the address the request came in on, so a
+//! Documents are **held**: written to the held documents' directory and reported completed to
+//! the device, they wait on the Jobs page until their owner releases or deletes them, or they
+//! expire. Rasters (PWG and Apple) are converted to a PDF first, so everything after sees one
+//! format. A user who prints directly has each job released at once to their printer, through
+//! the same path as the Jobs page; a refusal leaves it held and the device is told the job
+//! completed with errors. Job operations see only the jobs of the device password that sent
+//! them. Every URI in an answer is built on the address the request came in on, so a
 //! device that switches to the URI it is given keeps its personal address.
 //!
 //! Log lines name the device password's id, never the path, which may hold the secret.
 
-use std::{future::poll_fn, pin::Pin, sync::Arc};
+use std::{future::poll_fn, pin::Pin, sync::Arc, time::Duration};
 
 use ::ipp::{
     attribute::IppAttribute,
@@ -34,22 +37,28 @@ use axum::{
 };
 use chrono::Utc;
 use recto_app::i18n::Locale;
-use recto_app::state::AppState;
+use recto_app::{
+    refusal::Refusal,
+    state::{AppState, User},
+};
 use recto_domain::{
     Error, Problem,
     device_passwords::DeviceUser,
     held::{self, HeldJob, HeldState, NewHeld, Stored},
+    users,
 };
 use recto_printing::{
-    DocumentFormat,
+    Capabilities, ColorMode, DocumentFormat, Sides,
     printer::{
         self, DOCUMENT_FORMATS, GET_PRINTER_ATTRIBUTES, JobView, JobViewState, Operation,
         PrinterUri, Requested, TOO_MANY_JOBS, VirtualPrinter, WhichJobs,
     },
+    raster::{RasterError, RasterFormat},
 };
 use url::Url;
 
-use super::print::{FORM_SLACK, job_name};
+use super::held::release_held;
+use super::print::{Choices, FORM_SLACK, Rejected, Submitted, job_name};
 use crate::{
     device_auth::{self, DeviceAuth},
     state::AuthState,
@@ -61,6 +70,10 @@ const MAKE_AND_MODEL: &str = "recto";
 
 /// How many times `RECTO_MAX_UPLOAD_SIZE` a user's waiting documents may take in all.
 const HELD_BYTES_FACTOR: i64 = 10;
+
+/// How long the answer to a job printed directly waits for the outcome. The release goes on
+/// after that whatever happens to the request; the device is then told it is being released.
+const DIRECT_WAIT: Duration = Duration::from_secs(20);
 
 #[derive(Clone)]
 struct IppState {
@@ -285,6 +298,8 @@ const NOT_POSSIBLE: u16 = IppStatus::ClientErrorNotPossible as u16;
 const NOT_FOUND: u16 = IppStatus::ClientErrorNotFound as u16;
 const TOO_LARGE: u16 = IppStatus::ClientErrorRequestEntityTooLong as u16;
 const FORMAT_NOT_SUPPORTED: u16 = IppStatus::ClientErrorDocumentFormatNotSupported as u16;
+const FORMAT_ERROR: u16 = IppStatus::ClientErrorDocumentFormatError as u16;
+const BUSY: u16 = IppStatus::ServerErrorBusy as u16;
 const INTERNAL: u16 = IppStatus::ServerErrorInternalError as u16;
 const NOT_ACCEPTING: u16 = IppStatus::ServerErrorNotAcceptingJobs as u16;
 const OPERATION_NOT_SUPPORTED: u16 = IppStatus::ServerErrorOperationNotSupported as u16;
@@ -292,6 +307,23 @@ const ONE_DOCUMENT: u16 = IppStatus::ServerErrorMultipleDocumentJobsNotSupported
 
 fn status(status: u16) -> (u16, Groups) {
     (status, Vec::new())
+}
+
+/// The answer to a raster that was not converted. Content recto cannot read is a format error;
+/// one that would cost too much, in pixels, pages, output or time, is too large, like a document
+/// over `RECTO_MAX_UPLOAD_SIZE`; only waiting for a place is worth a retry.
+fn raster_status(error: RasterError) -> u16 {
+    match error {
+        RasterError::Truncated | RasterError::Malformed(_) | RasterError::Unsupported(_) => {
+            FORMAT_ERROR
+        }
+        RasterError::PageTooLarge
+        | RasterError::TooManyPages
+        | RasterError::DocumentTooLarge
+        | RasterError::TooLarge
+        | RasterError::TimedOut => TOO_LARGE,
+        RasterError::Busy => BUSY,
+    }
 }
 
 /// One authenticated request: what its operations need.
@@ -431,7 +463,7 @@ impl Job<'_> {
             received_at: now,
             pages: None,
         };
-        Ok(self.created(&view, HeldState::Incoming, now))
+        Ok(self.created(&view, &self.message(HeldState::Incoming), now))
     }
 
     async fn send_document(
@@ -479,9 +511,10 @@ impl Job<'_> {
             return Ok(status(TOO_LARGE));
         }
         // From the content, never the declared type, as for the print form.
-        let Some(format) = DocumentFormat::detect(&document) else {
+        let raster = RasterFormat::detect(&document);
+        if DocumentFormat::detect(&document).is_none() && raster.is_none() {
             return Ok(status(FORMAT_NOT_SUPPORTED));
-        };
+        }
         let size = i64::try_from(document.len()).unwrap_or(i64::MAX);
         let room = match &received {
             Received::New { .. } => {
@@ -498,15 +531,51 @@ impl Job<'_> {
                 .await?
             }
         };
-        // Before anything is written.
+        // Before anything is converted or written; the insert checks again with the PDF's size.
         if !room {
             return Ok(status(TOO_MANY_JOBS));
         }
-        let pages = match format {
+        // A raster becomes a PDF here, so the file, the count, the preview and CUPS see one
+        // format; the PDF stays within the upload size.
+        let (document, format, received_mime, converted_pages) = match raster {
+            Some(raster) => {
+                match app
+                    .raster
+                    .convert(document, raster, app.max_upload_size)
+                    .await
+                {
+                    Ok(converted) => (
+                        Bytes::from(converted.pdf),
+                        DocumentFormat::Pdf,
+                        raster.mime(),
+                        Some(converted.pages),
+                    ),
+                    Err(error) => {
+                        tracing::info!(
+                            %error,
+                            user = device.username,
+                            device_password_id = device.device_password_id,
+                            format = raster.mime(),
+                            "raster refused"
+                        );
+                        return Ok(status(raster_status(error)));
+                    }
+                }
+            }
+            None => {
+                let Some(format) = DocumentFormat::detect(&document) else {
+                    return Ok(status(FORMAT_NOT_SUPPORTED));
+                };
+                (document, format, format.mime(), None)
+            }
+        };
+        let size = i64::try_from(document.len()).unwrap_or(i64::MAX);
+        let pages = match (converted_pages, format) {
+            (Some(pages), _) => Some(pages),
             // A PDF recto cannot count is still held: CUPS may print it, and the release
             // counts again.
-            DocumentFormat::Pdf => app.page_counter.count(document.clone()).await.ok(),
-            DocumentFormat::Jpeg | DocumentFormat::Png => Some(1),
+            (None, DocumentFormat::Pdf) => app.page_counter.count(document.clone()).await.ok(),
+            (None, DocumentFormat::Jpeg | DocumentFormat::Png) => Some(1),
         }
         .map(i64::from);
         let files = Arc::clone(&app.held);
@@ -528,37 +597,47 @@ impl Job<'_> {
             received_format: Some(
                 declared
                     .filter(|declared| declared != "application/octet-stream")
-                    .unwrap_or_else(|| format.mime().to_owned()),
+                    .unwrap_or_else(|| received_mime.to_owned()),
             ),
             document_pages: pages,
             size,
         };
         let now = Utc::now();
-        let recorded = match received {
-            Received::New { name, requested } => held::receive(
-                &app.database,
-                NewHeld {
-                    user_id: device.user_id,
-                    device_password_id: Some(device.device_password_id),
-                    name: name.clone(),
-                    requested: requested_json(&requested),
-                    stored,
-                    now,
-                    lifetime: app.held_lifetime,
-                },
-                self.max_bytes(),
-            )
-            .await
-            .map(|id| Some((id, name, now))),
-            Received::Incoming(job) => held::attach(
-                &app.database,
-                device.device_password_id,
-                job.id,
-                stored,
-                self.max_bytes(),
-            )
-            .await
-            .map(|attached| attached.then_some((job.id, job.name, job.received_at))),
+        let (recorded, requested) = match received {
+            Received::New { name, requested } => (
+                held::receive(
+                    &app.database,
+                    NewHeld {
+                        user_id: device.user_id,
+                        device_password_id: Some(device.device_password_id),
+                        name: name.clone(),
+                        requested: requested_json(&requested),
+                        stored,
+                        now,
+                        lifetime: app.held_lifetime,
+                    },
+                    self.max_bytes(),
+                )
+                .await
+                .map(|id| Some((id, name, now))),
+                requested,
+            ),
+            Received::Incoming(job) => {
+                // Options that no longer read are not worth refusing the document for.
+                let requested = serde_json::from_str(&job.requested).unwrap_or_default();
+                (
+                    held::attach(
+                        &app.database,
+                        device.device_password_id,
+                        job.id,
+                        stored,
+                        self.max_bytes(),
+                    )
+                    .await
+                    .map(|attached| attached.then_some((job.id, job.name, job.received_at))),
+                    requested,
+                )
+            }
         };
         let (id, name, received_at) = match recorded {
             Ok(Some(recorded)) => recorded,
@@ -580,18 +659,92 @@ impl Job<'_> {
             device_password_id = device.device_password_id,
             job = id,
             pages,
-            format = format.mime(),
+            format = received_mime,
             "job held"
         );
+        let (state, message) = self.print_directly(device, id, &requested).await;
         let view = JobView {
             id: ipp_id(id)?,
             name,
             device: device.device_name.clone(),
-            state: JobViewState::Completed,
+            state,
             received_at,
             pages,
         };
-        Ok(self.created(&view, HeldState::Held, now))
+        Ok(self.created(&view, &message, now))
+    }
+
+    /// Releases a job just held when its owner prints directly, and says how it went. The
+    /// release runs in a task of its own, so a device hanging up cannot cut it between the
+    /// ledger and CUPS; the answer waits for it at most [`DIRECT_WAIT`].
+    async fn print_directly(
+        &self,
+        device: &DeviceUser,
+        id: i64,
+        requested: &Requested,
+    ) -> (JobViewState, String) {
+        let held = (JobViewState::Completed, self.message(HeldState::Held));
+        let app = self.state.app.clone();
+        let user = match users::find_by_id(&app.database, device.user_id).await {
+            Ok(Some(user)) => user,
+            Ok(None) => return held,
+            Err(error) => {
+                // The job stays held, as if the user held their jobs.
+                tracing::error!(%error, job = id, "reading the direct printer failed");
+                return held;
+            }
+        };
+        let Some(printer) = user.direct_printer.clone() else {
+            return held;
+        };
+        let user = User {
+            id: user.id,
+            username: user.username,
+            name: user.display_name,
+            is_administrator: user.is_administrator,
+            has_password: user.password_hash.is_some(),
+        };
+        let requested = requested.clone();
+        let release = tokio::spawn(async move {
+            // Fitted to the printer: the device laid the document out for a generic one.
+            let capabilities = app
+                .print
+                .printer(&printer)
+                .await
+                .ok()
+                .map(|printer| printer.capabilities);
+            let choices = direct_choices(&printer, &requested, capabilities.as_ref());
+            release_held(&app, &user, id, choices).await
+        });
+        let outcome = match tokio::time::timeout(DIRECT_WAIT, release).await {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(error)) => {
+                tracing::error!(%error, job = id, "printing a job directly failed");
+                return held;
+            }
+            Err(_) => {
+                return (JobViewState::Completed, self.message(HeldState::Releasing));
+            }
+        };
+        match outcome {
+            Ok(Submitted { .. }) | Err(Rejected::Refusal(Refusal::Unconfirmed)) => {
+                (JobViewState::Completed, self.message(HeldState::Released))
+            }
+            Err(rejected) => {
+                let refusal = match rejected {
+                    Rejected::Quota(_) => Refusal::Quota,
+                    Rejected::Refusal(refusal) => refusal,
+                };
+                tracing::info!(
+                    user = device.username,
+                    device_password_id = device.device_password_id,
+                    job = id,
+                    refusal = refusal.code(),
+                    "printing directly refused, job held"
+                );
+                (JobViewState::CompletedWithErrors, self.refused(refusal))
+            }
+        }
     }
 
     /// Removes a document written for a job that was not recorded; the orphan sweep catches
@@ -720,43 +873,49 @@ impl Job<'_> {
         job: &HeldJob,
         requested: &[String],
     ) -> recto_domain::Result<Vec<IppAttribute>> {
+        let refusal = job.refusal.as_deref().and_then(Refusal::from_code);
+        let (state, message) = match (job.state, refusal) {
+            (HeldState::Incoming, _) => (JobViewState::Pending, self.message(job.state)),
+            // Not printed when it was released, directly or from the Jobs page.
+            (HeldState::Held, Some(refusal)) => {
+                (JobViewState::CompletedWithErrors, self.refused(refusal))
+            }
+            (state, _) => (JobViewState::Completed, self.message(state)),
+        };
         let view = JobView {
             id: ipp_id(job.id)?,
             name: job.name.clone(),
             device: device.device_name.clone(),
-            state: if job.state == HeldState::Incoming {
-                JobViewState::Pending
-            } else {
-                JobViewState::Completed
-            },
+            state,
             received_at: job.received_at,
             pages: job.document_pages,
         };
-        Ok(self.state.printer.job_attributes(
-            &view,
-            self.uri,
-            &self.message(job.state),
-            requested,
-            Utc::now(),
-        ))
+        Ok(self
+            .state
+            .printer
+            .job_attributes(&view, self.uri, &message, requested, Utc::now()))
     }
 
     /// The job group of a Print-Job, Create-Job or Send-Document answer.
-    fn created(
-        &self,
-        view: &JobView,
-        state: HeldState,
-        now: chrono::DateTime<Utc>,
-    ) -> (u16, Groups) {
-        let attributes =
-            self.state
-                .printer
-                .created_job_attributes(view, self.uri, &self.message(state), now);
+    fn created(&self, view: &JobView, message: &str, now: chrono::DateTime<Utc>) -> (u16, Groups) {
+        let attributes = self
+            .state
+            .printer
+            .created_job_attributes(view, self.uri, message, now);
         (OK, vec![(DelimiterTag::JobAttributes, attributes)])
     }
 
     fn message(&self, state: HeldState) -> String {
         recto_app::messages::held_job(state, &self.state.app.branding.name, self.locale)
+    }
+
+    /// The message of a held job whose release was refused.
+    fn refused(&self, refusal: Refusal) -> String {
+        recto_app::messages::direct_refused(
+            &refusal.message(),
+            &self.state.app.branding.name,
+            self.locale,
+        )
     }
 
     fn max_bytes(&self) -> i64 {
@@ -772,6 +931,33 @@ enum Received {
     New { name: String, requested: Requested },
     /// Send-Document: the document of a Create-Job.
     Incoming(HeldJob),
+}
+
+/// The options a device asked for, fitted to the printer a job goes to directly: what the
+/// printer cannot do is left to its default rather than refusing the job, since the device
+/// asked a generic printer. Without the printer's capabilities, they go as asked, and the print
+/// path checks them.
+fn direct_choices(
+    printer: &str,
+    requested: &Requested,
+    capabilities: Option<&Capabilities>,
+) -> Choices {
+    let sides = requested.sides.filter(|sides| {
+        *sides == Sides::OneSided || capabilities.is_none_or(|c| c.sides.contains(sides))
+    });
+    let color_mode = requested.color_mode.filter(|mode: &ColorMode| {
+        capabilities.is_none_or(|c| c.color_modes.is_empty() || c.color_modes.contains(mode))
+    });
+    let copies = requested
+        .copies
+        .map(|copies| capabilities.map_or(copies, |c| copies.min(c.max_copies.max(1))));
+    Choices {
+        printer: printer.to_owned(),
+        copies: copies.map(|copies| copies.to_string()),
+        sides: sides.map(|sides| sides.keyword().to_owned()),
+        color_mode: color_mode.map(|mode| mode.keyword().to_owned()),
+        page_ranges: requested.page_ranges.as_ref().map(ToString::to_string),
+    }
 }
 
 fn requested_json(requested: &Requested) -> String {
@@ -811,6 +997,50 @@ mod tests {
             address("https://[2001:db8::1]/"),
             ("ipps://[2001:db8::1]:443".to_owned(), true)
         );
+    }
+
+    #[test]
+    fn raster_refusals_have_their_status() {
+        assert_eq!(raster_status(RasterError::Truncated), 0x0411);
+        assert_eq!(raster_status(RasterError::Malformed("run")), 0x0411);
+        assert_eq!(raster_status(RasterError::Unsupported("16-bit")), 0x0411);
+        for large in [
+            RasterError::PageTooLarge,
+            RasterError::TooManyPages,
+            RasterError::DocumentTooLarge,
+            RasterError::TooLarge,
+            RasterError::TimedOut,
+        ] {
+            assert_eq!(raster_status(large), 0x0408, "{large:?}");
+        }
+        assert_eq!(raster_status(RasterError::Busy), 0x0507);
+    }
+
+    #[test]
+    fn direct_options_fit_the_printer() {
+        let requested = Requested {
+            copies: Some(50),
+            sides: Some(Sides::TwoSidedShortEdge),
+            color_mode: Some(ColorMode::Color),
+            page_ranges: Some("1-2, 5".parse().unwrap()),
+            media: None,
+        };
+        let mono = Capabilities {
+            max_copies: 10,
+            sides: vec![Sides::OneSided],
+            color_modes: vec![ColorMode::Monochrome],
+        };
+        let fitted = direct_choices("office", &requested, Some(&mono));
+        assert_eq!(fitted.printer, "office");
+        assert_eq!(fitted.copies.as_deref(), Some("10"));
+        assert_eq!(fitted.sides, None);
+        assert_eq!(fitted.color_mode, None);
+        assert_eq!(fitted.page_ranges.as_deref(), Some("1-2, 5"));
+        // Unknown capabilities: as asked, for the print path to check.
+        let asked = direct_choices("office", &requested, None);
+        assert_eq!(asked.copies.as_deref(), Some("50"));
+        assert_eq!(asked.sides.as_deref(), Some("two-sided-short-edge"));
+        assert_eq!(asked.color_mode.as_deref(), Some("color"));
     }
 
     #[test]

@@ -143,14 +143,41 @@ async fn release(
         Ok(None) => return not_found(&state, parts).await,
         Err(status) => return status.into_response(),
     };
-    let app = &state.app;
-    let claimed = match held::claim(&app.database, user.id, job.id, chrono::Utc::now()).await {
+    match release_held(&state.app, &user, job.id, fields.choices()).await {
+        Ok(Submitted { job, over }) => {
+            let mut to = format!("/jobs?submitted={job}");
+            if !over.is_empty() {
+                let over: Vec<String> = over.iter().map(i64::to_string).collect();
+                to.push_str(&format!("&over={}", over.join(",")));
+            }
+            Redirect::to(&to).into_response()
+        }
+        Err(Rejected::Quota(rule)) => Redirect::to(&format!(
+            "/jobs?error={}&rule={rule}",
+            Refusal::Quota.code()
+        ))
+        .into_response(),
+        Err(Rejected::Refusal(refusal)) => refused(refusal),
+    }
+}
+
+/// Releases the user's held job `id` to the printer of `choices`: claims it, so of two releases
+/// at once exactly one prints, then prints it through [`print_document`], which marks it
+/// released in the transaction that counts it. The Jobs page and printing directly both come
+/// here. A refusal leaves the job held with why.
+pub(crate) async fn release_held(
+    app: &AppState,
+    user: &User,
+    id: i64,
+    choices: Choices,
+) -> Result<Submitted, Rejected> {
+    let claimed = match held::claim(&app.database, user.id, id, chrono::Utc::now()).await {
         Ok(Some(claimed)) => claimed,
         // Another release took it, it was deleted, or it expired.
-        Ok(None) => return refused(Refusal::HeldGone),
+        Ok(None) => return Err(Refusal::HeldGone.into()),
         Err(error) => {
-            tracing::error!(%error, job = job.id, "claiming a held job failed");
-            return refused(Refusal::Unavailable);
+            tracing::error!(%error, job = id, "claiming a held job failed");
+            return Err(Refusal::Unavailable.into());
         }
     };
     let claim = HeldClaim {
@@ -159,7 +186,7 @@ async fn release(
     };
     let Some(file) = claimed.file.clone() else {
         give_back(app, &claim, Refusal::HeldGone).await;
-        return refused(Refusal::HeldGone);
+        return Err(Refusal::HeldGone.into());
     };
     let files = Arc::clone(&app.held);
     let reading = file.clone();
@@ -169,26 +196,25 @@ async fn release(
         failed => {
             tracing::error!(?failed, job = claim.id, "reading a held document failed");
             give_back(app, &claim, Refusal::Unavailable).await;
-            return refused(Refusal::Unavailable);
+            return Err(Refusal::Unavailable.into());
         }
     };
     // Checked when it arrived; read again from the content, never trusted from the row.
     let Some(format) = DocumentFormat::detect(&bytes) else {
         give_back(app, &claim, Refusal::UnsupportedFormat).await;
-        return refused(Refusal::UnsupportedFormat);
+        return Err(Refusal::UnsupportedFormat.into());
     };
     let document = Document {
         name: claimed.name.clone(),
         bytes: bytes.into(),
         format,
     };
-    let choices = fields.choices();
     if choices.printer.is_empty() {
         give_back(app, &claim, Refusal::InvalidForm).await;
-        return refused(Refusal::InvalidForm);
+        return Err(Refusal::InvalidForm.into());
     }
-    match print_document(app, &user, document, &choices, Some(claim)).await {
-        Ok(Submitted { job, over }) => {
+    match print_document(app, user, document, &choices, Some(claim)).await {
+        Ok(submitted) => {
             // Printed: the document has no reason to stay.
             let files = Arc::clone(&app.held);
             let removed = tokio::task::spawn_blocking(move || files.remove(&file)).await;
@@ -198,26 +224,17 @@ async fn release(
             tracing::info!(
                 user = user.username,
                 held_job = claimed.id,
-                job,
+                job = submitted.job,
                 printer = choices.printer,
                 "held job released"
             );
-            let mut to = format!("/jobs?submitted={job}");
-            if !over.is_empty() {
-                let over: Vec<String> = over.iter().map(i64::to_string).collect();
-                to.push_str(&format!("&over={}", over.join(",")));
-            }
-            Redirect::to(&to).into_response()
+            Ok(submitted)
         }
         Err(Rejected::Quota(rule)) => {
             tracing::info!(user = user.username, rule, "held job refused by a quota");
-            Redirect::to(&format!(
-                "/jobs?error={}&rule={rule}",
-                Refusal::Quota.code()
-            ))
-            .into_response()
+            Err(Rejected::Quota(rule))
         }
-        Err(Rejected::Refusal(refusal)) => refused(refusal),
+        Err(rejected) => Err(rejected),
     }
 }
 

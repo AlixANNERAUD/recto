@@ -13,11 +13,14 @@
 //! because a timeout around the blocking thread would stop waiting for it but not stop it.
 
 use std::io::{self, Write};
-use std::time::Instant;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use flate2::{Compression, write::ZlibEncoder};
 use lopdf::{Document, Object, Stream, dictionary};
 use thiserror::Error;
+use tokio::sync::Semaphore;
 
 /// The most decoded bytes a page may have: Legal at 600 dpi in colour (5100 x 8400 x 3) fits.
 pub const MAX_PAGE_BYTES: u64 = 160 * 1024 * 1024;
@@ -118,6 +121,9 @@ pub enum RasterError {
     /// The deadline passed during the conversion.
     #[error("the raster took too long to convert")]
     TimedOut,
+    /// Other rasters held every place of the [`RasterConverter`] the whole time.
+    #[error("too many rasters are being converted")]
+    Busy,
 }
 
 /// A raster converted to PDF.
@@ -125,6 +131,63 @@ pub enum RasterError {
 pub struct Converted {
     pub pdf: Vec<u8>,
     pub pages: u32,
+}
+
+/// Converts rasters with bounded concurrency and time, as `count::PageCounter` reads PDFs. A
+/// conversion runs on a blocking thread, which cannot be cancelled, so it carries its own
+/// deadline into [`to_pdf`] and keeps its place until it ends: the threads and the memory they
+/// hold stay bounded whatever is sent.
+#[derive(Clone, Debug)]
+pub struct RasterConverter {
+    permits: Arc<Semaphore>,
+    timeout: Duration,
+    /// The page, document and page-count budgets; each call gives its own output budget.
+    limits: Limits,
+}
+
+impl RasterConverter {
+    /// At most `concurrency` rasters converted at once. A conversion waits at most `timeout`
+    /// for a place, then has `timeout` to finish.
+    pub fn new(concurrency: usize, timeout: Duration, limits: Limits) -> Self {
+        Self {
+            permits: Arc::new(Semaphore::new(concurrency.max(1))),
+            timeout,
+            limits,
+        }
+    }
+
+    /// [`to_pdf`] on a blocking thread, for a PDF of at most `max_output` bytes. The document
+    /// is shared, not copied.
+    pub async fn convert(
+        &self,
+        document: Bytes,
+        format: RasterFormat,
+        max_output: usize,
+    ) -> Result<Converted, RasterError> {
+        let permit = tokio::time::timeout(self.timeout, self.permits.clone().acquire_owned())
+            .await
+            .map_err(|_| RasterError::Busy)?
+            .map_err(|_| RasterError::Busy)?;
+        let limits = Limits {
+            output: max_output,
+            ..self.limits
+        };
+        let deadline = Instant::now() + self.timeout;
+        let converted = tokio::task::spawn_blocking(move || {
+            let converted = to_pdf(&document, format, &limits, deadline);
+            drop(permit);
+            converted
+        });
+        // The decoder stops at the deadline by itself; a thread that panicked converted nothing.
+        converted.await.unwrap_or(Err(RasterError::TimedOut))
+    }
+}
+
+impl Default for RasterConverter {
+    /// Two at a time, sixty seconds each, within the module's limits.
+    fn default() -> Self {
+        Self::new(2, Duration::from_secs(60), Limits::new(0))
+    }
 }
 
 /// Converts a raster to a PDF of one image per page, or refuses it as soon as it breaks a limit.
@@ -466,4 +529,42 @@ fn write_pdf(pages: Vec<(PageHeader, Vec<u8>)>, output: usize) -> Result<Vec<u8>
         .save_to(&mut pdf)
         .map_err(|_| RasterError::TooLarge)?;
     Ok(pdf.bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SMALL: &[u8] = include_bytes!("../tests/fixtures/raster/odd-7x5-srgb24.urf");
+    const TWO_PAGES: &[u8] = include_bytes!("../tests/fixtures/raster/two-pages-w8-75dpi.urf");
+
+    #[tokio::test]
+    async fn the_converter_bounds_places_and_time() {
+        let converter = RasterConverter::new(1, Duration::from_millis(50), Limits::new(0));
+        let convert = |document: &'static [u8], output: usize| {
+            converter.convert(Bytes::from_static(document), RasterFormat::Apple, output)
+        };
+        assert_eq!(convert(SMALL, 1 << 20).await.map(|done| done.pages), Ok(1));
+        // The output budget is the caller's, not the template's.
+        assert_eq!(convert(SMALL, 16).await, Err(RasterError::TooLarge));
+
+        // Another conversion holds the only place until the time is up: busy, which a retry
+        // may fix, and the document is not read.
+        let place = converter.permits.clone().acquire_owned().await.unwrap();
+        assert_eq!(convert(SMALL, 1 << 20).await, Err(RasterError::Busy));
+        drop(place);
+        assert_eq!(
+            convert(TWO_PAGES, 1 << 20).await.map(|done| done.pages),
+            Ok(2)
+        );
+
+        // No time at all: the decoder stops itself on its thread.
+        let hurried = RasterConverter::new(1, Duration::ZERO, Limits::new(0));
+        assert_eq!(
+            hurried
+                .convert(Bytes::from_static(TWO_PAGES), RasterFormat::Apple, 1 << 20)
+                .await,
+            Err(RasterError::TimedOut)
+        );
+    }
 }

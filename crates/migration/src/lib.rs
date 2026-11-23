@@ -20,6 +20,7 @@ mod m20261117_000003_quotas;
 mod m20261122_000001_reports;
 mod m20261122_000101_device_passwords;
 mod m20261122_000102_held_jobs;
+mod m20261122_000103_direct_printing;
 
 /// Every migration of recto, in the order they apply; used by `recto_domain::database::migrate`.
 pub struct Migrator;
@@ -37,6 +38,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261122_000001_reports::Migration),
             Box::new(m20261122_000101_device_passwords::Migration),
             Box::new(m20261122_000102_held_jobs::Migration),
+            Box::new(m20261122_000103_direct_printing::Migration),
         ]
     }
 }

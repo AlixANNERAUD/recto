@@ -150,6 +150,8 @@ fn every_required_attribute_is_answered() {
     );
     let formats: Vec<IppValue> = [
         "application/pdf",
+        "image/pwg-raster",
+        "image/urf",
         "image/jpeg",
         "image/png",
         "application/octet-stream",
@@ -172,12 +174,42 @@ fn every_required_attribute_is_answered() {
     assert_eq!(
         find(&attributes, "printer-device-id"),
         Some(
-            &IppValue::new_text_without_language("MFG:recto;MDL:recto;CMD:PDF,JPEG,PNG;").unwrap()
+            &IppValue::new_text_without_language("MFG:recto;MDL:recto;CMD:PDF,PWG,URF,JPEG,PNG;")
+                .unwrap()
         )
     );
     assert_eq!(
         find(&attributes, "printer-uuid"),
         Some(&IppValue::new_uri(format!("urn:uuid:{}", printer.uuid)).unwrap())
+    );
+
+    // The rasters recto converts: 8-bit grey and sRGB at 300 dpi, back sides upright.
+    let dpi = IppValue::Resolution {
+        cross_feed: 300,
+        feed: 300,
+        units: 3,
+    };
+    assert_eq!(
+        find(&attributes, "pwg-raster-document-resolution-supported"),
+        Some(&dpi)
+    );
+    assert_eq!(
+        values(find(&attributes, "pwg-raster-document-type-supported").unwrap()),
+        vec![keyword("sgray_8"), keyword("srgb_8")]
+    );
+    assert_eq!(
+        find(&attributes, "pwg-raster-document-sheet-back"),
+        Some(&keyword("normal"))
+    );
+    assert_eq!(
+        values(find(&attributes, "urf-supported").unwrap()),
+        ["V1.4", "CP1", "W8", "SRGB24", "RS300", "DM1", "IS1"]
+            .map(keyword)
+            .to_vec()
+    );
+    assert_eq!(
+        find(&attributes, "print-quality-supported"),
+        Some(&IppValue::Enum(4))
     );
 
     // Sent only when named, as CUPS does: it is large and most clients never read it.
@@ -653,6 +685,25 @@ fn jobs_report_their_state() {
     assert_eq!(
         find(&pending, "time-at-completed"),
         Some(&IppValue::NoValue)
+    );
+
+    // Printing directly was refused: still completed for the device, whose part is done, but
+    // not successfully.
+    let refused = printer.job_attributes(
+        &job(JobViewState::CompletedWithErrors),
+        &plain(),
+        "Not printed",
+        &all,
+        now(),
+    );
+    assert_eq!(find(&refused, "job-state"), Some(&IppValue::Enum(9)));
+    assert_eq!(
+        find(&refused, "job-state-reasons"),
+        Some(&keyword("job-completed-with-errors"))
+    );
+    assert_eq!(
+        find(&refused, "number-of-documents"),
+        Some(&IppValue::Integer(1))
     );
 
     let created =

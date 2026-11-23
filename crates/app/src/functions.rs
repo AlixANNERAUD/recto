@@ -62,6 +62,14 @@ pub struct HeldRow {
     pub page_ranges: Option<String>,
 }
 
+/// Where documents from the signed-in user's devices go: `current` is the printer they print to
+/// directly, `None` to hold them; `printers` are those the user may use.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirectPrinting {
+    pub current: Option<String>,
+    pub printers: Vec<String>,
+}
+
 /// Where the signed-in user stands against the quota rules that apply to them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Allowances {
@@ -98,6 +106,13 @@ pub async fn my_quotas() -> Result<Allowances, ServerFnError> {
 pub async fn my_device_passwords() -> Result<Vec<DeviceRow>, ServerFnError> {
     let context = server::Context::new()?;
     context.my_device_passwords().await
+}
+
+/// Where documents from the signed-in user's devices go, and the printers they may choose.
+#[server(endpoint = "my_direct_printing")]
+pub async fn my_direct_printing() -> Result<DirectPrinting, ServerFnError> {
+    let context = server::Context::new()?;
+    context.my_direct_printing().await
 }
 
 /// The signed-in user's held jobs, newest first: their own only, administrators included.
@@ -208,7 +223,7 @@ mod server {
         Selection,
     };
 
-    use super::{Allowances, DeviceRow, HeldRow, ScanOutcome, visible};
+    use super::{Allowances, DeviceRow, DirectPrinting, HeldRow, ScanOutcome, visible};
     use crate::{
         i18n, messages,
         quotas::Allowance,
@@ -353,6 +368,23 @@ mod server {
                 .collect())
         }
 
+        /// The user's direct printer and the printers they may use.
+        pub async fn my_direct_printing(&self) -> Result<DirectPrinting, ServerFnError> {
+            let user = recto_domain::users::find_by_id(&self.state.database, self.user.id)
+                .await
+                .map_err(|error| {
+                    tracing::error!(%error, "reading the direct printer failed");
+                    self.try_again()
+                })?;
+            let printers = self.state.print.printers().await;
+            let printers = printers.map_err(|error| self.print_failure(&error))?;
+            let printers = self.usable_printers(printers).await?;
+            Ok(DirectPrinting {
+                current: user.and_then(|user| user.direct_printer),
+                printers: printers.into_iter().map(|printer| printer.name).collect(),
+            })
+        }
+
         /// The user's held jobs, with the names of the devices that sent them.
         pub async fn my_held_jobs(&self) -> Result<Vec<HeldRow>, ServerFnError> {
             let database = &self.state.database;
@@ -392,20 +424,7 @@ mod server {
                         copies: requested.copies,
                         sides: requested.sides.map(|sides| sides.keyword().to_owned()),
                         color_mode: requested.color_mode.map(|mode| mode.keyword().to_owned()),
-                        page_ranges: requested.page_ranges.map(|ranges| {
-                            ranges
-                                .0
-                                .iter()
-                                .map(|&(first, last)| {
-                                    if first == last {
-                                        first.to_string()
-                                    } else {
-                                        format!("{first}-{last}")
-                                    }
-                                })
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        }),
+                        page_ranges: requested.page_ranges.map(|ranges| ranges.to_string()),
                     }
                 })
                 .collect())

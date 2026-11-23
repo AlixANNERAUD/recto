@@ -320,11 +320,13 @@ async fn attributes_are_open_and_jobs_need_credentials() {
         text_of(&printer_attribute(&answer, "printer-more-info")),
         "http://recto.test/jobs"
     );
-    // Rasters come with Task 8.
+    // PDF, and the rasters recto converts to it.
     let formats = printer_attribute(&answer, "document-format-supported");
     let formats = format!("{formats:?}");
-    assert!(formats.contains("application/pdf"), "{formats}");
-    assert!(!formats.contains("pwg-raster"), "{formats}");
+    for format in ["application/pdf", "image/pwg-raster", "image/urf"] {
+        assert!(formats.contains(format), "{formats}");
+    }
+    assert!(format!("{:?}", printer_attribute(&answer, "urf-supported")).contains("RS300"));
 
     // A job without credentials is refused once its header is read, before its document.
     let (sent, pulled) = chunked(&print_job("secret.pdf", &sample_pdf(30)));
@@ -662,4 +664,367 @@ async fn os_integration_off_removes_the_printer() {
             .unwrap()
             .is_empty()
     );
+}
+
+/// Two pages of Apple raster and of PWG raster, from Ghostscript through CUPS's writer.
+const URF: &[u8] =
+    include_bytes!("../../../printing/tests/fixtures/raster/two-pages-srgb24-75dpi.urf");
+const PWG: &[u8] =
+    include_bytes!("../../../printing/tests/fixtures/raster/two-pages-sgray8-75dpi.pwg");
+
+/// A Print-Job declaring `format`, asking for `copies`.
+fn print_job_as(name: &str, format: &str, copies: Option<i32>, document: &[u8]) -> Vec<u8> {
+    let mut request = request(IppOperation::PrintJob);
+    operation_attribute(
+        &mut request,
+        "job-name",
+        IppValue::new_name_without_language(name).unwrap(),
+    );
+    operation_attribute(
+        &mut request,
+        "document-format",
+        IppValue::new_mime_media_type(format).unwrap(),
+    );
+    if let Some(copies) = copies {
+        request.attributes_mut().add(
+            DelimiterTag::JobAttributes,
+            IppAttribute::with_name("copies", IppValue::Integer(copies)).unwrap(),
+        );
+    }
+    body(&request, document)
+}
+
+async fn send_job(harness: &Harness, device: &Device, job: Vec<u8>) -> IppRequestResponse {
+    ipp(
+        harness,
+        post_ipp("/ipp/print", Some(&device.secret), Body::from(job)),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_raster_job_is_held_as_a_pdf() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let phone = device(&harness, alice, "Phone").await;
+
+    let answer = send_job(
+        &harness,
+        &phone,
+        print_job_as("photo", "image/urf", None, URF),
+    )
+    .await;
+    assert_eq!(status(&answer), 0x0000);
+    assert_eq!(job_attribute(&answer, "job-state"), IppValue::Enum(9));
+    // Asked for detection: the received format is what the content is.
+    let answer = send_job(
+        &harness,
+        &phone,
+        print_job_as("scan", "application/octet-stream", None, PWG),
+    )
+    .await;
+    assert_eq!(status(&answer), 0x0000);
+
+    let held = held::list(&harness.database, alice).await.unwrap();
+    assert_eq!(held.len(), 2);
+    for (job, received) in held.iter().zip(["image/pwg-raster", "image/urf"]) {
+        assert_eq!(job.state, HeldState::Held);
+        assert_eq!(job.stored_format.as_deref(), Some("application/pdf"));
+        assert_eq!(job.received_format.as_deref(), Some(received));
+        assert_eq!(job.document_pages, Some(2));
+        // One format downstream: the file is the PDF, and its own count agrees.
+        let stored = harness.held.read(job.file.as_ref().unwrap()).unwrap();
+        assert!(stored.starts_with(b"%PDF-"));
+        assert_eq!(recto_printing::count::pdf_pages(&stored), Some(2));
+        assert_eq!(job.size, stored.len() as i64);
+    }
+    assert!(harness.print.submitted().is_empty());
+}
+
+#[tokio::test]
+async fn a_bad_raster_is_refused() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let phone = device(&harness, alice, "Phone").await;
+
+    // Cut inside a line: refused, never padded.
+    let cut = &URF[..URF.len() - 10];
+    let answer = send_job(
+        &harness,
+        &phone,
+        print_job_as("cut", "image/urf", None, cut),
+    )
+    .await;
+    assert_eq!(
+        status(&answer),
+        0x0411,
+        "client-error-document-format-error"
+    );
+
+    // A page header claiming 100000 x 100000 pixels: refused from the header, before decoding.
+    let mut huge = b"UNIRAST\0\0\0\0\x01".to_vec();
+    let mut header = [0u8; 32];
+    header[0] = 24;
+    header[1] = 1;
+    header[12..16].copy_from_slice(&100_000u32.to_be_bytes());
+    header[16..20].copy_from_slice(&100_000u32.to_be_bytes());
+    header[20..24].copy_from_slice(&300u32.to_be_bytes());
+    huge.extend_from_slice(&header);
+    huge.extend_from_slice(&[0xFF, 0x80]);
+    let answer = send_job(
+        &harness,
+        &phone,
+        print_job_as("huge", "image/urf", None, &huge),
+    )
+    .await;
+    assert_eq!(
+        status(&answer),
+        0x0408,
+        "client-error-request-entity-too-large"
+    );
+
+    assert!(
+        held::list(&harness.database, alice)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(held_files(&harness), 0);
+}
+
+#[tokio::test]
+async fn direct_printing_releases_at_once() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    users::set_direct_printer(&harness.database, alice, Some("office"))
+        .await
+        .unwrap();
+    let laptop = device(&harness, alice, "Laptop").await;
+
+    let answer = send_job(
+        &harness,
+        &laptop,
+        print_job_as("photo", "image/urf", Some(2), URF),
+    )
+    .await;
+    assert_eq!(status(&answer), 0x0000);
+    assert_eq!(job_attribute(&answer, "job-state"), IppValue::Enum(9));
+    assert_eq!(
+        text_of(&job_attribute(&answer, "job-state-reasons")),
+        "job-completed-successfully"
+    );
+    let id = job_id(&answer);
+
+    // Through the print path: CUPS, the ledger, the held row released.
+    let submitted = harness.print.submitted();
+    assert_eq!(submitted.len(), 1);
+    assert_eq!(submitted[0].printer, "office");
+    assert_eq!(submitted[0].user, "alice");
+    assert_eq!(submitted[0].options.copies, 2);
+    assert!(submitted[0].document.starts_with(b"%PDF-"));
+    let rows = print_jobs::Entity::find()
+        .all(&harness.database)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].pages, Some(4));
+    let job = held::get(&harness.database, alice, i64::from(id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.state, HeldState::Released);
+    assert_eq!(job.ledger_entry_id, Some(rows[0].id));
+    assert_eq!(held_files(&harness), 0);
+
+    // The device asking again sees it done.
+    let ask = job_request(IppOperation::GetJobAttributes, id);
+    let answer = ipp(
+        &harness,
+        post_ipp(
+            "/ipp/print",
+            Some(&laptop.secret),
+            Body::from(ask.to_bytes().to_vec()),
+        ),
+    )
+    .await;
+    assert_eq!(
+        text_of(&job_attribute(&answer, "job-state-reasons")),
+        "job-completed-successfully"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_direct_print_stays_held() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    users::set_direct_printer(&harness.database, alice, Some("office"))
+        .await
+        .unwrap();
+    let laptop = device(&harness, alice, "Laptop").await;
+    recto_domain::quotas::create(
+        &harness.database,
+        recto_domain::quotas::NewRule {
+            name: "Monthly pages".into(),
+            enabled: true,
+            subject: recto_domain::quotas::Subject::Everyone,
+            printers: vec![],
+            metric: recto_domain::quotas::Metric::Pages,
+            period: recto_domain::quotas::Period::Month,
+            limit: 1,
+            enforcement: recto_domain::quotas::Enforcement::Hard,
+        },
+    )
+    .await
+    .unwrap();
+
+    let answer = send_job(
+        &harness,
+        &laptop,
+        print_job_as("minutes.pdf", "application/pdf", None, &sample_pdf(2)),
+    )
+    .await;
+    // The device's part is still done, so it does not retry or stop its queue; but it is told.
+    assert_eq!(status(&answer), 0x0000);
+    assert_eq!(job_attribute(&answer, "job-state"), IppValue::Enum(9));
+    assert_eq!(
+        text_of(&job_attribute(&answer, "job-state-reasons")),
+        "job-completed-with-errors"
+    );
+    let message = text_of(&job_attribute(&answer, "job-state-message"));
+    assert!(message.contains("quota"), "{message}");
+
+    assert!(harness.print.submitted().is_empty());
+    assert_eq!(
+        print_jobs::Entity::find()
+            .count(&harness.database)
+            .await
+            .unwrap(),
+        0
+    );
+    let held = held::list(&harness.database, alice).await.unwrap();
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].state, HeldState::Held);
+    assert_eq!(held[0].refusal.as_deref(), Some("quota"));
+    assert_eq!(held_files(&harness), 1);
+
+    // Asked again, the device hears the same.
+    let ask = job_request(IppOperation::GetJobAttributes, job_id(&answer));
+    let again = ipp(
+        &harness,
+        post_ipp(
+            "/ipp/print",
+            Some(&laptop.secret),
+            Body::from(ask.to_bytes().to_vec()),
+        ),
+    )
+    .await;
+    assert_eq!(
+        text_of(&job_attribute(&again, "job-state-reasons")),
+        "job-completed-with-errors"
+    );
+
+    // Its owner sees why on the Jobs page.
+    let cookie = harness.sign_in_with_password("alice", ALICE_PASSWORD).await;
+    let jobs = text(harness.send(page("/jobs", Some(&cookie))).await).await;
+    assert!(jobs.contains("minutes.pdf"), "{jobs}");
+    assert!(
+        jobs.contains("Last attempt: This job goes over a print quota."),
+        "{jobs}"
+    );
+}
+
+#[tokio::test]
+async fn only_usable_printers_are_direct() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let cookie = harness.sign_in_with_password("alice", ALICE_PASSWORD).await;
+    let direct = |printer: &str| {
+        form(
+            "/account/direct-printer",
+            Some(&cookie),
+            &[("printer", printer)],
+        )
+    };
+    let stored = || async {
+        users::find_by_id(&harness.database, alice)
+            .await
+            .unwrap()
+            .unwrap()
+            .direct_printer
+    };
+
+    // The Account page offers holding and every printer alice may use.
+    let account = text(harness.send(page("/account", Some(&cookie))).await).await;
+    assert!(
+        account.contains(r#"action="/account/direct-printer""#),
+        "{account}"
+    );
+    assert!(account.contains(r#"<option value="office""#), "{account}");
+
+    let response = harness.send(direct("office")).await;
+    assert_redirect(&response, "/account?done=direct");
+    assert_eq!(stored().await.as_deref(), Some("office"));
+    let account = text(harness.send(page("/account", Some(&cookie))).await).await;
+    assert!(
+        account.contains(r#"<option value="office" selected"#),
+        "{account}"
+    );
+
+    // Empty holds again.
+    let response = harness.send(direct("")).await;
+    assert_redirect(&response, "/account?done=direct");
+    assert_eq!(stored().await, None);
+
+    // A printer CUPS does not have, or one only administrators may use, is refused.
+    let response = harness.send(direct("nowhere")).await;
+    assert_redirect(&response, "/account?error=direct_printer");
+    access::set(
+        &harness.database,
+        DeviceKind::Printer,
+        "office",
+        Access::Groups(vec![]),
+    )
+    .await
+    .unwrap();
+    let response = harness.send(direct("office")).await;
+    assert_redirect(&response, "/account?error=direct_printer");
+    assert_eq!(stored().await, None);
+
+    // A printer that stops being usable after it was chosen leaves the next job held.
+    users::set_direct_printer(&harness.database, alice, Some("office"))
+        .await
+        .unwrap();
+    let laptop = device(&harness, alice, "Laptop").await;
+    let answer = send_job(
+        &harness,
+        &laptop,
+        print_job_as("minutes.pdf", "application/pdf", None, &sample_pdf(1)),
+    )
+    .await;
+    assert_eq!(
+        text_of(&job_attribute(&answer, "job-state-reasons")),
+        "job-completed-with-errors"
+    );
+    assert!(harness.print.submitted().is_empty());
+    let held = held::list(&harness.database, alice).await.unwrap();
+    assert_eq!(held[0].refusal.as_deref(), Some("printer_not_found"));
+}
+
+#[tokio::test]
+async fn direct_printing_needs_os_integration() {
+    let harness = Harness::with(Setup {
+        os_integration: false,
+        ..Setup::default()
+    })
+    .await;
+    harness.local_user("alice", ALICE_PASSWORD).await;
+    let cookie = harness.sign_in_with_password("alice", ALICE_PASSWORD).await;
+    let response = harness
+        .send(form(
+            "/account/direct-printer",
+            Some(&cookie),
+            &[("printer", "office")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

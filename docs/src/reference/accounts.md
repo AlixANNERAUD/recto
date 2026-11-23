@@ -155,6 +155,11 @@ A device sends its password in one of two ways:
   like any address that does not exist. The address holds the password: anyone who reads it can
   print as you, so keep it as private as the password.
 
+Below the list, **Documents from your devices** chooses whether what your devices send is held
+until you print it from the Jobs page (the default) or printed at once on a printer you may use
+(see [Printing directly](printing.md#printing-directly)). The choice is the account's, for all
+its devices.
+
 A device password cannot sign in to the web pages or change the account. See
 [Printing from computers and phones](printing.md#printing-from-computers-and-phones).
 

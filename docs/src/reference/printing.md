@@ -28,18 +28,60 @@ alone means port 631:
 public URL the addresses are `ipp://`. The Account page shows both when it creates a device
 password.
 
-What the device sees: one driverless IPP printer (IPP/2.0, IPP Everywhere), named after the brand,
-whatever printers CUPS has. It takes PDF, JPEG and PNG, recognized by their content as on the
-Print page, up to `RECTO_MAX_UPLOAD_SIZE`. It offers A4, Letter, Legal, A3 and A5 paper (the
-default from `RECTO_DEFAULT_MEDIA`), color and black and white, one- and two-sided, and 1 to 99
-copies. What the device asked for is kept with the job.
+What the device sees: one driverless IPP printer (IPP/2.0, IPP Everywhere and AirPrint), named
+after the brand, whatever printers CUPS has. It takes the formats below, recognized by their
+content as on the Print page, up to `RECTO_MAX_UPLOAD_SIZE`. It offers A4, Letter, Legal, A3 and
+A5 paper (the default from `RECTO_DEFAULT_MEDIA`), color and black and white, one- and two-sided,
+and 1 to 99 copies. What the device asked for is kept with the job.
+
+| Format | Recognized by | Kept as |
+| --- | --- | --- |
+| PDF, JPEG, PNG | as on the Print page | itself |
+| PWG raster (`image/pwg-raster`), what IPP Everywhere devices such as Windows send | content starting with `RaS2` | PDF |
+| Apple raster (`image/urf`), what AirPrint devices such as iPhones send | content starting with `UNIRAST` | PDF |
+
+A raster is a picture of each page. recto turns it into a PDF with one image per page when it
+arrives, so the preview, the page count, page ranges and CUPS only ever see a PDF; the Jobs page
+still says what the device sent. The printer asks for 8-bit grey or color (`sgray_8`, `srgb_8`,
+`W8`, `SRGB24`) at 300 dpi, with back sides upright; recto reads 75 to 600 dpi. Converting is
+bounded, and a raster past a bound is refused before recto keeps anything:
+
+| Bound | Value |
+| --- | --- |
+| Decoded pixels of one page | 160 MiB, a Legal page at 600 dpi in color |
+| Decoded pixels of a document | 4 GiB |
+| Pages | 500 |
+| The PDF made | `RECTO_MAX_UPLOAD_SIZE` |
+| Time | 60 seconds, after waiting at most 60 seconds for a place |
+| Conversions at once | 2 |
 
 A document sent this way is **held**, not printed: recto keeps it under `RECTO_DATA_DIR/held` and
 tells the device the job is complete, with the message **Held in recto until you release it**
-(the brand's name for recto), so the device's queue moves on. Nothing is counted while a job is
-held: the ledger and quotas only know printed jobs. A held job is deleted after
+(the brand's name for recto), so the device's queue moves on, unless its owner prints directly
+(below). Nothing is counted while a job is held: the ledger and quotas only know printed jobs. A held job is deleted after
 `RECTO_HELD_JOB_HOURS`, 24 hours by default, unless its owner prints or deletes it first (see
 [Held jobs](#held-jobs)).
+
+### Printing directly
+
+On the Account page, **Documents from your devices** chooses what happens to them: **Hold it
+until I print it** (the default), or **Print it at once on** one of the printers you may use. A
+document printed at once goes through the same path as **Print** on the Jobs page: the printer
+access rules, page count, quotas and ledger, with the options the device asked for. An option
+the printer does not have is left to its default rather than refusing the document: one-sided
+for a printer without two-sided printing, its own color mode, and at most its copies.
+
+The device then hears how it went: **Released in recto** when the document went to the printer,
+or a job **completed with errors** and **Not printed:** with the reason when it was refused (a
+quota, a printer you may no longer use, a printer that is off). A refused document is held, as if
+you held your documents, and waits on the Jobs page with the reason under it. The device is told
+the job is complete either way, so its queue never stops on it. The answer waits at most 20
+seconds; past that the device is told the document is being released, and printing goes on.
+
+A printer you may no longer use, or that CUPS no longer has, stays chosen on the Account page:
+documents are then held with the reason, until you choose again.
+
+### Limits
 
 Each person may have at most 20 jobs waiting, and documents of at most 10 times
 `RECTO_MAX_UPLOAD_SIZE` in all; beyond that the device is answered `server-error-too-many-jobs`
@@ -52,7 +94,10 @@ Send-Document); a held job is complete for the device, and the IPP answer to can
 
 | Case | IPP status |
 | --- | --- |
-| Not PDF, JPEG or PNG | `client-error-document-format-not-supported` |
+| Not PDF, JPEG, PNG or a raster | `client-error-document-format-not-supported` |
+| A raster recto cannot read: cut short, damaged, 16-bit, CMYK or black and white, outside 75 to 600 dpi | `client-error-document-format-error` |
+| A raster past a bound of the table above, time included | `client-error-request-entity-too-large` |
+| Two other rasters converting for the whole minute | `server-error-busy`, which devices retry |
 | Empty document | `client-error-bad-request` |
 | Document over `RECTO_MAX_UPLOAD_SIZE` | `client-error-request-entity-too-large` |
 | A job of another device, or none | `client-error-not-found` |

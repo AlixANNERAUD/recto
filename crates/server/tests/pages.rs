@@ -186,6 +186,7 @@ impl Harness {
             currency: Currency::new("EUR"),
             timezone: chrono_tz::UTC,
             page_counter: Default::default(),
+            raster: Default::default(),
             os_integration: true,
             held: Arc::new(HeldFiles::new(&dir.path().join("data")).unwrap()),
             held_lifetime: chrono::TimeDelta::hours(24),

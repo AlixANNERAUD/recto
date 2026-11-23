@@ -59,6 +59,23 @@ impl ColorMode {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PageRanges(pub Vec<(u32, u32)>);
 
+impl std::fmt::Display for PageRanges {
+    /// As [`FromStr`] reads them, such as `1-3, 5`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, &(first, last)) in self.0.iter().enumerate() {
+            if index > 0 {
+                f.write_str(", ")?;
+            }
+            if first == last {
+                write!(f, "{first}")?;
+            } else {
+                write!(f, "{first}-{last}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl FromStr for PageRanges {
     type Err = PrintError;
 
@@ -205,6 +222,10 @@ mod tests {
         assert_eq!(ranges("1-3,5"), Ok(vec![(1, 3), (5, 5)]));
         assert_eq!(ranges(" 5 , 1-2 "), Ok(vec![(1, 2), (5, 5)]));
         assert_eq!(ranges("1-3,2-6"), Ok(vec![(1, 6)]));
+        // Written back the way the form takes them.
+        let written = "5, 1-2".parse::<PageRanges>().unwrap().to_string();
+        assert_eq!(written, "1-2, 5");
+        assert_eq!(ranges(&written), Ok(vec![(1, 2), (5, 5)]));
         for bad in ["0", "3-1", "a", "", "4-"] {
             assert!(
                 matches!(ranges(bad), Err(PrintError::InvalidPageRanges(_))),

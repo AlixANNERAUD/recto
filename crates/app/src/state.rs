@@ -9,7 +9,7 @@ use leptos::{
     prelude::{ServerFnError, use_context},
 };
 use recto_domain::held::files::HeldFiles;
-use recto_printing::{PrintService, PrinterAdmin, count::PageCounter};
+use recto_printing::{PrintService, PrinterAdmin, count::PageCounter, raster::RasterConverter};
 use recto_scanning::{ResultStore, ScannerService};
 use sea_orm::DatabaseConnection;
 
@@ -54,6 +54,8 @@ pub struct AppState {
     pub timezone: chrono_tz::Tz,
     /// Reads the page count of uploaded PDFs, within bounds.
     pub page_counter: PageCounter,
+    /// Turns the rasters computers and phones send into PDFs, within bounds.
+    pub raster: RasterConverter,
     /// Whether computers and phones print and scan through recto with device passwords
     /// (`RECTO_OS_INTEGRATION`); without it, the Account page has no Devices section.
     pub os_integration: bool,

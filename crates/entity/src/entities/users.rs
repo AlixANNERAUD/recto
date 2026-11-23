@@ -20,6 +20,7 @@ pub struct Model {
     pub sessions_valid_after: Option<DateTimeWithTimeZone>,
     pub created_at: DateTimeWithTimeZone,
     pub last_sign_in_at: Option<DateTimeWithTimeZone>,
+    pub direct_printer: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -13,8 +13,8 @@ use recto_domain::{
     held::files::HeldFiles,
     passwords::{self, PasswordPolicy},
 };
-use recto_printing::count::PageCounter;
 use recto_printing::{Cups, CupsAdmin, PrinterAdmin, printer::Media};
+use recto_printing::{count::PageCounter, raster::RasterConverter};
 use recto_scanning::{
     ResultStore, SaneScanners, ScanError, ScanRequest, ScannedPage, ScannerCapabilities,
     ScannerInfo, ScannerService,
@@ -212,6 +212,7 @@ pub async fn build(
         currency: Currency::new(&config.currency),
         timezone: config.timezone,
         page_counter: PageCounter::default(),
+        raster: RasterConverter::default(),
         os_integration: config.os_integration,
         held: Arc::new(held_files(config)),
         held_lifetime: chrono::TimeDelta::hours(i64::from(config.held_job_hours)),

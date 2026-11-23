@@ -134,6 +134,17 @@
         "name_control": "The device name cannot contain line breaks, tabs or other control characters.",
         "too_many": "You already have {maximum} device passwords. Revoke one you no longer use first.",
         "unavailable": "The device passwords could not be changed. Try again in a moment."
+      },
+      "direct": {
+        "title": "Documents from your devices",
+        "label": "When a device sends a document",
+        "hold": "Hold it until I print it",
+        "print_on": "Print it at once on {printer}",
+        "hint": "Held documents wait on the Jobs page, where you choose a printer. Printed at once, they still count toward your quotas, and a document that cannot print waits there with the reason.",
+        "save": "Save",
+        "saved": "Saved. Documents from your devices follow the new choice.",
+        "refused": "That printer is not available to you.",
+        "unavailable": "The choice could not be saved. Try again in a moment."
       }
     }
   },
@@ -764,6 +775,7 @@
     "incoming": "Waiting for its document",
     "held": "Held in {name} until you release it",
     "releasing": "Being released in {name}",
-    "released": "Released in {name}"
+    "released": "Released in {name}",
+    "direct_refused": "Not printed: {reason} Held in {name} until you release it."
   }
 }

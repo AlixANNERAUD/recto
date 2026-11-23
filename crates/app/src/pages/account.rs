@@ -8,7 +8,9 @@
 //! `/account/devices/<id>/revoke`: a new password is answered with this page and its
 //! [`NewDevicePassword`], never a redirect, so the secret stays out of addresses and history; a
 //! revoked one with `/account?done=revoked`; a refused one with this page and its
-//! [`DevicesRefusal`].
+//! [`DevicesRefusal`]. Where documents from devices go posts to `/account/direct-printer`,
+//! answered with `/account?done=direct` or `/account?error=direct_printer` (or
+//! `direct_unavailable`).
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_query_map;
@@ -20,7 +22,7 @@ use crate::{
         Alert, ButtonVariant, Card, Field, HINT, INPUT, Tone, button_class, small_button_class,
     },
     display::{iso_time, relative_time, unix_now},
-    functions::{DeviceRow, my_device_passwords},
+    functions::{DeviceRow, DirectPrinting, my_device_passwords, my_direct_printing},
     layout::Layout,
     t, tf,
 };
@@ -169,14 +171,16 @@ pub fn AccountPage() -> impl IntoView {
     else {
         return view! { <NotFound /> }.into_any();
     };
-    let (changed, revoked) = {
+    let (changed, done, error) = {
         let query = use_query_map();
         let query = query.read_untracked();
         (
             query.get("changed").is_some_and(|value| value == "1"),
-            query.get("done").is_some_and(|value| value == "revoked"),
+            query.get("done").unwrap_or_default(),
+            query.get("error").unwrap_or_default(),
         )
     };
+    let revoked = done == "revoked";
     let signed_in_as = tf!(
         "account.signed_in_as",
         name = name,
@@ -194,6 +198,21 @@ pub fn AccountPage() -> impl IntoView {
         Some(view! { <Alert tone=Tone::Success>{t!("account.changed")}</Alert> }.into_any())
     } else if revoked {
         Some(view! { <Alert tone=Tone::Success>{t!("account.devices.revoked")}</Alert> }.into_any())
+    } else if sections.devices && done == "direct" {
+        Some(
+            view! { <Alert tone=Tone::Success>{t!("account.devices.direct.saved")}</Alert> }
+                .into_any(),
+        )
+    } else if sections.devices && error == "direct_printer" {
+        Some(
+            view! { <Alert tone=Tone::Danger>{t!("account.devices.direct.refused")}</Alert> }
+                .into_any(),
+        )
+    } else if sections.devices && error == "direct_unavailable" {
+        Some(
+            view! { <Alert tone=Tone::Danger>{t!("account.devices.direct.unavailable")}</Alert> }
+                .into_any(),
+        )
     } else {
         None
     };
@@ -207,7 +226,10 @@ pub fn AccountPage() -> impl IntoView {
         let draft = devices_refusal
             .map(|refusal| refusal.name)
             .unwrap_or_default();
-        view! { <Devices draft /> }
+        view! {
+            <Devices draft />
+            <DirectPrinter />
+        }
     });
     view! {
         <Layout title=t!("account.title")>
@@ -384,6 +406,75 @@ fn Devices(draft: String) -> impl IntoView {
                 </form>
             </div>
         </Card>
+    }
+}
+
+/// Where documents from the user's devices go: held until printed from the Jobs page, or printed
+/// at once on one printer the user may use. A plain form, so it works without JavaScript.
+#[component]
+fn DirectPrinter() -> impl IntoView {
+    let choice = OnceResource::new(my_direct_printing());
+    view! {
+        <Card title=t!("account.devices.direct.title") class="max-w-xl">
+            <Suspense>
+                {move || Suspend::new(async move {
+                    match choice.await {
+                        Ok(choice) => view! { <DirectPrinterForm choice /> }.into_any(),
+                        Err(error) => failure_alert(&error).into_any(),
+                    }
+                })}
+            </Suspense>
+        </Card>
+    }
+}
+
+#[component]
+fn DirectPrinterForm(choice: DirectPrinting) -> impl IntoView {
+    let DirectPrinting { current, printers } = choice;
+    let mut names = printers;
+    // A printer chosen earlier and no longer usable still shows as chosen: its jobs wait, held.
+    if let Some(current) = &current
+        && !names.contains(current)
+    {
+        names.push(current.clone());
+    }
+    let hold_selected = current.is_none();
+    view! {
+        <form method="post" action="/account/direct-printer" class="grid gap-4">
+            <Field
+                label=t!("account.devices.direct.label")
+                input_id="direct-printer"
+                hint=t!("account.devices.direct.hint")
+            >
+                <select
+                    id="direct-printer"
+                    name="printer"
+                    aria-describedby="direct-printer-hint"
+                    class=INPUT
+                >
+                    <option value="" selected=hold_selected>
+                        {t!("account.devices.direct.hold")}
+                    </option>
+                    {names
+                        .into_iter()
+                        .map(|name| {
+                            let selected = current.as_deref() == Some(name.as_str());
+                            let label = tf!("account.devices.direct.print_on", printer = name.clone());
+                            view! {
+                                <option value=name selected=selected>
+                                    {label}
+                                </option>
+                            }
+                        })
+                        .collect_view()}
+                </select>
+            </Field>
+            <div>
+                <button type="submit" class=button_class(ButtonVariant::Secondary)>
+                    {t!("account.devices.direct.save")}
+                </button>
+            </div>
+        </form>
     }
 }
 
