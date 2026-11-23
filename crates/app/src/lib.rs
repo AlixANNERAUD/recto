@@ -24,6 +24,8 @@ embedded_i18n::i18n!(
 
 pub mod branding;
 pub mod components;
+#[cfg(feature = "ssr")]
+pub mod cookies;
 pub mod currency;
 pub mod display;
 pub mod functions;

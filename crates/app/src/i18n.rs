@@ -108,23 +108,17 @@ fn detect() -> Locale {
     use_context::<Parts>().map_or_else(default_locale, |parts| from_headers(&parts.headers))
 }
 
-/// The locale of a request from its headers: the locale cookie, else `Accept-Language`, else
-/// English. For server code answering outside a page, where [`locale`] has no request to read.
+/// The locale of a request from its headers: the last valid locale cookie, else
+/// `Accept-Language`, else English. For server code answering outside a page, where [`locale`]
+/// has no request to read.
 #[cfg(feature = "ssr")]
 pub fn from_headers(headers: &axum::http::HeaderMap) -> Locale {
-    use axum::http::header;
-    let chosen = headers
-        .get_all(header::COOKIE)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(';'))
-        .filter_map(|pair| pair.trim().split_once('='))
-        .find(|(name, _)| *name == COOKIE)
-        .and_then(|(_, value)| find(value));
-    chosen
+    crate::cookies::values(headers, COOKIE)
+        .filter_map(find)
+        .next_back()
         .or_else(|| {
             headers
-                .get(header::ACCEPT_LANGUAGE)
+                .get(axum::http::header::ACCEPT_LANGUAGE)
                 .and_then(|value| value.to_str().ok())
                 .and_then(negotiate)
         })
@@ -225,5 +219,25 @@ mod tests {
         assert_eq!(find(""), None);
         assert_eq!(find("-en"), None);
         assert_eq!(find("-fr"), None);
+    }
+
+    #[cfg(feature = "ssr")]
+    #[test]
+    fn the_last_valid_cookie_wins_over_the_browser() {
+        use axum::http::{HeaderMap, HeaderValue, header};
+
+        let mut headers = HeaderMap::new();
+        headers.append(
+            header::COOKIE,
+            HeaderValue::from_static("recto_locale=xx; recto_locale=fr"),
+        );
+        headers.append(header::ACCEPT_LANGUAGE, HeaderValue::from_static("en"));
+        assert_eq!(super::from_headers(&headers), Locale::new("fr"));
+        headers.append(header::COOKIE, HeaderValue::from_static("recto_locale=en"));
+        assert_eq!(super::from_headers(&headers), Locale::new("en"));
+        headers.remove(header::COOKIE);
+        headers.append(header::COOKIE, HeaderValue::from_static("recto_locale=de"));
+        headers.insert(header::ACCEPT_LANGUAGE, HeaderValue::from_static("fr"));
+        assert_eq!(super::from_headers(&headers), Locale::new("fr"));
     }
 }

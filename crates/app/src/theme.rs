@@ -60,14 +60,8 @@ impl Theme {
 /// headers, else System.
 #[cfg(feature = "ssr")]
 pub fn from_headers(headers: &axum::http::HeaderMap) -> Theme {
-    headers
-        .get_all(axum::http::header::COOKIE)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(';'))
-        .filter_map(|pair| pair.trim().split_once('='))
-        .filter(|(name, _)| *name == COOKIE)
-        .filter_map(|(_, value)| Theme::parse(value))
+    crate::cookies::values(headers, COOKIE)
+        .filter_map(Theme::parse)
         .next_back()
         .unwrap_or(Theme::System)
 }
