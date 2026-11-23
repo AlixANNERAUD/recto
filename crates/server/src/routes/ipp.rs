@@ -689,14 +689,8 @@ impl Job<'_> {
             (None, DocumentFormat::Jpeg | DocumentFormat::Png) => Some(1),
         }
         .map(i64::from);
-        let files = Arc::clone(&app.held);
-        let written = tokio::task::spawn_blocking(move || files.write(&document)).await;
-        let file = match written {
-            Ok(Ok(file)) => file,
-            Ok(Err(error)) => {
-                tracing::error!(%error, "writing a held document failed");
-                return Ok(status(INTERNAL));
-            }
+        let file = match app.held.blocking(move |files| files.write(&document)).await {
+            Ok(file) => file,
             Err(error) => {
                 tracing::error!(%error, "writing a held document failed");
                 return Ok(status(INTERNAL));
@@ -854,9 +848,12 @@ impl Job<'_> {
     /// Removes a document written for a job that was not recorded; the orphan sweep catches
     /// what this misses.
     async fn forget(&self, file: String) {
-        let files = Arc::clone(&self.state.app.held);
-        let removed = tokio::task::spawn_blocking(move || files.remove(&file)).await;
-        if !matches!(removed, Ok(Ok(()))) {
+        let removed = self
+            .state
+            .app
+            .held
+            .blocking(move |files| files.remove(&file));
+        if removed.await.is_err() {
             tracing::warn!("removing a held document that was not recorded failed");
         }
     }

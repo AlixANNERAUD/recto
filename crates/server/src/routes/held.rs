@@ -8,8 +8,6 @@
 //! at once exactly one prints; the print path marks it released in the transaction that counts
 //! it (see `print_document`).
 
-use std::sync::Arc;
-
 use axum::{
     Extension, Form, Router,
     extract::{Path, State},
@@ -100,16 +98,15 @@ async fn document(
     else {
         return not_found(&state, parts).await;
     };
-    let files = Arc::clone(&state.app.held);
-    let read = tokio::task::spawn_blocking(move || files.read(&file)).await;
-    let bytes = match read {
-        Ok(Ok(bytes)) => bytes,
-        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+    let bytes = match state
+        .app
+        .held
+        .blocking(move |files| files.read(&file))
+        .await
+    {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return not_found(&state, parts).await;
-        }
-        Ok(Err(error)) => {
-            tracing::error!(%error, job = job.id, "reading a held document failed");
-            return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
         Err(error) => {
             tracing::error!(%error, job = job.id, "reading a held document failed");
@@ -195,13 +192,11 @@ pub(crate) async fn release_held(
         give_back(app, &claim, Refusal::HeldGone).await;
         return Err(Refusal::HeldGone.into());
     };
-    let files = Arc::clone(&app.held);
     let reading = file.clone();
-    let read = tokio::task::spawn_blocking(move || files.read(&reading)).await;
-    let bytes = match read {
-        Ok(Ok(bytes)) => bytes,
-        failed => {
-            tracing::error!(?failed, job = claim.id, "reading a held document failed");
+    let bytes = match app.held.blocking(move |files| files.read(&reading)).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::error!(%error, job = claim.id, "reading a held document failed");
             give_back(app, &claim, Refusal::Unavailable).await;
             return Err(Refusal::Unavailable.into());
         }
@@ -226,9 +221,8 @@ pub(crate) async fn release_held(
         printed,
         Ok(_) | Err(Rejected::Refusal(Refusal::Unconfirmed))
     ) {
-        let files = Arc::clone(&app.held);
-        let removed = tokio::task::spawn_blocking(move || files.remove(&file)).await;
-        if !matches!(removed, Ok(Ok(()))) {
+        let removed = app.held.blocking(move |files| files.remove(&file)).await;
+        if removed.is_err() {
             tracing::warn!(job = claimed.id, "removing a released document failed");
         }
     }
@@ -267,9 +261,8 @@ async fn delete(
     match held::delete(&app.database, user.id, job.id).await {
         Ok(Some(deleted)) => {
             if let Some(file) = deleted.file {
-                let files = Arc::clone(&app.held);
-                let removed = tokio::task::spawn_blocking(move || files.remove(&file)).await;
-                if !matches!(removed, Ok(Ok(()))) {
+                let removed = app.held.blocking(move |files| files.remove(&file)).await;
+                if removed.is_err() {
                     // The orphan sweep removes it.
                     tracing::warn!(job = job.id, "removing a deleted held document failed");
                 }

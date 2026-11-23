@@ -1,5 +1,5 @@
 //! Where held documents are kept: one file each under `RECTO_DATA_DIR/held`, readable by recto
-//! alone. Every function blocks: call them through `tokio::task::spawn_blocking`.
+//! alone. Every function blocks: call them through [`HeldFiles::blocking`].
 //!
 //! A document is written to a temporary file then renamed, so a crash never leaves half a
 //! document under a name a row could point at. A crash between the rename and the row's insert
@@ -11,6 +11,7 @@ use std::{
     io::{self, Write},
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
+    sync::Arc,
     time::SystemTime,
 };
 
@@ -47,6 +48,18 @@ impl HeldFiles {
     /// The directory, for log lines.
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// Runs `work` on the blocking thread pool, so the file system never stalls the runtime. A
+    /// task that panicked is an error like any other.
+    pub async fn blocking<T: Send + 'static>(
+        self: &Arc<Self>,
+        work: impl FnOnce(&HeldFiles) -> io::Result<T> + Send + 'static,
+    ) -> io::Result<T> {
+        let files = Arc::clone(self);
+        tokio::task::spawn_blocking(move || work(&files))
+            .await
+            .unwrap_or_else(|error| Err(io::Error::other(error)))
     }
 
     /// Writes a document and returns the name it is kept under: 32 random hexadecimal digits.

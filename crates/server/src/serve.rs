@@ -622,8 +622,8 @@ async fn return_unsent_held(
         let (Some(file), Some(entry)) = (job.file.clone(), job.ledger_entry_id) else {
             continue;
         };
-        let held_files = Arc::clone(files);
-        let present = tokio::task::spawn_blocking(move || held_files.dir().join(&file).is_file())
+        let present = files
+            .blocking(move |files| Ok(files.dir().join(&file).is_file()))
             .await
             .unwrap_or(false);
         if !present {
@@ -657,17 +657,11 @@ pub async fn remove_orphan_held_files(
             return 0;
         }
     };
-    let listing = Arc::clone(files);
-    let orphans =
-        tokio::task::spawn_blocking(move || listing.orphans(&known, written_before)).await;
-    let orphans = match orphans {
-        Ok(Ok(orphans)) => orphans,
-        Ok(Err(error)) => {
-            tracing::warn!(%error, dir = %files.dir().display(), "listing the held documents failed");
-            return 0;
-        }
+    let orphans = files.blocking(move |files| files.orphans(&known, written_before));
+    let orphans = match orphans.await {
+        Ok(orphans) => orphans,
         Err(error) => {
-            tracing::warn!(%error, "listing the held documents failed");
+            tracing::warn!(%error, dir = %files.dir().display(), "listing the held documents failed");
             return 0;
         }
     };
@@ -685,16 +679,15 @@ async fn remove_held_files(files: &Arc<HeldFiles>, names: Vec<String>) {
     if names.is_empty() {
         return;
     }
-    let files = Arc::clone(files);
-    let removed = tokio::task::spawn_blocking(move || {
+    let removed = files.blocking(move |files| {
         for name in names {
             if let Err(error) = files.remove(&name) {
                 tracing::warn!(%error, file = name, "removing a held document failed");
             }
         }
-    })
-    .await;
-    if let Err(error) = removed {
+        Ok(())
+    });
+    if let Err(error) = removed.await {
         tracing::warn!(%error, "removing held documents failed");
     }
 }

@@ -60,7 +60,7 @@ pub struct AppState {
     /// (`RECTO_OS_INTEGRATION`); without it, the Account page has no Devices section.
     pub os_integration: bool,
     /// The documents of held jobs (`RECTO_DATA_DIR/held`). Its I/O blocks: call it through
-    /// `tokio::task::spawn_blocking`.
+    /// [`HeldFiles::blocking`].
     pub held: Arc<HeldFiles>,
     /// How long a held job waits for its owner (`RECTO_HELD_JOB_HOURS`).
     pub held_lifetime: chrono::TimeDelta,
