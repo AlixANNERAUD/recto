@@ -21,8 +21,8 @@
 //! the host is the request's `Host`, `ipps://recto-<hostname>.local:8631` for a device that
 //! found recto through DNS-SD, since the public URL may not lead there from the LAN.
 //!
-//! Reading a body is bounded in size, time and number: `RECTO_MAX_UPLOAD_SIZE` (64 KiB without
-//! credentials, since Get-Printer-Attributes carries no document), the device read timeout for
+//! Reading a body is bounded in size, time and number: `RECTO_MAX_UPLOAD_SIZE` for a document
+//! (64 KiB for any other operation, and without credentials), the device read timeout for
 //! the header and for each later piece of the body (`408` past it), and two documents per user
 //! at once (`server-error-busy` for a third, before its document is read).
 //!
@@ -99,9 +99,9 @@ struct IppState {
     uploads: Uploads,
 }
 
-/// The largest body of a request without credentials: only Get-Printer-Attributes is answered
-/// without them, and it carries no document.
-const UNAUTHENTICATED_BODY: usize = FORM_SLACK;
+/// The largest body of a request without a document, or without credentials: only
+/// Get-Printer-Attributes is answered without them, and it carries no document.
+const SMALL_BODY: usize = FORM_SLACK;
 
 /// The operations that carry a document: Print-Job and Send-Document.
 const DOCUMENT_OPERATIONS: [u16; 2] = [0x02, 0x06];
@@ -257,26 +257,27 @@ async fn serve(state: IppState, request: Request, secret: Option<String>) -> Res
             Err(refusal) => return state.devices.refuse(refusal),
         }
     }
-    let limit = if device.is_some() {
+    // Only a document makes a body large: whatever the credentials, many requests at once
+    // without one must not each keep `RECTO_MAX_UPLOAD_SIZE` in memory.
+    let document = DOCUMENT_OPERATIONS.contains(&head.operation);
+    let limit = if device.is_some() && document {
         limit
     } else {
-        limit.min(UNAUTHENTICATED_BODY)
+        limit.min(SMALL_BODY)
     };
     // Kept until the document is held, or refused: it is in memory until then.
     let _upload = match &device {
-        Some(device) if DOCUMENT_OPERATIONS.contains(&head.operation) => {
-            match state.uploads.begin(device.user_id) {
-                Some(upload) => Some(upload),
-                None => {
-                    tracing::info!(
-                        user = device.username,
-                        device_password_id = device.device_password_id,
-                        "a third document at once refused"
-                    );
-                    return answer(printer::refusal(&head, BUSY));
-                }
+        Some(device) if document => match state.uploads.begin(device.user_id) {
+            Some(upload) => Some(upload),
+            None => {
+                tracing::info!(
+                    user = device.username,
+                    device_password_id = device.device_password_id,
+                    "a third document at once refused"
+                );
+                return answer(printer::refusal(&head, BUSY));
             }
-        }
+        },
         _ => None,
     };
     if let Err(unread) = fill(&mut body, &mut buffer, usize::MAX, limit, timeout).await {

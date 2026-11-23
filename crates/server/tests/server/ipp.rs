@@ -1081,6 +1081,54 @@ async fn an_unauthenticated_body_stays_small() {
 }
 
 #[tokio::test]
+async fn only_documents_make_a_body_large() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let laptop = device(&harness, alice, "Laptop").await;
+    // With credentials too, an operation without a document is read up to 64 KiB only: many of
+    // them at once would otherwise each keep RECTO_MAX_UPLOAD_SIZE in memory.
+    for operation in [
+        IppOperation::GetJobs,
+        IppOperation::ValidateJob,
+        IppOperation::CreateJob,
+    ] {
+        let padded = body(&request(operation), &vec![0; 100 * 1024]);
+        let response = harness
+            .send(post_ipp(
+                "/ipp/print",
+                Some(&laptop.secret),
+                Body::from(padded.clone()),
+            ))
+            .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "{operation:?}"
+        );
+        let (sent, _) = chunked(&padded);
+        let response = harness.send(post_ipp(&personal(&laptop), None, sent)).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "{operation:?}"
+        );
+    }
+    // A document past 64 KiB is read.
+    let large = sample_pdf(1000);
+    assert!(large.len() > 64 * 1024);
+    let answer = ipp(
+        &harness,
+        post_ipp(
+            "/ipp/print",
+            Some(&laptop.secret),
+            Body::from(print_job("large.pdf", &large)),
+        ),
+    )
+    .await;
+    assert_eq!(status(&answer), 0x0000);
+}
+
+#[tokio::test]
 async fn deeply_nested_collections_are_refused_without_credentials() {
     let harness = Harness::new().await;
     // About 4,000 collections, each the only member of the one around it, within the 64 KiB

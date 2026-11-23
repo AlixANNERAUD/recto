@@ -102,8 +102,8 @@ off.
 
 recto's printer and scanners, for computers and phones. These addresses take no session and no cross-site
 check: devices authenticate with a [device password](accounts.md#device-passwords). Bodies are
-IPP requests (`Content-Type: application/ipp`) of at most `RECTO_MAX_UPLOAD_SIZE` plus 64 KiB,
-and answers carry `Cache-Control: no-cache`. See
+IPP requests (`Content-Type: application/ipp`) of at most `RECTO_MAX_UPLOAD_SIZE` plus 64 KiB
+for Print-Job and Send-Document, and 64 KiB for every other operation, and answers carry `Cache-Control: no-cache`. See
 [Printing from computers and phones](printing.md#printing-from-computers-and-phones).
 
 | Method and path | Does |
