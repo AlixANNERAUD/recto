@@ -157,10 +157,13 @@ pub fn PrintForm(printers: Vec<Printer>, max_upload_size: usize) -> impl IntoVie
                         {move || too_large.get().then(|| t!("print.errors.too_large"))}
                     </p>
                     <Field label=t!("print.printer") input_id="printer">
+                        // Not restored by the browser on reload or back: the options and
+                        // the status below follow `selected`, which only a change updates.
                         <select
                             id="printer"
                             name="printer"
                             class=INPUT
+                            autocomplete="off"
                             on:change:target=move |event| selected.set(event.target().value())
                         >
                             {choices}
