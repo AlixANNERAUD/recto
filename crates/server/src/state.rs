@@ -63,6 +63,9 @@ pub struct AuthState {
     /// its body: a device that stalls is answered `408` rather than holding a task and its
     /// buffer forever.
     pub device_read_timeout: Duration,
+    /// How long eSCL's `NextDocument` waits for a scan before answering 503: under the 60
+    /// seconds after which URLSession-based apps give up on a request.
+    pub escl_document_wait: Duration,
     /// The eSCL jobs of every listener, so one scanner runs one eSCL job at a time.
     pub escl_jobs: Arc<EsclJobs>,
     /// Where devices may scan without credentials on the LAN listener
@@ -91,6 +94,7 @@ impl AuthState {
             default_media: Media::A4,
             device_limits: DeviceLimits::default(),
             device_read_timeout: Duration::from_secs(30),
+            escl_document_wait: Duration::from_secs(30),
             escl_jobs: Arc::new(EsclJobs::default()),
             escl_open_networks: OpenNetworks::default(),
         }

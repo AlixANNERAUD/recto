@@ -405,6 +405,76 @@ async fn open_networks_match_the_tcp_peer_only() {
 }
 
 #[tokio::test]
+async fn a_failed_scan_answers_its_failure_every_time() {
+    let harness = Harness::with(Setup {
+        scanner: Some(MockScannerService::default().with_scan_delay(Duration::from_millis(300))),
+        ..Setup::default()
+    })
+    .await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let secret = device_secret(&harness, alice).await;
+
+    // A jam is for the person to clear; a scanner taken by something else, such as a scan
+    // from the scan page, is over for this job too: never 503, which apps retry forever.
+    for error in [ScanError::Jammed, ScanError::Busy] {
+        let response = harness
+            .send(post_job(
+                &root(),
+                Some(&secret),
+                settings("Platen", "image/png"),
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let job = location(&response);
+        harness.scan.fail_with(Some(error.clone()));
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        harness.scan.fail_with(None);
+        for _ in 0..2 {
+            let next = harness
+                .send(get_escl(&format!("{job}/NextDocument"), Some(&secret)))
+                .await;
+            assert_eq!(next.status(), StatusCode::CONFLICT, "{error:?}");
+        }
+        let status = harness
+            .send(get_escl(
+                &format!("{}/ScannerStatus", root()),
+                Some(&secret),
+            ))
+            .await;
+        let xml = text(status).await;
+        assert!(
+            xml.contains("<pwg:JobState>Aborted</pwg:JobState>"),
+            "{xml}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn next_document_answers_503_while_scanning() {
+    let harness = Harness::with(Setup {
+        scanner: Some(MockScannerService::default().with_scan_delay(Duration::from_secs(2))),
+        escl_document_wait: Duration::from_millis(200),
+        ..Setup::default()
+    })
+    .await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let secret = device_secret(&harness, alice).await;
+    let response = harness
+        .send(post_job(
+            &root(),
+            Some(&secret),
+            settings("Platen", "image/png"),
+        ))
+        .await;
+    let job = location(&response);
+    let next = harness
+        .send(get_escl(&format!("{job}/NextDocument"), Some(&secret)))
+        .await;
+    assert_eq!(next.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(next.headers()[header::RETRY_AFTER], "2");
+}
+
+#[tokio::test]
 async fn an_empty_feeder_answers_404() {
     let harness = Harness::with(Setup {
         scanner: Some(MockScannerService::default().with_scan_delay(Duration::from_millis(300))),

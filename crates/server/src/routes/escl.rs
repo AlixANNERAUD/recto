@@ -52,10 +52,6 @@ use crate::{
     state::AuthState,
 };
 
-/// How long `NextDocument` waits for a scan before answering 503: under the 60 seconds after
-/// which URLSession-based apps give up on a request.
-const NEXT_DOCUMENT_WAIT: Duration = Duration::from_secs(30);
-
 /// `Retry-After` while another eSCL job holds the scanner.
 const BUSY_RETRY: &str = "5";
 /// `Retry-After` while the job is still scanning.
@@ -89,6 +85,8 @@ struct EsclState {
     /// whole of a scan: asking it again would keep apps waiting, so the status, the
     /// capabilities and new jobs read this, until [`CAPABILITIES_AGE`] or a new listing.
     capabilities: Arc<Mutex<HashMap<String, Known>>>,
+    /// How long `NextDocument` waits for a scan (`AuthState::escl_document_wait`).
+    document_wait: Duration,
     /// How long a client has to send its `ScanSettings`, at most [`escl::MAX_SETTINGS_BYTES`]
     /// (`AuthState::device_read_timeout`).
     read_timeout: Duration,
@@ -109,6 +107,7 @@ pub fn routes(devices: Router, app: AppState, auth: &AuthState, listener: Listen
         icon: Arc::from(auth.public("brand/icon-512.png").as_str()),
         capabilities: Arc::default(),
         read_timeout: auth.device_read_timeout,
+        document_wait: auth.escl_document_wait,
         app,
     };
     devices.layer(middleware::from_fn_with_state(state, intercept))
@@ -445,7 +444,7 @@ impl Scan<'_> {
         let next = self
             .state
             .jobs
-            .next_document(self.caller.owner(), id, NEXT_DOCUMENT_WAIT)
+            .next_document(self.caller.owner(), id, self.state.document_wait)
             .await;
         match next {
             NextDocument::Document(document) => (
@@ -472,6 +471,9 @@ impl Scan<'_> {
                 )],
             )
                 .into_response(),
+            // The scanner was taken by something else: over for this job, whose state says
+            // Aborted, never 503, which the app would retry forever.
+            NextDocument::Failed(ScanError::Busy) => StatusCode::CONFLICT.into_response(),
             NextDocument::Failed(error) => self.failed(&error),
         }
     }

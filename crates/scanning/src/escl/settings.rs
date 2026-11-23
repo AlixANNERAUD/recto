@@ -57,12 +57,13 @@ pub struct EsclRequest {
 
 impl EsclRequest {
     /// The scan to run, with [`ScannerService::scan_every_page`](crate::ScannerService::scan_every_page):
-    /// each PNG or JPEG page of a feeder batch is a document of its own.
+    /// each PNG or JPEG page of a feeder batch is a document of its own. A preview reads one
+    /// sheet only: it must never pull a whole stack through the feeder.
     pub fn scan_request(&self) -> ScanRequest {
         ScanRequest {
             settings: self.settings.clone(),
             format: self.format,
-            single_page: false,
+            single_page: self.intent == Some(Intent::Preview),
         }
     }
 }
@@ -588,6 +589,12 @@ mod tests {
         assert_eq!(request.settings, parsed.settings);
         assert_eq!(request.format, OutputFormat::Png);
         assert!(!request.single_page);
+        // A preview reads one sheet, even from a feeder, as on the scan page.
+        let preview = EsclRequest {
+            intent: Some(Intent::Preview),
+            ..parsed
+        };
+        assert!(preview.scan_request().single_page);
     }
 
     #[test]

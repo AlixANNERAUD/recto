@@ -101,6 +101,8 @@ struct Setup {
     held_usable: bool,
     /// `RECTO_ESCL_OPEN_NETWORKS`, none by default.
     escl_open_networks: &'static str,
+    /// How long eSCL's `NextDocument` waits for a scan; 30 seconds, as the server's.
+    escl_document_wait: Duration,
     /// The scanner stack; the default mock by default.
     scanner: Option<MockScannerService>,
 }
@@ -125,6 +127,7 @@ impl Default for Setup {
             device_read_timeout: Duration::from_secs(30),
             held_usable: true,
             escl_open_networks: "",
+            escl_document_wait: Duration::from_secs(30),
             scanner: None,
         }
     }
@@ -234,6 +237,7 @@ impl Harness {
             local_accounts: setup.local_accounts,
             trust_forwarded_headers: setup.trust_forwarded_headers,
             device_read_timeout: setup.device_read_timeout,
+            escl_document_wait: setup.escl_document_wait,
             escl_open_networks: recto::config::parse_open_networks(setup.escl_open_networks)
                 .unwrap(),
             ..AuthState::new(openid, public_url, database.clone())
