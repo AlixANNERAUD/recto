@@ -2951,6 +2951,9 @@ async fn pages_follow_the_chosen_language_then_the_browser() {
         .send(page("/sign-in", Some("recto_locale=fr")))
         .await;
     assert_eq!(response.status(), StatusCode::OK);
+    // Caches keep one copy per language, and the service worker learns the page's.
+    assert_eq!(response.headers()[header::CONTENT_LANGUAGE], "fr");
+    assert_eq!(response.headers()[header::VARY], "Cookie, Accept-Language");
     let body = text(response).await;
     assert!(body.contains("<html lang=\"fr\""), "{body}");
     assert!(body.contains(&sign_in), "{body}");

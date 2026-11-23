@@ -179,9 +179,28 @@ fn device_routes(state: &AppState, auth: &AuthState, listener: Listener) -> Rout
 /// Headers for every response. Pages bring their own Content Security Policy, with the nonce
 /// of their hydration script (see [`recto_app::content_security_policy`]); everything else
 /// gets one that only forbids framing, so no response can be put in another site's frame.
+///
+/// A page's language follows the locale cookie and `Accept-Language`, so pages say so with
+/// `Vary` (a caching proxy must not serve one visitor's language to another) and name theirs
+/// with `Content-Language`, which the service worker reads to keep the offline page in it.
 async fn security_headers(request: Request, next: Next) -> Response {
+    let locale = recto_app::i18n::from_headers(request.headers());
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
+    let page = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/html"));
+    if page {
+        headers.append(
+            header::VARY,
+            HeaderValue::from_static("Cookie, Accept-Language"),
+        );
+        headers.insert(
+            header::CONTENT_LANGUAGE,
+            HeaderValue::from_static(recto_app::i18n::tag(locale)),
+        );
+    }
     if !headers.contains_key(header::CONTENT_SECURITY_POLICY) {
         headers.insert(
             header::CONTENT_SECURITY_POLICY,

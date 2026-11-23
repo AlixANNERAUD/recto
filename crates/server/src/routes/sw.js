@@ -4,18 +4,25 @@
 const CACHE = "recto-__VERSION__-__BRAND__";
 const OFFLINE = "/offline";
 
+// Keeps the offline page in `language` (else the browser's), replacing the one kept before.
+// Without credentials it renders for no user and the System theme, so nothing personal is
+// stored; the language then goes as `Accept-Language`, since the locale cookie is not sent.
+// Pages vary on that header, so lookups ignore `Vary`.
+async function keepOffline(language) {
+  const cache = await caches.open(CACHE);
+  const kept = await cache.match(OFFLINE, { ignoreVary: true });
+  if (language && kept && kept.headers.get("Content-Language") === language) return;
+  const headers = language ? { "Accept-Language": language } : {};
+  const response = await fetch(new Request(OFFLINE, { credentials: "omit", headers }));
+  if (!response.ok) return;
+  await cache.delete(OFFLINE, { ignoreVary: true });
+  await cache.put(OFFLINE, response);
+}
+
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches
-      .open(CACHE)
-      .then((cache) =>
-        // Without credentials the offline page renders for no user and the System theme, so
-        // nothing personal is stored. The stylesheet is kept so the page is styled offline.
-        Promise.all([
-          cache.add(new Request(OFFLINE, { credentials: "omit" })),
-          cache.add("/pkg/recto.css"),
-        ]),
-      )
+    // The stylesheet is kept so the offline page is styled.
+    Promise.all([keepOffline(), caches.open(CACHE).then((cache) => cache.add("/pkg/recto.css"))])
       .then(() => self.skipWaiting()),
   );
 });
@@ -38,7 +45,17 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
 
   if (request.mode === "navigate") {
-    event.respondWith(fetch(request).catch(() => caches.match(OFFLINE)));
+    event.respondWith(
+      fetch(request).then(
+        (response) => {
+          // Follow the language of the pages, which the person may have changed.
+          const language = response.headers.get("Content-Language");
+          if (language) event.waitUntil(keepOffline(language).catch(() => {}));
+          return response;
+        },
+        () => caches.match(OFFLINE, { ignoreVary: true }),
+      ),
+    );
     return;
   }
 
