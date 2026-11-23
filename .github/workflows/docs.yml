@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       # Their versions come from mise.toml, like the other tools.
-      - uses: jdx/mise-action@v5.2.8
+      - uses: jdx/mise-action@v5.2.10
         with:
           install_args: github:rust-lang/mdBook github:badboy/mdbook-mermaid
       - run: mdbook build docs
