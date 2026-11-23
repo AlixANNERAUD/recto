@@ -838,10 +838,7 @@ impl Job<'_> {
                 (JobViewState::Completed, self.message(HeldState::Released))
             }
             Err(rejected) => {
-                let refusal = match rejected {
-                    Rejected::Quota(_) => Refusal::Quota,
-                    Rejected::Refusal(refusal) => refusal,
-                };
+                let refusal = rejected.refusal();
                 tracing::info!(
                     user = device.username,
                     device_password_id = device.device_password_id,

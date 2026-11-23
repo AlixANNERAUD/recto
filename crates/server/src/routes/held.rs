@@ -28,7 +28,9 @@ use recto_printing::DocumentFormat;
 use serde::Deserialize;
 
 use super::{
-    print::{Choices, Document, HeldClaim, Rejected, Submitted, print_document},
+    print::{
+        Choices, Document, HeldClaim, Rejected, Submitted, give_back, location, print_document,
+    },
     render,
 };
 use crate::{session, state::AuthState};
@@ -163,22 +165,7 @@ async fn release(
             Err(Rejected::Refusal(Refusal::Unavailable))
         }
     };
-    match outcome {
-        Ok(Submitted { job, over }) => {
-            let mut to = format!("/jobs?submitted={job}");
-            if !over.is_empty() {
-                let over: Vec<String> = over.iter().map(i64::to_string).collect();
-                to.push_str(&format!("&over={}", over.join(",")));
-            }
-            Redirect::to(&to).into_response()
-        }
-        Err(Rejected::Quota(rule)) => Redirect::to(&format!(
-            "/jobs?error={}&rule={rule}",
-            Refusal::Quota.code()
-        ))
-        .into_response(),
-        Err(Rejected::Refusal(refusal)) => refused(refusal),
-    }
+    Redirect::to(&location(&outcome, "/jobs")).into_response()
 }
 
 /// Releases the user's held job `id` to the printer of `choices`: claims it, so of two releases
@@ -310,21 +297,6 @@ async fn own(state: &HeldRoutes, user: &User, id: &str) -> Result<Option<HeldJob
             tracing::error!(%error, job = id, "reading a held job failed");
             Err(StatusCode::SERVICE_UNAVAILABLE)
         }
-    }
-}
-
-/// Puts a claimed job back, for a refusal before the print path.
-async fn give_back(app: &AppState, claim: &HeldClaim, refusal: Refusal) {
-    if let Err(error) = held::unclaim(
-        &app.database,
-        claim.id,
-        claim.claim,
-        Some(refusal.code()),
-        chrono::Utc::now(),
-    )
-    .await
-    {
-        tracing::error!(%error, job = claim.id, "returning a held job failed");
     }
 }
 

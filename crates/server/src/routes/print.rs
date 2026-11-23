@@ -56,28 +56,42 @@ pub async fn submit(
             Err(Refusal::InvalidForm.into())
         }
     };
-    match submitted {
+    match &submitted {
         Ok(Submitted { job, over }) if over.is_empty() => {
             tracing::info!(user = user.username, job, "document sent to the printer");
-            Redirect::to(&format!("/jobs?submitted={job}"))
         }
         Ok(Submitted { job, over }) => {
-            let over: Vec<String> = over.iter().map(i64::to_string).collect();
-            let over = over.join(",");
             tracing::info!(
                 user = user.username,
                 job,
-                rules = over,
+                rules = joined(over),
                 "document sent to the printer over a soft quota"
             );
-            Redirect::to(&format!("/jobs?submitted={job}&over={over}"))
         }
         Err(Rejected::Quota(rule)) => {
             tracing::info!(user = user.username, rule, "print refused by a quota");
-            Redirect::to(&format!("/?error={}&rule={rule}", Refusal::Quota.code()))
         }
-        Err(Rejected::Refusal(refusal)) => Redirect::to(&format!("/?error={}", refusal.code())),
+        Err(Rejected::Refusal(_)) => {}
     }
+    Redirect::to(&location(&submitted, "/"))
+}
+
+/// Where the browser goes after a print or a release: the Jobs page with the job and the soft
+/// rules it went over, or `refused_to` with why it was refused.
+pub(crate) fn location(outcome: &Result<Submitted, Rejected>, refused_to: &str) -> String {
+    match outcome {
+        Ok(Submitted { job, over }) if over.is_empty() => format!("/jobs?submitted={job}"),
+        Ok(Submitted { job, over }) => format!("/jobs?submitted={job}&over={}", joined(over)),
+        Err(Rejected::Quota(rule)) => {
+            format!("{refused_to}?error={}&rule={rule}", Refusal::Quota.code())
+        }
+        Err(Rejected::Refusal(refusal)) => format!("{refused_to}?error={}", refusal.code()),
+    }
+}
+
+fn joined(rules: &[i64]) -> String {
+    let rules: Vec<String> = rules.iter().map(i64::to_string).collect();
+    rules.join(",")
 }
 
 /// A job CUPS accepted, and the soft rules it went over.
@@ -91,6 +105,16 @@ pub(crate) enum Rejected {
     Refusal(Refusal),
     /// The hard quota rule, by id, that has too little left.
     Quota(i64),
+}
+
+impl Rejected {
+    /// The refusal shown for it, the rule left out.
+    pub fn refusal(&self) -> Refusal {
+        match self {
+            Rejected::Quota(_) => Refusal::Quota,
+            Rejected::Refusal(refusal) => *refusal,
+        }
+    }
 }
 
 impl From<Refusal> for Rejected {
@@ -181,7 +205,7 @@ pub(crate) async fn print_document(
         Ok(counted) => counted,
         Err(rejected) => {
             if let Some(held) = held {
-                give_back(state, held, &rejected).await;
+                give_back(state, held, rejected.refusal()).await;
             }
             return Err(rejected);
         }
@@ -246,22 +270,18 @@ pub(crate) async fn print_document(
     Ok(Submitted { job: id, over })
 }
 
-/// Puts a held job refused before its ledger entry back to `held`, with why.
-async fn give_back(state: &AppState, held: &HeldClaim, rejected: &Rejected) {
-    let code = match rejected {
-        Rejected::Quota(_) => Refusal::Quota.code(),
-        Rejected::Refusal(refusal) => refusal.code(),
-    };
+/// Puts a claimed held job refused before its ledger entry back to `held`, with why.
+pub(crate) async fn give_back(state: &AppState, held: &HeldClaim, refusal: Refusal) {
     if let Err(error) = held::unclaim(
         &state.database,
         held.id,
         held.claim,
-        Some(code),
+        Some(refusal.code()),
         chrono::Utc::now(),
     )
     .await
     {
-        tracing::error!(%error, "returning a refused held job failed");
+        tracing::error!(%error, job = held.id, "returning a refused held job failed");
     }
 }
 
