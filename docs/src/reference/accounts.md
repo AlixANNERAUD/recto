@@ -153,7 +153,7 @@ default). They are kept in the **Devices** section of the Account page, at `/acc
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/account-devices-dark.png">
-  <img src="../images/account-devices-light.png" alt="The Account page just after creating a device password for an iPad: the password, shown once, the username, the printer address and the personal printer address, and the Download for iPhone, iPad and Mac button; then the Devices section listing the iPad, an iPhone and a MacBook with when each was created and last used and a Revoke button, the form to create another, and Documents from your devices.">
+  <img src="../images/account-devices-light.png" alt="The Account page just after creating a device password for an iPad: the password, shown once, the username, the printer address, the personal printer address and the personal scan address of the scanner, and the Download for iPhone, iPad and Mac button; then the Devices section listing the iPad, an iPhone and a MacBook with when each was created and last used and a Revoke button, the form to create another, and Documents from your devices.">
 </picture>
 
 A device sends its password in one of two ways:

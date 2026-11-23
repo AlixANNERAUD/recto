@@ -326,12 +326,14 @@ fn ReleaseForm(row: HeldRow, printers: Vec<String>, default: Option<String>) -> 
         ("monochrome", t!("print.color.monochrome")),
     ];
     let chosen_sides = row.sides.clone();
+    // On wide screens, columns sized for their longest choice: "Two-sided, flip on short edge"
+    // and "Black and white" are cut in equal columns.
     let chosen_color = row.color_mode.clone();
     view! {
         <form
             method="post"
             action=format!("/jobs/held/{id}/release")
-            class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"
+            class="grid gap-3 sm:grid-cols-2 lg:grid-cols-[1fr_5rem_2fr_1.4fr_1fr]"
         >
             <Field label=t!("print.printer") input_id=field("printer")>
                 <select id=field("printer") name="printer" required class=INPUT>
