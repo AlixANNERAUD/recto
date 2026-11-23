@@ -630,7 +630,9 @@ impl Job<'_> {
             (None, DocumentFormat::Jpeg | DocumentFormat::Png) => Some(1),
         }
         .map(i64::from);
-        let file = match app.held.blocking(move |files| files.write(&document)).await {
+        // Kept for printing directly, which then need not read it back.
+        let writing = document.clone();
+        let file = match app.held.blocking(move |files| files.write(&writing)).await {
             Ok(file) => file,
             Err(error) => {
                 tracing::error!(%error, "writing a held document failed");
@@ -710,7 +712,7 @@ impl Job<'_> {
         );
         // Before it is released: past that, a failure would hide a job already printing.
         let ipp_job = ipp_id(id)?;
-        let (state, message) = self.print_directly(device, id, &requested).await;
+        let (state, message) = self.print_directly(device, id, &requested, document).await;
         let view = JobView {
             id: ipp_job,
             name,
@@ -724,12 +726,14 @@ impl Job<'_> {
 
     /// Releases a job just held when its owner prints directly, and says how it went. The
     /// release runs in a task of its own, so a device hanging up cannot cut it between the
-    /// ledger and CUPS; the answer waits for it at most [`DIRECT_WAIT`].
+    /// ledger and CUPS; the answer waits for it at most [`DIRECT_WAIT`]. `document` is the job's,
+    /// as it was just written.
     async fn print_directly(
         &self,
         device: &DeviceUser,
         id: i64,
         requested: &Requested,
+        document: Bytes,
     ) -> (JobViewState, String) {
         let held = (JobViewState::Completed, self.message(HeldState::Held));
         let app = self.state.app.clone();
@@ -756,7 +760,7 @@ impl Job<'_> {
                 .ok()
                 .map(|printer| printer.capabilities);
             let choices = direct_choices(&printer, &requested, capabilities.as_ref());
-            release_held(&app, &user, id, choices).await
+            release_held(&app, &user, id, choices, Some(document)).await
         });
         let outcome = match tokio::time::timeout(DIRECT_WAIT, release).await {
             Ok(Ok(outcome)) => outcome,

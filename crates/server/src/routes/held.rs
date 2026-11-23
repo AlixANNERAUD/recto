@@ -10,6 +10,7 @@
 
 use axum::{
     Extension, Form, Router,
+    body::Bytes,
     extract::{Path, State},
     http::{HeaderValue, StatusCode, header, request::Parts},
     middleware,
@@ -155,7 +156,8 @@ async fn release(
     let releasing = user.clone();
     let id = job.id;
     let choices = fields.choices();
-    let outcome = tokio::spawn(async move { release_held(&app, &releasing, id, choices).await });
+    let outcome =
+        tokio::spawn(async move { release_held(&app, &releasing, id, choices, None).await });
     let outcome = match outcome.await {
         Ok(outcome) => outcome,
         Err(error) => {
@@ -170,11 +172,16 @@ async fn release(
 /// at once exactly one prints, then prints it through [`print_document`], which marks it
 /// released in the transaction that counts it. The Jobs page and printing directly both come
 /// here. A refusal leaves the job held with why.
+///
+/// `in_hand` is the document, when the caller has it already, as printing directly does right
+/// after holding it: it is not read back from disk then. The pages recto counted when the job
+/// arrived are not counted again either.
 pub(crate) async fn release_held(
     app: &AppState,
     user: &User,
     id: i64,
     choices: Choices,
+    in_hand: Option<Bytes>,
 ) -> Result<Submitted, Rejected> {
     let claimed = match held::claim(&app.database, user.id, id, chrono::Utc::now()).await {
         Ok(Some(claimed)) => claimed,
@@ -193,13 +200,18 @@ pub(crate) async fn release_held(
         give_back(app, &claim, Refusal::HeldGone).await;
         return Err(Refusal::HeldGone.into());
     };
-    let reading = file.clone();
-    let bytes = match app.held.blocking(move |files| files.read(&reading)).await {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            tracing::error!(%error, job = claim.id, "reading a held document failed");
-            give_back(app, &claim, Refusal::Unavailable).await;
-            return Err(Refusal::Unavailable.into());
+    let bytes = match in_hand {
+        Some(bytes) => bytes,
+        None => {
+            let reading = file.clone();
+            match app.held.blocking(move |files| files.read(&reading)).await {
+                Ok(bytes) => Bytes::from(bytes),
+                Err(error) => {
+                    tracing::error!(%error, job = claim.id, "reading a held document failed");
+                    give_back(app, &claim, Refusal::Unavailable).await;
+                    return Err(Refusal::Unavailable.into());
+                }
+            }
         }
     };
     // Checked when it arrived; read again from the content, never trusted from the row.
@@ -209,8 +221,12 @@ pub(crate) async fn release_held(
     };
     let document = Document {
         name: claimed.name.clone(),
-        bytes: bytes.into(),
+        bytes,
         format,
+        // Counted by recto when the job arrived, from this same document.
+        pages: claimed
+            .document_pages
+            .and_then(|pages| u32::try_from(pages).ok()),
     };
     if choices.printer.is_empty() {
         give_back(app, &claim, Refusal::InvalidForm).await;

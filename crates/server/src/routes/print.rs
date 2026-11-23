@@ -143,6 +143,8 @@ pub(crate) struct Document {
     pub name: String,
     pub bytes: Bytes,
     pub format: DocumentFormat,
+    /// Its pages, when recto counted them already: a PDF is not parsed twice.
+    pub pages: Option<u32>,
 }
 
 /// The printer and the options as typed, before they are checked against the printer. A missing
@@ -183,6 +185,7 @@ async fn submit_form(
         name: file_name,
         bytes,
         format,
+        pages: None,
     };
     let choices = Choices {
         printer,
@@ -303,6 +306,7 @@ async fn counted(
         name: file_name,
         bytes: document,
         format,
+        pages: known_pages,
     } = document;
     let printer_name = choices.printer.as_str();
     // Before CUPS is asked anything: a printer the user may not use is unknown to them. Rules
@@ -335,10 +339,11 @@ async fn counted(
         return Err(Refusal::NotAccepting.into());
     }
     let options = options(choices, &printer.capabilities, format)?;
-    let document_pages = match format {
+    let document_pages = match (known_pages, format) {
+        (Some(pages), _) => Ok(pages),
         // Bounded in concurrency and time, and not copied: see `PageCounter`.
-        DocumentFormat::Pdf => state.page_counter.count(document.clone()).await,
-        DocumentFormat::Jpeg | DocumentFormat::Png => Ok(1),
+        (None, DocumentFormat::Pdf) => state.page_counter.count(document.clone()).await,
+        (None, DocumentFormat::Jpeg | DocumentFormat::Png) => Ok(1),
     };
     let uncounted = document_pages.err();
     let document_pages = document_pages.ok();
@@ -875,6 +880,7 @@ mod tests {
                     name: "minutes.pdf".into(),
                     bytes: Bytes::from(document.clone()),
                     format: DocumentFormat::Pdf,
+                    pages: None,
                 },
                 &Choices {
                     printer: "office".into(),

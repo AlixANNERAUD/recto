@@ -115,6 +115,19 @@ async fn releasing_prints_through_quotas_and_the_ledger() {
 }
 
 #[tokio::test]
+async fn a_release_counts_with_the_pages_counted_on_arrival() {
+    let harness = Harness::new().await;
+    let (alice, cookie) = alice(&harness).await;
+    // The row says 2 pages, as recto counted when the job arrived: the PDF is not parsed again.
+    let (id, _) = hold_with(&harness, alice, &sample_pdf(3), "{}").await;
+    let response = harness
+        .send(release(id, &cookie, &[("printer", "office")]))
+        .await;
+    assert_redirect(&response, "/jobs?submitted=8");
+    assert_eq!(ledger_rows(&harness).await[0].pages, Some(2));
+}
+
+#[tokio::test]
 async fn an_unconfirmed_release_stays_counted_and_released() {
     let harness = Harness::new().await;
     let (alice, cookie) = alice(&harness).await;
