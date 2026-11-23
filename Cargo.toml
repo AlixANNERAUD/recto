@@ -78,6 +78,9 @@ data-encoding = { version = "2.11.1", default-features = false, features = ["all
 sha2 = { version = "0.11.1", default-features = false }
 # Tests of the IPP routes send bodies in chunks they count, as a stream.
 futures-core = { version = "0.3.34", default-features = false }
+# The XML of eSCL scanning (crates/scanning/src/escl): a pull parser that resolves namespaces,
+# never expands entities beyond the predefined ones and reports a DOCTYPE as an event to refuse.
+quick-xml = { version = "0.42.0", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

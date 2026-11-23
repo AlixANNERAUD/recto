@@ -12,6 +12,8 @@ mod model;
 #[cfg(feature = "service")]
 mod encode;
 #[cfg(feature = "service")]
+pub mod escl;
+#[cfg(feature = "service")]
 mod pdf;
 #[cfg(feature = "sane")]
 mod sane;
