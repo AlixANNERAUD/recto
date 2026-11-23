@@ -159,7 +159,24 @@ ls consume
 That folder is where, at home, you would point Paperless-ngx (see
 [Save scans into Paperless-ngx](../how-to/paperless.md)).
 
-## 9. Create an account for someone else
+## 9. Print from your computer
+
+Computers and phones can also print to recto from any application's Print dialog. Their
+documents wait on the **Jobs** page until you choose a printer for them. A device signs in with
+a device password of its own, never with your account's password:
+
+1. Select your name, or the account icon, at the top right to open **Account**.
+2. Under **Devices**, set **Device name** to `Laptop` and press **Create device password**.
+3. recto shows **Device password for Laptop** once, with the **Password**, the **Printer
+   address** and the **Personal printer address**.
+
+recto takes device passwords over HTTPS only, which this tutorial leaves out, so stop here:
+press **Revoke** next to **Laptop** in the list. Once recto runs behind a reverse proxy,
+follow the guide for your system: [macOS](../how-to/print-from-macos.md),
+[Windows](../how-to/print-from-windows.md), [Linux](../how-to/print-from-linux.md),
+[iPhone and iPad](../how-to/print-from-ios.md) or [Android](../how-to/print-from-android.md).
+
+## 10. Create an account for someone else
 
 1. Open **Administration**. The **Users** tab lists one user, **admin**, marked **You**.
 2. Under **New local user**, set **Username** to `alex`, **Display name** to `Alex`, and a
@@ -170,7 +187,7 @@ That folder is where, at home, you would point Paperless-ngx (see
 Press **Sign out** at the top, then sign in as `alex`. The menu has no **Administration** entry:
 Alex can print and scan, but not manage accounts.
 
-## 10. Clean up
+## 11. Clean up
 
 Stop recto and the CUPS server, and delete their volumes (the database among them), the override
 and the files you made:
@@ -184,7 +201,8 @@ sudo rm -r consume
 ## What you have learned
 
 You ran recto next to a CUPS server, created its first administrator and a second account,
-printed on a CUPS printer and scanned from a SANE scanner, then saved the scan to a folder. With
+printed on a CUPS printer and scanned from a SANE scanner, then saved the scan to a folder, and
+made a device password for a computer's Print dialog. With
 real hardware, only two steps change: [Add a printer](../how-to/add-printer.md) and
 [Add a scanner](../how-to/add-scanner.md). To run recto for good, follow
 [Install recto](../how-to/install.md); to sign in with an identity provider you already have, see

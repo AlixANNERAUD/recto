@@ -60,6 +60,11 @@ Authentik and others), or both.
 - **Scan** from network scanners (eSCL/AirScan and WSD, through sane-airscan), scanners shared by
   `saned`, and USB scanners. Choose resolution, colors, source and format (PDF, PNG, JPEG),
   preview the glass and drag to scan only part of it. Feeder batches become one PDF.
+- **Print and scan from computers and phones** without a driver: recto is a driverless printer
+  (IPP Everywhere and AirPrint) and an eSCL scanner for macOS, Windows, Linux, iOS and Android,
+  each device with a password of its own. Documents wait on the Jobs page until their owner picks
+  a printer, or print at once on a printer they chose. On the local network, recto can announce
+  itself over DNS-SD so Print dialogs and scan apps find it.
 - **Save to a folder** for Paperless-ngx or any folder watcher: files appear complete, and never
   overwrite one another.
 - **Usage reports**: who printed and scanned what over a range of days, by user, group, printer or
