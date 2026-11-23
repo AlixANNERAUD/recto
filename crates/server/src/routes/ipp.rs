@@ -113,12 +113,8 @@ const DOCUMENT_OPERATIONS: [u16; 2] = [0x02, 0x06];
 /// `ipps://host:port` for an `https` public URL, `ipp://host:port` for an `http` one, always
 /// with its port: `ipps` alone means port 631. The bool says whether it is TLS.
 pub fn printer_address(public_url: &Url) -> (String, bool) {
-    let tls = public_url.scheme() == "https";
+    let (host, port, tls) = device_auth::public_host(public_url);
     let scheme = if tls { "ipps" } else { "ipp" };
-    let host = public_url.host_str().unwrap_or("localhost");
-    let port = public_url
-        .port_or_known_default()
-        .unwrap_or(if tls { 443 } else { 80 });
     (format!("{scheme}://{host}:{port}"), tls)
 }
 
@@ -300,7 +296,7 @@ async fn serve(state: IppState, request: Request, secret: Option<String>) -> Res
         Err(status) => return answer(printer::refusal(&head, status as u16)),
     };
     let path = match &secret {
-        Some(secret) => format!("{}{secret}/ipp/print", device_auth::PERSONAL_PREFIX),
+        Some(secret) => device_auth::personal_printer_path(secret),
         None => "/ipp/print".to_owned(),
     };
     let uri = PrinterUri {

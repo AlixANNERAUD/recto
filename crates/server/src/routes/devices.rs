@@ -51,7 +51,7 @@ mod profile;
 use profile::AirPrintProfile;
 
 use super::{not_found, render};
-use crate::{device_auth::PERSONAL_PREFIX, session, state::AuthState};
+use crate::{device_auth, session, state::AuthState};
 
 #[derive(Clone)]
 struct DevicesState {
@@ -73,12 +73,8 @@ struct DevicesState {
 /// `POST /account/devices`, `POST /account/devices/{id}/revoke`, the profile download and
 /// `POST /account/direct-printer`.
 pub fn router(app: AppState, auth: &AuthState) -> Router {
-    let (printer_address, tls) = super::ipp::printer_address(&auth.public_url);
-    let host = auth.public_url.host_str().unwrap_or("localhost");
-    let port = auth
-        .public_url
-        .port_or_known_default()
-        .unwrap_or(if tls { 443 } else { 80 });
+    let (printer_address, _) = super::ipp::printer_address(&auth.public_url);
+    let (host, port, tls) = device_auth::public_host(&auth.public_url);
     let state = DevicesState {
         app,
         methods: auth.sign_in_methods(),
@@ -150,8 +146,9 @@ async fn create(
         name,
         print_address: format!("{}/ipp/print", state.printer_address),
         personal_address: format!(
-            "{}/device/{}/ipp/print",
-            state.printer_address, created.secret
+            "{}{}",
+            state.printer_address,
+            device_auth::personal_printer_path(&created.secret)
         ),
         scan_addresses,
         secret: created.secret,
@@ -208,9 +205,9 @@ async fn scan_addresses(state: &DevicesState, user: &User, secret: &str) -> Vec<
                 .collect::<Vec<_>>()
                 .join(" "),
             address: format!(
-                "{}{PERSONAL_PREFIX}{secret}/eSCL/{}/",
+                "{}{}/",
                 state.web_address,
-                escl::scanner_key(&scanner.id)
+                device_auth::personal_scanner_path(secret, &escl::scanner_key(&scanner.id))
             ),
         })
         .collect()
@@ -481,7 +478,7 @@ async fn download_profile(
     let brand = &state.app.branding.name;
     let display_name = recto_app::messages::profile_name(brand, &device.name, locale);
     let description = recto_app::messages::profile_description(brand, &device.name, locale);
-    let resource_path = format!("{PERSONAL_PREFIX}{secret}/ipp/print");
+    let resource_path = device_auth::personal_printer_path(&secret);
     let profile = AirPrintProfile {
         brand,
         display_name: &display_name,

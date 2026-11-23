@@ -11,7 +11,7 @@
 //! address and escape the limit.
 
 use std::{
-    net::{IpAddr, Ipv6Addr},
+    net::IpAddr,
     sync::{Arc, Weak},
     time::Duration,
 };
@@ -19,7 +19,7 @@ use std::{
 use axum::{
     Extension, Form, Router,
     extract::{Query, State},
-    http::{Request, StatusCode, Uri, request::Parts},
+    http::{StatusCode, Uri, request::Parts},
     middleware,
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -38,14 +38,12 @@ use recto_domain::{
     users,
 };
 use serde::Deserialize;
-use tower_governor::{
-    governor::GovernorConfigBuilder,
-    key_extractor::{KeyExtractor, PeerIpKeyExtractor, SmartIpKeyExtractor},
-};
+use tower_governor::governor::GovernorConfigBuilder;
 use tower_sessions::Session;
 
 use super::{not_found, render};
 use crate::{
+    device_auth,
     session::{self, SignInMethod, local_path},
     state::AuthState,
 };
@@ -101,37 +99,9 @@ impl Attempts {
         }
     }
 
-    /// The address attempts are counted by: the peer's, or with trusted forwarded headers the
-    /// one they name (else the peer's), reduced by [`counted_address`].
+    /// The address attempts are counted by: the client, by [`device_auth::counted_address`].
     fn client(&self, parts: &Parts) -> IpAddr {
-        let request = Request::from_parts(parts.clone(), ());
-        let address = if self.trust_forwarded_headers {
-            SmartIpKeyExtractor.extract(&request)
-        } else {
-            PeerIpKeyExtractor.extract(&request)
-        };
-        address.map_or_else(
-            |_| {
-                // The server always knows its peers; only a router served without connection
-                // information lands here, and then every client shares one budget.
-                tracing::warn!("the client address of a password attempt is unknown");
-                IpAddr::from([0, 0, 0, 0])
-            },
-            counted_address,
-        )
-    }
-}
-
-/// The address an attempt is counted by. An IPv6 client usually has a whole /64 to pick
-/// addresses from, so it counts by that network; an IPv4 address seen as IPv6 (`::ffff:a.b.c.d`,
-/// from a dual-stack socket) counts as itself.
-fn counted_address(address: IpAddr) -> IpAddr {
-    match address {
-        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
-            Some(v4) => IpAddr::V4(v4),
-            None => IpAddr::V6(Ipv6Addr::from(u128::from(v6) & !u128::from(u64::MAX))),
-        },
-        v4 => v4,
+        device_auth::counted_address(device_auth::client(parts, self.trust_forwarded_headers))
     }
 }
 
@@ -382,31 +352,4 @@ async fn change(
         tracing::error!(%error, "keeping the session after a password change failed");
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ipv6_clients_count_by_their_network() {
-        let address = |text: &str| text.parse::<IpAddr>().unwrap();
-        assert_eq!(
-            counted_address(address("2001:db8:1:2:aaaa::1")),
-            address("2001:db8:1:2::")
-        );
-        assert_eq!(
-            counted_address(address("2001:db8:1:2:ffff:ffff:ffff:ffff")),
-            address("2001:db8:1:2::")
-        );
-        assert_ne!(
-            counted_address(address("2001:db8:1:3::1")),
-            address("2001:db8:1:2::")
-        );
-        assert_eq!(counted_address(address("192.0.2.7")), address("192.0.2.7"));
-        assert_eq!(
-            counted_address(address("::ffff:192.0.2.7")),
-            address("192.0.2.7")
-        );
-    }
 }

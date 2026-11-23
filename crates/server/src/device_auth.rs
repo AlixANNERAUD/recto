@@ -33,6 +33,7 @@ use data_encoding::BASE64;
 use recto_domain::device_passwords::{self, DeviceUser, Lookup};
 use sea_orm::DatabaseConnection;
 use tower_governor::key_extractor::{KeyExtractor, SmartIpKeyExtractor};
+use url::Url;
 
 use crate::state::AuthState;
 
@@ -96,7 +97,7 @@ pub fn peer(parts: &Parts) -> IpAddr {
         None => {
             // The server always knows its peers; only a router served without connection
             // information lands here.
-            tracing::warn!("the address of a device is unknown");
+            tracing::warn!("the address of a client is unknown");
             IpAddr::V4(Ipv4Addr::UNSPECIFIED)
         }
     }
@@ -192,9 +193,10 @@ impl DeviceLimiter {
     }
 }
 
-/// The address failures are counted by. An IPv6 client usually has a whole /64 to pick
-/// addresses from, so it counts by that network, as password sign-in does.
-fn counted_address(address: IpAddr) -> IpAddr {
+/// The address a rate limit counts a client by. An IPv6 client usually has a whole /64 to pick
+/// addresses from, so it counts by that network; an IPv4 address seen as IPv6
+/// (`::ffff:a.b.c.d`, from a dual-stack socket) counts as itself.
+pub fn counted_address(address: IpAddr) -> IpAddr {
     match address.to_canonical() {
         IpAddr::V6(v6) => IpAddr::V6(Ipv6Addr::from(u128::from(v6) & !u128::from(u64::MAX))),
         v4 => v4,
@@ -218,6 +220,41 @@ pub fn loggable_path(path: &str) -> Cow<'_, str> {
 
 /// Where personal addresses start.
 pub const PERSONAL_PREFIX: &str = "/device/";
+
+/// The path of the printer's personal address for `secret`.
+pub fn personal_printer_path(secret: &str) -> String {
+    format!("{PERSONAL_PREFIX}{secret}/ipp/print")
+}
+
+/// The path of the personal eSCL root of the scanner `key` for `secret`.
+pub fn personal_scanner_path(secret: &str, key: &str) -> String {
+    format!("{PERSONAL_PREFIX}{secret}/eSCL/{key}")
+}
+
+/// The host devices reach recto on through the proxy, the public URL's, with its port always
+/// given (the scheme's default when it names none), and whether it speaks TLS.
+pub fn public_host(public_url: &Url) -> (&str, u16, bool) {
+    let tls = public_url.scheme() == "https";
+    let host = public_url.host_str().unwrap_or("localhost");
+    let port = public_url
+        .port_or_known_default()
+        .unwrap_or(if tls { 443 } else { 80 });
+    (host, port, tls)
+}
+
+/// The client a request comes from: the TCP [`peer`], or with `trust_forwarded_headers` the
+/// client the forwarded headers name (else the peer). Only rate limits may use it: a forwarded
+/// header is whatever the proxy, or a client reaching recto directly, wrote.
+pub fn client(parts: &Parts, trust_forwarded_headers: bool) -> IpAddr {
+    let forwarded = trust_forwarded_headers
+        .then(|| {
+            SmartIpKeyExtractor
+                .extract(&Request::from_parts(parts.clone(), ()))
+                .ok()
+        })
+        .flatten();
+    forwarded.map_or_else(|| peer(parts), |client| client.to_canonical())
+}
 
 /// Secrets refused lately, by [`device_passwords::fingerprint`]: a phone still polling with a
 /// revoked password is refused from here, without a lookup and without spending its address's
@@ -379,19 +416,6 @@ impl DeviceAuth {
         devices
     }
 
-    /// The address failures are counted by: the peer's, or with trusted forwarded headers the
-    /// client they name (else the peer's). Only the limiter reads it: whether plain HTTP is
-    /// accepted always depends on the peer.
-    fn client(&self, parts: &Parts, peer: IpAddr) -> IpAddr {
-        if !self.trust_forwarded_headers {
-            return peer;
-        }
-        let request = Request::from_parts(parts.clone(), ());
-        SmartIpKeyExtractor
-            .extract(&request)
-            .map_or(peer, |client| client.to_canonical())
-    }
-
     /// The answer to a refused device: see [`Refusal`]. The bodies are empty, since devices
     /// only read the status.
     pub fn refuse(&self, refusal: Refusal) -> Response {
@@ -446,7 +470,8 @@ pub async fn authenticate(
         tracing::debug!(%peer, in_path, "device password refused again");
         return Err(Refusal::Wrong { in_path });
     }
-    let client = state.client(parts, peer);
+    // Only the limiter reads it: whether plain HTTP is accepted always depends on the peer.
+    let client = client(parts, state.trust_forwarded_headers);
     if !state.limiter.allow(client) {
         tracing::warn!(%peer, %client, "device password refused: too many failures");
         return Err(Refusal::TooMany);
@@ -476,9 +501,30 @@ mod tests {
         passwords::PasswordPolicy,
         users::{self, NewLocalUser},
     };
-    use url::Url;
 
     use super::*;
+
+    #[test]
+    fn ipv6_clients_count_by_their_network() {
+        let address = |text: &str| text.parse::<IpAddr>().unwrap();
+        assert_eq!(
+            counted_address(address("2001:db8:1:2:aaaa::1")),
+            address("2001:db8:1:2::")
+        );
+        assert_eq!(
+            counted_address(address("2001:db8:1:2:ffff:ffff:ffff:ffff")),
+            address("2001:db8:1:2::")
+        );
+        assert_ne!(
+            counted_address(address("2001:db8:1:3::1")),
+            address("2001:db8:1:2::")
+        );
+        assert_eq!(counted_address(address("192.0.2.7")), address("192.0.2.7"));
+        assert_eq!(
+            counted_address(address("::ffff:192.0.2.7")),
+            address("192.0.2.7")
+        );
+    }
 
     /// Device authentication over a fresh database with one user, alice, and the secret of
     /// her device password.

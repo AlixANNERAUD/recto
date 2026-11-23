@@ -146,7 +146,7 @@ impl Target {
     /// secret, a Basic one never gains it.
     fn root(&self) -> String {
         match &self.secret {
-            Some(secret) => format!("{}{secret}/eSCL/{}", device_auth::PERSONAL_PREFIX, self.key),
+            Some(secret) => device_auth::personal_scanner_path(secret, &self.key),
             None => format!("/eSCL/{}", self.key),
         }
     }
