@@ -63,6 +63,8 @@ pub struct UserSummary {
     pub user: users::Model,
     /// Names of the user's groups, in alphabetical order.
     pub groups: Vec<String>,
+    /// Ids of the user's groups, in no particular order.
+    pub group_ids: Vec<i64>,
     pub has_password: bool,
     pub has_identity: bool,
 }
@@ -592,13 +594,12 @@ pub async fn list(database: &impl ConnectionTrait) -> Result<Vec<UserSummary>> {
         .into_iter()
         .map(|group| (group.id, group.name))
         .collect();
-    let mut groups_of: HashMap<i64, Vec<String>> = HashMap::new();
+    let mut groups_of: HashMap<i64, (Vec<String>, Vec<i64>)> = HashMap::new();
     for membership in group_memberships::Entity::find().all(database).await? {
         if let Some(name) = group_names.get(&membership.group_id) {
-            groups_of
-                .entry(membership.user_id)
-                .or_default()
-                .push(name.clone());
+            let (names, ids) = groups_of.entry(membership.user_id).or_default();
+            names.push(name.clone());
+            ids.push(membership.group_id);
         }
     }
     let with_identity: HashSet<i64> = user_identities::Entity::find()
@@ -610,10 +611,11 @@ pub async fn list(database: &impl ConnectionTrait) -> Result<Vec<UserSummary>> {
     Ok(users
         .into_iter()
         .map(|user| {
-            let mut groups = groups_of.remove(&user.id).unwrap_or_default();
+            let (mut groups, group_ids) = groups_of.remove(&user.id).unwrap_or_default();
             groups.sort();
             UserSummary {
                 groups,
+                group_ids,
                 has_password: user.password_hash.is_some(),
                 has_identity: with_identity.contains(&user.id),
                 user,

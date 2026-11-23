@@ -503,6 +503,24 @@ async fn usage_counts_the_window_after_the_latest_reset_minus_grants() {
     )
     .await;
     assert_eq!(standing(&db, &ever, alice, now, TZ).await.unwrap().used, 65);
+
+    // Read for every user at once, as the Users page does, the standings agree.
+    let carol = person(&db, "carol", &[]).await;
+    let users = [alice, bob, carol];
+    for rule in [&rule, &jobs, &week, &ever] {
+        let all = standings(&db, rule, &users, now, TZ).await.unwrap();
+        assert_eq!(all.len(), users.len());
+        for user in users {
+            let one = standing(&db, rule, user, now, TZ).await.unwrap();
+            assert_eq!(all[&user], one, "rule {} user {user}", rule.name);
+        }
+    }
+    assert!(
+        standings(&db, &rule, &[], now, TZ)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -545,6 +563,8 @@ async fn a_pool_sums_every_member() {
         let pool = standing(&db, &rule, member, now, TZ).await.unwrap();
         assert_eq!((pool.used, pool.left), (7, 3));
     }
+    let all = standings(&db, &rule, &[alice, bob], now, TZ).await.unwrap();
+    assert!(all.values().all(|pool| (pool.used, pool.left) == (7, 3)));
 
     // Adjustments of a pool are the group's.
     grant(&db, rule.id, Holder::Group(design), 5, "", carol, now, TZ)

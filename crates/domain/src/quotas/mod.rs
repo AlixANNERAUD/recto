@@ -29,7 +29,7 @@ use sea_orm::{
 
 pub use check::{Verdict, check, lock_subjects};
 pub use family::{amount, applicable};
-pub use usage::{Standing, standing};
+pub use usage::{Standing, standing, standings};
 pub use window::window;
 pub(crate) use {usage::sum, window::midnight};
 

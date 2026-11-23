@@ -7,6 +7,8 @@
 //! page it came from with a notice; a refused one renders that page again with the problem,
 //! keeping what was typed except a password.
 
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
 use axum::{
     Extension, Form, Router,
     body::Bytes,
@@ -217,8 +219,12 @@ async fn users_view(
 ) -> Response {
     let users = match users::list(&state.app.database).await {
         Ok(users) => {
+            let group_ids: HashMap<i64, Vec<i64>> = users
+                .iter()
+                .map(|summary| (summary.user.id, summary.group_ids.clone()))
+                .collect();
             let mut rows: Vec<UserRow> = users.into_iter().map(user_row).collect();
-            if let Err(error) = add_usage(state, &mut rows).await {
+            if let Err(error) = add_usage(state, &mut rows, &group_ids).await {
                 // The users still show, without their usage.
                 tracing::error!(%error, "reading the quota usage failed");
             }
@@ -282,8 +288,13 @@ fn user_row(summary: UserSummary) -> UserRow {
 }
 
 /// Fills in what each user used of the enabled personal rules that apply to them on any
-/// printer. Pools are the group's, so the Quotas page shows them.
-async fn add_usage(state: &AdministrationState, rows: &mut [UserRow]) -> Result<(), Error> {
+/// printer, `groups` being each user's group ids. Pools are the group's, so the Quotas page
+/// shows them. Each rule is read for all its users at once.
+async fn add_usage(
+    state: &AdministrationState,
+    rows: &mut [UserRow],
+    groups: &HashMap<i64, Vec<i64>>,
+) -> Result<(), Error> {
     let database = &state.app.database;
     let rules = quotas::rules(database).await?;
     if !rules.iter().any(|rule| rule.enabled) {
@@ -293,21 +304,35 @@ async fn add_usage(state: &AdministrationState, rows: &mut [UserRow]) -> Result<
     // its own.
     let mut printers = vec![String::new()];
     printers.extend(rules.iter().flat_map(|rule| rule.printers.iter().cloned()));
-    let now = chrono::Utc::now();
-    for row in rows.iter_mut() {
-        let groups = access::group_ids_of(database, row.id).await?;
-        let mut applicable = std::collections::BTreeMap::new();
+    let mut applicable: BTreeMap<i64, (Rule, Vec<i64>)> = BTreeMap::new();
+    let mut applying: HashMap<i64, Vec<i64>> = HashMap::new();
+    for row in rows.iter() {
+        let groups = groups.get(&row.id).map_or(&[][..], Vec::as_slice);
+        let mut rule_ids = BTreeSet::new();
         for printer in &printers {
-            for rule in quotas::applicable(&rules, row.id, &groups, printer) {
-                if !matches!(rule.subject, Subject::Pool(_)) {
-                    applicable.insert(rule.id, rule);
+            for rule in quotas::applicable(&rules, row.id, groups, printer) {
+                if !matches!(rule.subject, Subject::Pool(_)) && rule_ids.insert(rule.id) {
+                    applicable
+                        .entry(rule.id)
+                        .or_insert_with(|| (rule, Vec::new()))
+                        .1
+                        .push(row.id);
                 }
             }
         }
-        for rule in applicable.values() {
-            let standing =
-                quotas::standing(database, rule, row.id, now, state.app.timezone).await?;
-            row.quotas.push(Allowance::from(&standing));
+        applying.insert(row.id, rule_ids.into_iter().collect());
+    }
+    let now = chrono::Utc::now();
+    let mut standings = HashMap::new();
+    for (rule, users) in applicable.values() {
+        let of_rule = quotas::standings(database, rule, users, now, state.app.timezone).await?;
+        standings.insert(rule.id, of_rule);
+    }
+    for row in rows.iter_mut() {
+        for rule_id in applying.remove(&row.id).unwrap_or_default() {
+            if let Some(standing) = standings.get(&rule_id).and_then(|of| of.get(&row.id)) {
+                row.quotas.push(Allowance::from(standing));
+            }
         }
     }
     Ok(())
