@@ -4116,7 +4116,7 @@ dependencies = [
 
 [[package]]
 name = "recto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -4166,7 +4166,7 @@ dependencies = [
 
 [[package]]
 name = "recto-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "chrono",
@@ -4193,7 +4193,7 @@ dependencies = [
 
 [[package]]
 name = "recto-authentication"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "chrono",
@@ -4211,7 +4211,7 @@ dependencies = [
 
 [[package]]
 name = "recto-domain"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -4232,7 +4232,7 @@ dependencies = [
 
 [[package]]
 name = "recto-entity"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "sea-orm",
  "serde",
@@ -4240,7 +4240,7 @@ dependencies = [
 
 [[package]]
 name = "recto-frontend"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "console_error_panic_hook",
  "leptos",
@@ -4250,14 +4250,14 @@ dependencies = [
 
 [[package]]
 name = "recto-migration"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "sea-orm-migration",
 ]
 
 [[package]]
 name = "recto-printing"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4280,7 +4280,7 @@ dependencies = [
 
 [[package]]
 name = "recto-scanning"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "chrono",
