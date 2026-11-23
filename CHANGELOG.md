@@ -5,6 +5,48 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2](https://github.com/AlixANNERAUD/recto/compare/v0.1.1...v0.1.2) - 2026-11-23
+
+### Changed
+
+- *(domain)* one helper to lock rows on PostgreSQL
+
+### Fixed
+
+- *(scanning)* size scanned pages from the resolution used
+- *(printing)* show a paused printer as paused, not offline
+- *(domain)* report a taken username when creating it races
+- *(domain)* store quota grants and resets in the rule's transaction
+- *(authentication)* refuse an empty claim when only presence is required
+- *(app)* say what releasing without a color choice does
+- *(app)* keep the print form's options in step with its printer
+- *(app)* load a scanner's settings again on Refresh after a failure
+- *(scanning)* keep scan results in a directory no one else can make
+- *(app)* render the Account page whole, without JavaScript
+- *(server)* register mDNS services off the async runtime
+- *(ipp)* honour job-ids in Get-Jobs
+- *(domain)* check quotas against the rules that chose the locks
+- *(escl)* keep anonymous clients' scan jobs apart
+- *(escl)* answer ScannerCapabilities while the scanner is busy
+
+### Performance
+
+- *(scanning)* publish without links from the bytes in hand
+- *(printing)* send and read IPP bodies without copying them
+- *(printing)* tell the default printer from printer-type
+- *(printing)* ask CUPS for both job lists at once
+- *(migration)* drop the index on print_jobs.user_id alone
+- *(domain)* read claimed groups at once when signing in
+- *(domain)* count device passwords with GROUP BY
+- *(app)* list the printers on the Jobs page only for held jobs
+- *(app)* read the Print page's printers and quotas together
+- *(server)* serve static files outside the session layers
+- *(server)* build the service worker and the manifest once
+- *(domain)* poll unfinished ledger entries without reading them twice
+- *(server)* read the Users page's quota usage per rule
+- *(server)* count a device's waiting jobs in the database
+- *(server)* cancel a device's waiting jobs in one query
+
 ## [0.1.1](https://github.com/AlixANNERAUD/recto/compare/v0.1.0...v0.1.1) - 2026-11-23
 
 ### Added
