@@ -8,6 +8,7 @@ use ipp::model::DelimiterTag;
 use ipp::parser::IppParser;
 use ipp::reader::IppReader;
 use ipp::request::IppRequestResponse;
+use url::Url;
 
 use crate::cups::string;
 
@@ -21,6 +22,19 @@ pub(crate) fn client(timeout: Duration) -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .timeout(timeout)
         .connect_timeout(timeout)
+}
+
+/// `{base}/printers/{name}` with the name percent-encoded as one path segment, or `None` when
+/// `base` cannot hold a path.
+pub(crate) fn printer_url(base: &Url, name: &str) -> Option<Url> {
+    let mut url = base.clone();
+    url.set_query(None);
+    url.path_segments_mut()
+        .ok()?
+        .pop_if_empty()
+        .push("printers")
+        .push(name);
+    Some(url)
 }
 
 /// Why an IPP request got no IPP answer.

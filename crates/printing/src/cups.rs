@@ -98,13 +98,8 @@ impl Cups {
 
     /// `{base}/printers/{name}` with the name percent-encoded as one path segment.
     fn printer_uri(&self, name: &str) -> Result<Uri, PrintError> {
-        let mut url = self.base.clone();
-        url.set_query(None);
-        url.path_segments_mut()
-            .map_err(|()| PrintError::Unavailable("the CUPS address cannot hold a path".into()))?
-            .pop_if_empty()
-            .push("printers")
-            .push(name);
+        let url = transport::printer_url(&self.base, name)
+            .ok_or_else(|| PrintError::Unavailable("the CUPS address cannot hold a path".into()))?;
         to_uri(&url)
     }
 

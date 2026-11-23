@@ -274,13 +274,7 @@ impl PrinterAdmin for CupsAdmin {
             "document-format",
             IppValue::new_mime_media_type(COMMAND_FORMAT).map_err(invalid)?,
         )?;
-        let mut url = self.base.clone();
-        url.set_query(None);
-        url.set_path("/printers/");
-        url.path_segments_mut()
-            .map_err(|()| AdminError::Rejected("the printer address cannot hold a name".into()))?
-            .pop_if_empty()
-            .push(name);
+        let url = queue_url(&self.base, name)?;
         let mut body = request.to_bytes().to_vec();
         body.extend_from_slice(format!("#CUPS-COMMAND\n{}\n", command.command_line()).as_bytes());
         check(&self.post(url, body, REQUEST_TIMEOUT).await?)
@@ -321,12 +315,17 @@ const USER: &str = "recto";
 /// The queue address CUPS expects, on its own host name: the host of the request is always
 /// `localhost`, and the name is one path segment.
 fn printer_uri(name: &str) -> Result<IppValue, AdminError> {
-    let mut url = Url::parse("ipp://localhost/printers/").expect("a valid address");
-    url.path_segments_mut()
-        .map_err(|()| AdminError::Rejected("the printer address cannot hold a name".into()))?
-        .pop_if_empty()
-        .push(name);
+    let url = queue_url(
+        &Url::parse("ipp://localhost/").expect("a valid address"),
+        name,
+    )?;
     IppValue::new_uri(url.as_str()).map_err(invalid)
+}
+
+/// The queue `name` on `base`.
+fn queue_url(base: &Url, name: &str) -> Result<Url, AdminError> {
+    transport::printer_url(base, name)
+        .ok_or_else(|| AdminError::Rejected("the printer address cannot hold a name".into()))
 }
 
 /// A name or text CUPS cannot take (too long, say), caught before asking it.
