@@ -22,7 +22,8 @@ type Reply<T> = oneshot::Sender<Result<T, ScanError>>;
 enum Command {
     List(Reply<Vec<ScannerInfo>>),
     Capabilities(String, Reply<ScannerCapabilities>),
-    Scan(String, ScanRequest, Reply<Vec<ScannedPage>>),
+    /// The flag keeps every page of a feeder batch whatever the format.
+    Scan(String, ScanRequest, bool, Reply<Vec<ScannedPage>>),
     /// Lets a test prove that a dead worker comes back on the next command. The reply sender
     /// is dropped while unwinding, like the one of a real command that panics.
     #[cfg(test)]
@@ -181,7 +182,17 @@ impl ScannerService for SaneScanners {
     }
 
     async fn scan(&self, id: &str, request: ScanRequest) -> Result<Vec<ScannedPage>, ScanError> {
-        self.ask(|reply| Command::Scan(id.to_owned(), request, reply))
+        let every_page = request.format == OutputFormat::Pdf;
+        self.ask(|reply| Command::Scan(id.to_owned(), request, every_page, reply))
+            .await
+    }
+
+    async fn scan_every_page(
+        &self,
+        id: &str,
+        request: ScanRequest,
+    ) -> Result<Vec<ScannedPage>, ScanError> {
+        self.ask(|reply| Command::Scan(id.to_owned(), request, true, reply))
             .await
     }
 }
@@ -195,8 +206,8 @@ fn run(sane: &Sane, command: Command) {
         Command::Capabilities(id, reply) => {
             let _ = reply.send(read_capabilities(sane, &id));
         }
-        Command::Scan(id, request, reply) => {
-            let _ = reply.send(scan(sane, &id, &request));
+        Command::Scan(id, request, every_page, reply) => {
+            let _ = reply.send(scan(sane, &id, &request, every_page));
         }
         #[cfg(test)]
         Command::Crash(reply) => {
@@ -390,7 +401,15 @@ fn into_image(frame: Frame) -> Result<DynamicImage, ScanError> {
     frame.to_image().map_err(|e| map_error(&e))
 }
 
-fn scan(sane: &Sane, id: &str, request: &ScanRequest) -> Result<Vec<ScannedPage>, ScanError> {
+/// Reads the page, or the feeder batch unless `request` asks for a single page. Without
+/// `every_page` only the first page of a batch is kept; the rest of the stack still goes through
+/// the feeder, as the scan page says.
+fn scan(
+    sane: &Sane,
+    id: &str,
+    request: &ScanRequest,
+    every_page: bool,
+) -> Result<Vec<ScannedPage>, ScanError> {
     let settings: &ScanSettings = &request.settings;
     let mut device = open(sane, id)?;
     apply(&mut device, settings)?;
@@ -410,9 +429,6 @@ fn scan(sane: &Sane, id: &str, request: &ScanRequest) -> Result<Vec<ScannedPage>
             .and_then(|v| v.as_str().map(|s| Source::new(s).is_feeder))
             .unwrap_or(false),
     };
-    // PNG and JPEG keep the first page only; the rest of the stack still goes through the
-    // feeder, as the scan page says, but is not kept.
-    let keeps_every_page = request.format == OutputFormat::Pdf;
     let mut scan = device.start().map_err(|e| map_error(&e))?;
     let mut pages = Vec::new();
     loop {
@@ -420,7 +436,7 @@ fn scan(sane: &Sane, id: &str, request: &ScanRequest) -> Result<Vec<ScannedPage>
         // Each page is compressed before the next one is read, so a feeder batch never sits
         // in memory as raw pixels. This runs on the SANE thread, which is busy with this scan
         // anyway.
-        if pages.is_empty() || keeps_every_page {
+        if pages.is_empty() || every_page {
             let image = into_image(frame)?;
             pages.push(ScannedPage::encode(
                 &image,

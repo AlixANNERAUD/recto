@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use image::{DynamicImage, Rgb, RgbImage};
 
 use crate::{
-    Area, ScanError, ScanMode, ScanRequest, ScannedPage, ScannerCapabilities, ScannerInfo,
-    ScannerService, Source,
+    Area, OutputFormat, ScanError, ScanMode, ScanRequest, ScannedPage, ScannerCapabilities,
+    ScannerInfo, ScannerService, Source,
 };
 
 /// A scanner stack for tests of the server and the interface: fixed scanners, a generated sample
@@ -17,6 +17,8 @@ pub struct MockScannerService {
     capabilities: ScannerCapabilities,
     failure: Mutex<Option<ScanError>>,
     delay: Duration,
+    /// How many sheets a feeder scan reads.
+    feeder_pages: usize,
     /// Scans queue behind this lock like they do behind the SANE worker.
     queue: tokio::sync::Mutex<()>,
     active: AtomicUsize,
@@ -48,6 +50,7 @@ impl Default for MockScannerService {
             },
             failure: Mutex::new(None),
             delay: Duration::ZERO,
+            feeder_pages: 1,
             queue: tokio::sync::Mutex::new(()),
             active: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
@@ -74,6 +77,13 @@ impl MockScannerService {
     /// How long each scan takes, so tests can overlap requests.
     pub fn with_scan_delay(mut self, delay: Duration) -> Self {
         self.delay = delay;
+        self
+    }
+
+    /// How many sheets a feeder scan reads, each a page of the sample document. Like SANE,
+    /// `scan` keeps only the first of them in PNG and JPEG, `scan_every_page` keeps them all.
+    pub fn with_feeder_pages(mut self, pages: usize) -> Self {
+        self.feeder_pages = pages;
         self
     }
 
@@ -121,6 +131,26 @@ impl ScannerService for MockScannerService {
     }
 
     async fn scan(&self, id: &str, request: ScanRequest) -> Result<Vec<ScannedPage>, ScanError> {
+        let every_page = request.format == OutputFormat::Pdf;
+        self.scan_pages(id, request, every_page).await
+    }
+
+    async fn scan_every_page(
+        &self,
+        id: &str,
+        request: ScanRequest,
+    ) -> Result<Vec<ScannedPage>, ScanError> {
+        self.scan_pages(id, request, true).await
+    }
+}
+
+impl MockScannerService {
+    async fn scan_pages(
+        &self,
+        id: &str,
+        request: ScanRequest,
+        every_page: bool,
+    ) -> Result<Vec<ScannedPage>, ScanError> {
         let _turn = self.queue.lock().await;
         let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.peak.fetch_max(now, Ordering::SeqCst);
@@ -141,7 +171,16 @@ impl ScannerService for MockScannerService {
             });
             let image = sample_document(area, settings.resolution, settings.mode);
             let page = ScannedPage::encode(&image, settings.resolution, request.format)?;
-            Ok(vec![page])
+            let feeder = settings
+                .source
+                .as_deref()
+                .is_some_and(|s| Source::new(s).is_feeder);
+            let sheets = if feeder && every_page && !request.single_page {
+                self.feeder_pages
+            } else {
+                1
+            };
+            Ok(vec![page; sheets])
         });
         self.active.fetch_sub(1, Ordering::SeqCst);
         result
@@ -235,7 +274,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::{OutputFormat, ScanSettings};
+    use crate::ScanSettings;
 
     fn settings() -> ScanRequest {
         ScanRequest {
@@ -295,6 +334,47 @@ mod tests {
         }
         assert_eq!(mock.peak_concurrent_scans(), 1);
         assert_eq!(mock.scan_requests().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn feeder_batches_keep_every_page_when_asked() {
+        let mock = MockScannerService::default().with_feeder_pages(3);
+        let mut request = settings();
+        request.settings.source = Some("ADF".into());
+        let pages = |r| async { mock.scan("mock:0", r).await.unwrap().len() };
+        // What the scan page gets: one PNG holds one page.
+        assert_eq!(pages(request.clone()).await, 1);
+        let every = mock
+            .scan_every_page("mock:0", request.clone())
+            .await
+            .unwrap();
+        assert_eq!(every.len(), 3);
+        assert!(every.iter().all(|p| p.data.starts_with(b"\x89PNG")));
+
+        let pdf = ScanRequest {
+            format: OutputFormat::Pdf,
+            ..request.clone()
+        };
+        assert_eq!(pages(pdf).await, 3);
+        let single = ScanRequest {
+            single_page: true,
+            ..request.clone()
+        };
+        assert_eq!(
+            mock.scan_every_page("mock:0", single).await.unwrap().len(),
+            1
+        );
+        let flatbed = ScanRequest {
+            settings: ScanSettings {
+                source: Some("Flatbed".into()),
+                ..request.settings
+            },
+            ..request
+        };
+        assert_eq!(
+            mock.scan_every_page("mock:0", flatbed).await.unwrap().len(),
+            1
+        );
     }
 
     #[tokio::test]

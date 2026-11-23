@@ -7,7 +7,8 @@ use crate::{OutputFormat, ScanError, ScanSettings, ScannedPage, ScannerCapabilit
 pub struct ScanRequest {
     pub settings: ScanSettings,
     /// How each page is compressed as soon as it is read (see [`ScannedPage`]). PNG and JPEG
-    /// hold one image, so with them only the first page of a feeder batch is kept.
+    /// hold one image, so with them [`ScannerService::scan`] keeps only the first page of a
+    /// feeder batch; [`ScannerService::scan_every_page`] keeps them all.
     pub format: OutputFormat,
     /// Stops after the first page, even from a feeder: a preview must never pull a whole stack
     /// through.
@@ -25,6 +26,21 @@ pub trait ScannerService: Send + Sync + 'static {
 
     async fn capabilities(&self, id: &str) -> Result<ScannerCapabilities, ScanError>;
 
-    /// One page for a flatbed or a single-page request, every page of the feeder otherwise.
+    /// One page for a flatbed or a single-page request, every page of the feeder otherwise, but
+    /// only the first one in PNG or JPEG: the scan page stores a single file, and one image
+    /// holds one page.
     async fn scan(&self, id: &str, request: ScanRequest) -> Result<Vec<ScannedPage>, ScanError>;
+
+    /// As [`scan`](Self::scan), but keeps every page of a feeder batch in PNG and JPEG too: eSCL
+    /// hands such pages out one document each, and sane-airscan only ever asks for images.
+    ///
+    /// The default is `scan`, right for a service that keeps every page anyway or cannot scan
+    /// at all. One that drops pages in `scan` must override it.
+    async fn scan_every_page(
+        &self,
+        id: &str,
+        request: ScanRequest,
+    ) -> Result<Vec<ScannedPage>, ScanError> {
+        self.scan(id, request).await
+    }
 }

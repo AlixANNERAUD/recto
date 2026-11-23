@@ -143,6 +143,19 @@ async fn feeder_batches_are_kept_compressed() {
 
 #[tokio::test]
 #[ignore = "needs libsane, see the module docs"]
+async fn feeder_batches_keep_every_image_page_when_asked() {
+    for format in [OutputFormat::Png, OutputFormat::Jpeg] {
+        let pages = scanners()
+            .scan_every_page("test:0", request(feeder_settings(), format))
+            .await
+            .unwrap();
+        assert_eq!(pages.len(), 10, "{format:?}");
+        assert!(pages.iter().all(|page| page.format == format));
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs libsane, see the module docs"]
 async fn a_single_page_request_reads_one_page_from_the_feeder() {
     let caps = scanners().capabilities("test:0").await.unwrap();
     let preview = preview_settings(&caps, Some(FEEDER.into()));
