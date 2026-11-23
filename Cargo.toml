@@ -53,6 +53,9 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 tempfile = "3"
 # Page counts of the PDFs sent to print (crates/printing/src/count.rs); only the parser is used, none of the optional features.
 lopdf = { version = "0.47.0", default-features = false }
+# The images of the PDFs that PWG and Apple rasters become (crates/printing/src/raster.rs): the
+# zlib streams of PDF's FlateDecode, with the Rust backend lopdf already builds.
+flate2 = { version = "1.1.11", default-features = false, features = ["rust_backend"] }
 # IANA zones of RECTO_TIMEZONE, which the quota periods are calendar periods in.
 chrono-tz = { version = "0.10.4", default-features = false }
 rpassword = "7.5"

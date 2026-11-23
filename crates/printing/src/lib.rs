@@ -17,6 +17,8 @@ pub mod count;
 #[cfg(feature = "service")]
 mod cups;
 #[cfg(feature = "service")]
+pub mod raster;
+#[cfg(feature = "service")]
 mod service;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
