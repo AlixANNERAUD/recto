@@ -57,8 +57,11 @@ pub fn router(secure_cookies: bool) -> Router {
 }
 
 /// `GET /brand/*`, `/manifest.webmanifest` and `/sw.js`: what they serve changes only with a
-/// restart, whoever asks.
+/// restart, whoever asks, so the manifest and the worker are written once here. The worker's
+/// fingerprint hashes every brand file.
 pub fn assets(branding: Arc<Branding>) -> Router {
+    let manifest = Bytes::from(manifest(&branding).to_string());
+    let worker = Bytes::from(service_worker(&branding));
     let icon = |pick: fn(&Branding) -> &Bytes| {
         get(move |State(branding): State<Arc<Branding>>| async move {
             brand_file(pick(&branding).clone(), "image/png")
@@ -82,8 +85,11 @@ pub fn assets(branding: Arc<Branding>) -> Router {
             icon(|branding| &branding.icons.apple_180),
         )
         .route("/brand/logo", get(logo))
-        .route("/manifest.webmanifest", get(web_manifest))
-        .route("/sw.js", get(worker))
+        .route(
+            "/manifest.webmanifest",
+            get(move || async move { web_manifest(manifest) }),
+        )
+        .route("/sw.js", get(move || async move { worker_source(worker) }))
         .with_state(branding)
 }
 
@@ -142,25 +148,25 @@ fn fingerprint(branding: &Branding) -> String {
     format!("{:08x}", hasher.finish() as u32)
 }
 
-async fn web_manifest(State(branding): State<Arc<Branding>>) -> Response {
+fn web_manifest(manifest: Bytes) -> Response {
     (
         [
             (header::CONTENT_TYPE, "application/manifest+json"),
             (header::CACHE_CONTROL, "no-cache"),
         ],
-        manifest(&branding).to_string(),
+        manifest,
     )
         .into_response()
 }
 
 /// `no-cache` lets browsers check for a new worker on every load, which is how updates arrive.
-async fn worker(State(branding): State<Arc<Branding>>) -> Response {
+fn worker_source(source: Bytes) -> Response {
     (
         [
             (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
             (header::CACHE_CONTROL, "no-cache"),
         ],
-        service_worker(&branding),
+        source,
     )
         .into_response()
 }
