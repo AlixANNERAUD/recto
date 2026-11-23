@@ -19,7 +19,7 @@ mod window;
 
 use std::collections::{BTreeSet, HashMap};
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use chrono_tz::Tz;
 use recto_entity::{groups, quota_adjustments, quota_rule_printers, quota_rules, users};
 use sea_orm::{
@@ -33,7 +33,11 @@ pub use usage::{Standing, standing};
 pub use window::window;
 pub(crate) use {usage::sum, window::midnight};
 
-use crate::{Error, Problem, database::begin_write, error::Result};
+use crate::{
+    Error, Problem,
+    database::{begin_write, lock, locked},
+    error::Result,
+};
 
 /// Whom a rule limits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -372,27 +376,31 @@ async fn insert_printers(
     Ok(())
 }
 
+/// Sets every column of a rule's row from `rule`, `now` as its last change.
+fn fill(row: &mut quota_rules::ActiveModel, rule: &NewRule, now: DateTime<FixedOffset>) {
+    row.name = Set(rule.name.clone());
+    row.enabled = Set(rule.enabled);
+    row.subject_kind = Set(rule.subject.kind().to_owned());
+    row.subject_id = Set(rule.subject.id());
+    row.metric = Set(rule.metric.keyword().to_owned());
+    row.period = Set(rule.period.keyword().to_owned());
+    row.rolling_days = Set(rule.period.rolling_days());
+    row.limit_value = Set(rule.limit);
+    row.enforcement = Set(rule.enforcement.keyword().to_owned());
+    row.updated_at = Set(now);
+}
+
 /// Creates a rule; returns its id.
 pub async fn create(db: &DatabaseConnection, rule: NewRule) -> Result<i64> {
     let transaction = begin_write(db).await?;
     let rule = validated(&transaction, rule).await?;
     let now = Utc::now().fixed_offset();
-    let row = quota_rules::ActiveModel {
-        name: Set(rule.name),
-        enabled: Set(rule.enabled),
-        subject_kind: Set(rule.subject.kind().to_owned()),
-        subject_id: Set(rule.subject.id()),
-        metric: Set(rule.metric.keyword().to_owned()),
-        period: Set(rule.period.keyword().to_owned()),
-        rolling_days: Set(rule.period.rolling_days()),
-        limit_value: Set(rule.limit),
-        enforcement: Set(rule.enforcement.keyword().to_owned()),
+    let mut row = quota_rules::ActiveModel {
         created_at: Set(now),
-        updated_at: Set(now),
         ..Default::default()
-    }
-    .insert(&transaction)
-    .await?;
+    };
+    fill(&mut row, &rule, now);
+    let row = row.insert(&transaction).await?;
     insert_printers(&transaction, row.id, &rule.printers).await?;
     transaction.commit().await?;
     Ok(row.id)
@@ -404,7 +412,8 @@ pub async fn create(db: &DatabaseConnection, rule: NewRule) -> Result<i64> {
 /// rolling period may change.
 pub async fn update(db: &DatabaseConnection, id: i64, rule: NewRule) -> Result<()> {
     let transaction = begin_write(db).await?;
-    let row = quota_rules::Entity::find_by_id(id)
+    // Locked, so a grant or reset racing it cannot add an adjustment after the check below.
+    let row = locked(&transaction, quota_rules::Entity::find_by_id(id))
         .one(&transaction)
         .await?
         .ok_or(Error::NotFound)?;
@@ -419,16 +428,7 @@ pub async fn update(db: &DatabaseConnection, id: i64, rule: NewRule) -> Result<(
         return Err(Error::Invalid(Problem::RuleAdjusted));
     }
     let mut row: quota_rules::ActiveModel = row.into();
-    row.name = Set(rule.name);
-    row.enabled = Set(rule.enabled);
-    row.subject_kind = Set(rule.subject.kind().to_owned());
-    row.subject_id = Set(rule.subject.id());
-    row.metric = Set(rule.metric.keyword().to_owned());
-    row.period = Set(rule.period.keyword().to_owned());
-    row.rolling_days = Set(rule.period.rolling_days());
-    row.limit_value = Set(rule.limit);
-    row.enforcement = Set(rule.enforcement.keyword().to_owned());
-    row.updated_at = Set(Utc::now().fixed_offset());
+    fill(&mut row, &rule, Utc::now().fixed_offset());
     row.update(&transaction).await?;
     quota_rule_printers::Entity::delete_many()
         .filter(quota_rule_printers::Column::RuleId.eq(id))
@@ -501,7 +501,7 @@ fn holder_columns(holder: Holder) -> (Option<i64>, Option<i64>) {
 /// (see [`grant_expiry`]).
 #[allow(clippy::too_many_arguments)]
 pub async fn grant(
-    db: &impl ConnectionTrait,
+    db: &DatabaseConnection,
     rule_id: i64,
     holder: Holder,
     amount: i64,
@@ -518,50 +518,70 @@ pub async fn grant(
             maximum: MAX_AMOUNT,
         }));
     }
-    let rule = adjusted(db, rule_id, holder).await?;
-    let (user_id, group_id) = holder_columns(holder);
-    quota_adjustments::ActiveModel {
-        rule_id: Set(rule_id),
-        user_id: Set(user_id),
-        group_id: Set(group_id),
-        kind: Set("grant".to_owned()),
-        amount: Set(Some(amount)),
-        reason: Set(reason.trim().to_owned()),
-        by_user_id: Set(by),
-        at: Set(now.fixed_offset()),
-        expires_at: Set(grant_expiry(rule.period, now, tz).map(|time| time.fixed_offset())),
-        ..Default::default()
-    }
-    .insert(db)
-    .await?;
-    Ok(())
+    let adjustment = Adjustment {
+        kind: "grant",
+        amount: Some(amount),
+        expires: |rule: &Rule| grant_expiry(rule.period, now, tz),
+    };
+    adjust(db, rule_id, holder, adjustment, reason, by, now).await
 }
 
 /// Starts `holder`'s usage of the rule over from `now`: only what they print afterwards counts.
 pub async fn reset(
-    db: &impl ConnectionTrait,
+    db: &DatabaseConnection,
     rule_id: i64,
     holder: Holder,
     reason: &str,
     by: i64,
     now: DateTime<Utc>,
 ) -> Result<()> {
-    adjusted(db, rule_id, holder).await?;
+    let adjustment = Adjustment {
+        kind: "reset",
+        amount: None,
+        expires: |_: &Rule| None,
+    };
+    adjust(db, rule_id, holder, adjustment, reason, by, now).await
+}
+
+/// A grant or a reset, as [`adjust`] stores it.
+struct Adjustment<F> {
+    kind: &'static str,
+    amount: Option<i64>,
+    /// When it stops counting, from the rule as it is when it is stored.
+    expires: F,
+}
+
+/// Stores an adjustment of `holder`'s use of the rule. The rule stays locked until it is
+/// stored: [`update`] refuses to change the metric or the period of a rule with adjustments, and
+/// must not see none, then have one stored for the metric or period it is replacing.
+async fn adjust(
+    db: &DatabaseConnection,
+    rule_id: i64,
+    holder: Holder,
+    adjustment: Adjustment<impl FnOnce(&Rule) -> Option<DateTime<Utc>>>,
+    reason: &str,
+    by: i64,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let transaction = begin_write(db).await?;
+    lock(&transaction, quota_rules::Entity::find_by_id(rule_id)).await?;
+    let rule = adjusted(&transaction, rule_id, holder).await?;
     let (user_id, group_id) = holder_columns(holder);
     quota_adjustments::ActiveModel {
         rule_id: Set(rule_id),
         user_id: Set(user_id),
         group_id: Set(group_id),
-        kind: Set("reset".to_owned()),
-        amount: Set(None),
+        kind: Set(adjustment.kind.to_owned()),
+        amount: Set(adjustment.amount),
         reason: Set(reason.trim().to_owned()),
         by_user_id: Set(by),
         at: Set(now.fixed_offset()),
-        expires_at: Set(None),
+        expires_at: Set((adjustment.expires)(&rule).map(|time| time.fixed_offset())),
         ..Default::default()
     }
-    .insert(db)
+    .insert(&transaction)
     .await?;
+    transaction.commit().await?;
     Ok(())
 }
 
