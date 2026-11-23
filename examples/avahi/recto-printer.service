@@ -1,0 +1,28 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!-- Written by recto dnssd-services: copy to /etc/avahi/services/. -->
+<service-group>
+  <name>recto</name>
+  <service protocol="ipv4">
+    <type>_ipps._tcp</type>
+    <subtype>_universal._sub._ipps._tcp</subtype>
+    <subtype>_print._sub._ipps._tcp</subtype>
+    <port>8631</port>
+    <txt-record>rp=ipp/print</txt-record>
+    <txt-record>txtvers=1</txt-record>
+    <txt-record>qtotal=1</txt-record>
+    <txt-record>note=recto</txt-record>
+    <txt-record>air=username,password</txt-record>
+    <txt-record>TLS=1.2</txt-record>
+    <txt-record>adminurl=https://recto.example.org/jobs</txt-record>
+    <txt-record>UUID=7d3f0b6e-2c1a-5e9d-8f41-0a6b3c2d1e5f</txt-record>
+    <txt-record>ty=recto</txt-record>
+    <txt-record>product=(recto)</txt-record>
+    <txt-record>Color=T</txt-record>
+    <txt-record>Duplex=T</txt-record>
+    <txt-record>kind=document</txt-record>
+    <txt-record>PaperMax=tabloid-A3</txt-record>
+    <txt-record>URF=V1.4,CP1,W8,SRGB24,RS300,DM1,IS1</txt-record>
+    <txt-record>pdl=application/pdf,image/jpeg,image/png,image/pwg-raster,image/urf</txt-record>
+  </service>
+</service-group>

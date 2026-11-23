@@ -1,0 +1,31 @@
+# recto advertised on the local network, so Print dialogs and scan apps find it by themselves.
+# This file adds to compose.yml:
+#
+#   docker compose -f compose.yml -f examples/compose-dnssd.yml up -d --wait
+#
+# Multicast DNS does not cross Docker's bridge network, so recto runs on the host's network here:
+# its mDNS responder announces recto-<hostname>.local on the host's interfaces, and its LAN
+# listener takes TLS connections on port 8631 of every address of the host. Docker Desktop on
+# macOS and Windows has no host networking on the LAN; there, keep the bridge and use Avahi
+# service files instead (`recto dnssd-services`, docs/src/how-to/discovery.md).
+services:
+  recto:
+    network_mode: host
+    # Host networking publishes nothing: the web page is on port 8080 of the host directly.
+    ports: !reset []
+    environment:
+      # Dual stack on Linux: IPv6 clients and IPv4 ones on the same socket. Quoted for YAML.
+      RECTO_LAN_LISTEN_ADDRESS: "[::]:8631"
+      RECTO_DNSSD: "true"
+      # CUPS published on the host's loopback only, below; recto no longer resolves `cups`.
+      RECTO_CUPS_URL: http://127.0.0.1:631
+      # The interfaces to announce on, comma separated; by default every one but loopback,
+      # Docker's, virtual machines' and VPNs'.
+      # RECTO_DNSSD_INTERFACES: eth0
+
+  cups:
+    # Docker's port proxy makes recto's requests come from the network's gateway, which
+    # examples/cups/cupsd.conf allows. Never publish it on every address: CUPS would then take
+    # print jobs from the whole LAN, bypassing recto's accounts and quotas.
+    ports:
+      - "127.0.0.1:631:631"

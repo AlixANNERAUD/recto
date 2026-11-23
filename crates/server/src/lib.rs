@@ -12,6 +12,8 @@ mod csv;
 #[cfg(any(test, all(feature = "dev-mocks", debug_assertions)))]
 pub mod dev;
 pub mod device_auth;
+pub mod dnssd;
+pub mod lan;
 pub mod routes;
 pub mod serve;
 pub mod session;

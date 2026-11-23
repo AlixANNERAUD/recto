@@ -81,6 +81,17 @@ futures-core = { version = "0.3.34", default-features = false }
 # The XML of eSCL scanning (crates/scanning/src/escl): a pull parser that resolves namespaces,
 # never expands entities beyond the predefined ones and reports a DOCTYPE as an event to refuse.
 quick-xml = { version = "0.42.0", default-features = false }
+# The LAN listener's TLS (crates/server/src/lan.rs), on ring like every other TLS user in the
+# lockfile: aws-lc-rs would bring cmake and bindgen into the arm64 build.
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+# The LAN listener's self-signed certificate, generated once and kept in the data directory.
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "pem", "ring"] }
+# The mDNS responder that advertises the LAN listener (RECTO_DNSSD): pure Rust, its own thread.
+# recto only registers services, so it needs none of the async receivers.
+mdns-sd = { version = "0.22.0", default-features = false, features = ["logging"] }
+# Interface names and flags for RECTO_DNSSD_INTERFACES; mdns-sd already depends on it.
+if-addrs = { version = "0.15.0", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
