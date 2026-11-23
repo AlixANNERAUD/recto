@@ -3,13 +3,13 @@
 //! Documents come from users, so reading one is bounded: [`PageCounter`] limits how many are
 //! read at once and for how long, and the reader drops what the page count does not need.
 
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use bytes::Bytes;
 use lopdf::{Document, LoadOptions, Object, ObjectId};
-use tokio::sync::Semaphore;
 
 use crate::PageRanges;
+use crate::bounded::{Bounded, Late};
 
 /// The most one object or cross-reference stream may inflate to while a PDF is read. Real ones
 /// are a few hundred kilobytes; a compression bomb stops here instead of at lopdf's 256 MiB.
@@ -115,8 +115,7 @@ impl Walk<'_> {
 /// the number of threads and the memory they hold stay bounded whatever is uploaded.
 #[derive(Clone, Debug)]
 pub struct PageCounter {
-    permits: Arc<Semaphore>,
-    timeout: Duration,
+    bounded: Bounded,
 }
 
 impl PageCounter {
@@ -124,8 +123,7 @@ impl PageCounter {
     /// a place included, is unknown.
     pub fn new(concurrency: usize, timeout: Duration) -> Self {
         Self {
-            permits: Arc::new(Semaphore::new(concurrency.max(1))),
-            timeout,
+            bounded: Bounded::new(concurrency, timeout),
         }
     }
 
@@ -139,22 +137,11 @@ impl PageCounter {
     /// which a retry may fix; a document that cannot be read in the time left is
     /// [`Uncounted::Unreadable`], like a damaged one.
     pub async fn count(&self, document: Bytes) -> Result<u32, Uncounted> {
-        let deadline = tokio::time::Instant::now() + self.timeout;
-        let permit = tokio::time::timeout_at(deadline, self.permits.clone().acquire_owned())
-            .await
-            .map_err(|_| Uncounted::Busy)?
-            .map_err(|_| Uncounted::Busy)?;
-        let read = tokio::task::spawn_blocking(move || {
-            let pages = pdf_pages(&document);
-            drop(permit);
-            pages
-        });
-        tokio::time::timeout_at(deadline, read)
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .flatten()
-            .ok_or(Uncounted::Unreadable)
+        match self.bounded.run(move |_| pdf_pages(&document)).await {
+            Ok(Some(pages)) => Ok(pages),
+            Ok(None) | Err(Late::TimedOut) => Err(Uncounted::Unreadable),
+            Err(Late::Busy) => Err(Uncounted::Busy),
+        }
     }
 }
 
@@ -209,7 +196,13 @@ mod tests {
             Err(Uncounted::Unreadable)
         );
         // Another document holds the only place until the time is up.
-        let held = counter.permits.clone().acquire_owned().await.unwrap();
+        let held = counter
+            .bounded
+            .permits
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
         assert_eq!(
             counter.count(Bytes::from(sample_pdf(2))).await,
             Err(Uncounted::Busy)
@@ -416,7 +409,7 @@ mod tests {
         // Every place taken for longer than the timeout: the count is unknown, like an
         // unreadable document, and the document is not read at all.
         let busy = PageCounter::new(1, Duration::from_millis(50));
-        let place = busy.permits.clone().acquire_owned().await.unwrap();
+        let place = busy.bounded.permits.clone().acquire_owned().await.unwrap();
         assert_eq!(busy.pdf_pages(document.clone()).await, None);
         drop(place);
         assert_eq!(busy.pdf_pages(document).await, Some(3));

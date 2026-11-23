@@ -13,6 +13,8 @@ mod status;
 #[cfg(feature = "service")]
 mod admin;
 #[cfg(feature = "service")]
+mod bounded;
+#[cfg(feature = "service")]
 pub mod count;
 #[cfg(feature = "service")]
 mod cups;

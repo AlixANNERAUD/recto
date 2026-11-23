@@ -58,7 +58,7 @@ bounded, and a raster past a bound is refused before recto keeps anything:
 | Decoded pixels of a document | 4 GiB |
 | Pages | 500 |
 | The PDF made | `RECTO_MAX_UPLOAD_SIZE` |
-| Time | 60 seconds, after waiting at most 60 seconds for a place |
+| Time | 60 seconds, waiting for a place included |
 | Conversions at once | 2 |
 
 A document sent this way is **held**, not printed: recto keeps it under `RECTO_DATA_DIR/held` and

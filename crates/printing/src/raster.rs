@@ -13,14 +13,14 @@
 //! because a timeout around the blocking thread would stop waiting for it but not stop it.
 
 use std::io::{self, Write};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use flate2::{Compression, write::ZlibEncoder};
 use lopdf::{Document, Object, Stream, dictionary};
 use thiserror::Error;
-use tokio::sync::Semaphore;
+
+use crate::bounded::{Bounded, Late};
 
 /// The most decoded bytes a page may have: Legal at 600 dpi in colour (5100 x 8400 x 3) fits.
 pub const MAX_PAGE_BYTES: u64 = 160 * 1024 * 1024;
@@ -139,19 +139,17 @@ pub struct Converted {
 /// hold stay bounded whatever is sent.
 #[derive(Clone, Debug)]
 pub struct RasterConverter {
-    permits: Arc<Semaphore>,
-    timeout: Duration,
+    bounded: Bounded,
     /// The page, document and page-count budgets; each call gives its own output budget.
     limits: Limits,
 }
 
 impl RasterConverter {
-    /// At most `concurrency` rasters converted at once. A conversion waits at most `timeout`
-    /// for a place, then has `timeout` to finish.
+    /// At most `concurrency` rasters converted at once, each within `timeout`, waiting for a
+    /// place included.
     pub fn new(concurrency: usize, timeout: Duration, limits: Limits) -> Self {
         Self {
-            permits: Arc::new(Semaphore::new(concurrency.max(1))),
-            timeout,
+            bounded: Bounded::new(concurrency, timeout),
             limits,
         }
     }
@@ -164,22 +162,18 @@ impl RasterConverter {
         format: RasterFormat,
         max_output: usize,
     ) -> Result<Converted, RasterError> {
-        let permit = tokio::time::timeout(self.timeout, self.permits.clone().acquire_owned())
-            .await
-            .map_err(|_| RasterError::Busy)?
-            .map_err(|_| RasterError::Busy)?;
         let limits = Limits {
             output: max_output,
             ..self.limits
         };
-        let deadline = Instant::now() + self.timeout;
-        let converted = tokio::task::spawn_blocking(move || {
-            let converted = to_pdf(&document, format, &limits, deadline);
-            drop(permit);
-            converted
-        });
-        // The decoder stops at the deadline by itself; a thread that panicked converted nothing.
-        converted.await.unwrap_or(Err(RasterError::TimedOut))
+        let converted = self
+            .bounded
+            .run(move |deadline| to_pdf(&document, format, &limits, deadline));
+        match converted.await {
+            Ok(converted) => converted,
+            Err(Late::Busy) => Err(RasterError::Busy),
+            Err(Late::TimedOut) => Err(RasterError::TimedOut),
+        }
     }
 }
 
@@ -550,7 +544,13 @@ mod tests {
 
         // Another conversion holds the only place until the time is up: busy, which a retry
         // may fix, and the document is not read.
-        let place = converter.permits.clone().acquire_owned().await.unwrap();
+        let place = converter
+            .bounded
+            .permits
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
         assert_eq!(convert(SMALL, 1 << 20).await, Err(RasterError::Busy));
         drop(place);
         assert_eq!(
