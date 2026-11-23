@@ -472,7 +472,8 @@ async fn enter(
     }
     let failed = closed("checking the print quotas");
     let checked = async {
-        quotas::lock_subjects(&transaction, user.id, &quotas::pool_groups(&applicable)).await?;
+        // The user's row is locked already, above.
+        quotas::lock_pools(&transaction, &quotas::pool_groups(&applicable)).await?;
         let now = chrono::Utc::now();
         let verdict = quotas::check(
             &transaction,

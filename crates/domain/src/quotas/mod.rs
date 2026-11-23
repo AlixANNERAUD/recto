@@ -27,7 +27,7 @@ use sea_orm::{
     EntityTrait, QueryFilter, QueryOrder,
 };
 
-pub use check::{Verdict, check, lock_subjects};
+pub use check::{Verdict, check, lock_pools, lock_subjects};
 pub use family::{amount, applicable};
 pub use usage::{Standing, standing, standings};
 pub use window::window;

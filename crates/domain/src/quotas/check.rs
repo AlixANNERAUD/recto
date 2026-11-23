@@ -77,6 +77,13 @@ pub async fn lock_subjects(
     pool_groups: &[i64],
 ) -> Result<()> {
     lock_user(tx, user_id).await?;
+    lock_pools(tx, pool_groups).await
+}
+
+/// The pools' part of [`lock_subjects`], for a transaction that already locked the user's row:
+/// locking it again costs one more `SELECT … FOR UPDATE` on PostgreSQL. The user's row must be
+/// locked first, so the order stays the same for every transaction.
+pub async fn lock_pools(tx: &DatabaseTransaction, pool_groups: &[i64]) -> Result<()> {
     let mut pool_groups = pool_groups.to_vec();
     pool_groups.sort_unstable();
     pool_groups.dedup();
