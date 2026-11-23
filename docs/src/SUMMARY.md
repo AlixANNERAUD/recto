@@ -10,6 +10,11 @@
 
 - [Install recto](how-to/install.md)
 - [Install recto as an app](how-to/install-app.md)
+- [Print from a Mac](how-to/print-from-macos.md)
+- [Print from Windows](how-to/print-from-windows.md)
+- [Print from Linux](how-to/print-from-linux.md)
+- [Print from an iPhone or iPad](how-to/print-from-ios.md)
+- [Print from Android](how-to/print-from-android.md)
 - [Manage users and administrators](how-to/manage-users.md)
 - [Set up single sign-on](how-to/sign-in.md)
 - [Let only some people in](how-to/restrict-access.md)
@@ -47,4 +52,5 @@
 - [Sign-in and sessions](explanation/sign-in.md)
 - [How scans are kept and saved](explanation/scans.md)
 - [How quotas work](explanation/quotas.md)
+- [How printing from devices works](explanation/devices.md)
 - [Security model](explanation/security.md)
