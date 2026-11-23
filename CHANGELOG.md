@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1](https://github.com/AlixANNERAUD/recto/compare/v0.1.0...v0.1.1) - 2026-11-23
+
+### Added
+
+- *(app)* translate the interface into French
+
+### Fixed
+
+- *(app)* let the last valid locale cookie win
+- *(app)* write file sizes with the locale's decimal separator
+- *(app)* fit the header and the navigation on phones
+- *(app)* keep the switches off the page showing a new device password
+- *(ipp)* answer devices in the language they ask for
+- *(server)* keep pages and the offline page in the right language
+
 ## [0.1.0](https://github.com/AlixANNERAUD/recto/releases/tag/v0.1.0) - 2026-11-23
 
 ### Added
