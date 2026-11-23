@@ -182,37 +182,18 @@ pub async fn receive(
     job: NewHeld,
     max_bytes: i64,
 ) -> Result<i64> {
-    let transaction = begin_write(database).await?;
-    lock_user(&transaction, job.user_id).await?;
-    if let Some(device) = job.device_password_id {
-        owns_device(&transaction, job.user_id, device).await?;
-    }
-    if !fits(&transaction, job.user_id, None, job.stored.size, max_bytes).await? {
-        return Err(too_many());
-    }
-    let row = held_jobs::ActiveModel {
-        user_id: Set(job.user_id),
-        device_password_id: Set(job.device_password_id),
-        state: Set(HeldState::Held.keyword().to_owned()),
-        claim: Set(0),
-        name: Set(job.name),
-        stored_format: Set(Some(job.stored.stored_format)),
-        received_format: Set(job.stored.received_format),
-        document_pages: Set(job.stored.document_pages),
-        size: Set(job.stored.size),
-        file: Set(Some(job.stored.file)),
-        requested: Set(job.requested),
-        refusal: Set(None),
-        ledger_entry_id: Set(None),
-        received_at: Set(job.now.fixed_offset()),
-        expires_at: Set((job.now + job.lifetime).fixed_offset()),
-        state_changed_at: Set(job.now.fixed_offset()),
-        ..Default::default()
-    }
-    .insert(&transaction)
-    .await?;
-    transaction.commit().await?;
-    Ok(row.id)
+    insert(
+        database,
+        job.user_id,
+        job.device_password_id,
+        job.name,
+        job.requested,
+        Some(job.stored),
+        job.now,
+        job.lifetime,
+        max_bytes,
+    )
+    .await
 }
 
 /// Records an IPP Create-Job: an `incoming` row waiting for its document, which [`attach`]
@@ -228,24 +209,65 @@ pub async fn create_incoming(
     lifetime: TimeDelta,
     max_bytes: i64,
 ) -> Result<i64> {
+    insert(
+        database,
+        user_id,
+        Some(device_password_id),
+        name.to_owned(),
+        requested.to_owned(),
+        None,
+        now,
+        lifetime,
+        max_bytes,
+    )
+    .await
+}
+
+/// Inserts a job of the user: `held` with its `stored` document, or `incoming` without one yet.
+/// The device password must be theirs, and their queue must have room for the document.
+#[expect(clippy::too_many_arguments, reason = "the columns of a new row")]
+async fn insert(
+    database: &(impl ConnectionTrait + TransactionTrait),
+    user_id: i64,
+    device_password_id: Option<i64>,
+    name: String,
+    requested: String,
+    stored: Option<Stored>,
+    now: DateTime<Utc>,
+    lifetime: TimeDelta,
+    max_bytes: i64,
+) -> Result<i64> {
+    let (state, file, stored_format, received_format, document_pages, size) = match stored {
+        Some(stored) => (
+            HeldState::Held,
+            Some(stored.file),
+            Some(stored.stored_format),
+            stored.received_format,
+            stored.document_pages,
+            stored.size,
+        ),
+        None => (HeldState::Incoming, None, None, None, None, 0),
+    };
     let transaction = begin_write(database).await?;
     lock_user(&transaction, user_id).await?;
-    owns_device(&transaction, user_id, device_password_id).await?;
-    if !fits(&transaction, user_id, None, 0, max_bytes).await? {
+    if let Some(device) = device_password_id {
+        owns_device(&transaction, user_id, device).await?;
+    }
+    if !fits(&transaction, user_id, None, size, max_bytes).await? {
         return Err(too_many());
     }
     let row = held_jobs::ActiveModel {
         user_id: Set(user_id),
-        device_password_id: Set(Some(device_password_id)),
-        state: Set(HeldState::Incoming.keyword().to_owned()),
+        device_password_id: Set(device_password_id),
+        state: Set(state.keyword().to_owned()),
         claim: Set(0),
-        name: Set(name.to_owned()),
-        stored_format: Set(None),
-        received_format: Set(None),
-        document_pages: Set(None),
-        size: Set(0),
-        file: Set(None),
-        requested: Set(requested.to_owned()),
+        name: Set(name),
+        stored_format: Set(stored_format),
+        received_format: Set(received_format),
+        document_pages: Set(document_pages),
+        size: Set(size),
+        file: Set(file),
+        requested: Set(requested),
         refusal: Set(None),
         ledger_entry_id: Set(None),
         received_at: Set(now.fixed_offset()),
