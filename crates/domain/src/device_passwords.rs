@@ -11,7 +11,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use data_encoding::{BASE32_NOPAD, HEXLOWER};
 use std::collections::HashMap;
 
-use recto_entity::{device_passwords, user_identities, users};
+use recto_entity::{device_passwords, users};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait,
     QueryFilter, QueryOrder, QuerySelect, TransactionSession, TransactionTrait,
@@ -159,13 +159,8 @@ pub async fn revoke_for_identity(
     issuer: &str,
     subject: &str,
 ) -> Result<u64> {
-    let identity = user_identities::Entity::find()
-        .filter(user_identities::Column::Issuer.eq(issuer))
-        .filter(user_identities::Column::Subject.eq(subject))
-        .one(database)
-        .await?;
-    match identity {
-        Some(identity) => revoke_all(database, identity.user_id).await,
+    match crate::users::identity_user_id(database, issuer, subject).await? {
+        Some(user_id) => revoke_all(database, user_id).await,
         None => Ok(0),
     }
 }

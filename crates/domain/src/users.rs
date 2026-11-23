@@ -146,15 +146,24 @@ async fn find_by_identity(
     issuer: &str,
     subject: &str,
 ) -> Result<Option<users::Model>> {
+    match identity_user_id(database, issuer, subject).await? {
+        Some(user_id) => find_by_id(database, user_id).await,
+        None => Ok(None),
+    }
+}
+
+/// The id of the user linked to an identity provider account.
+pub async fn identity_user_id(
+    database: &impl ConnectionTrait,
+    issuer: &str,
+    subject: &str,
+) -> Result<Option<i64>> {
     let identity = user_identities::Entity::find()
         .filter(user_identities::Column::Issuer.eq(issuer))
         .filter(user_identities::Column::Subject.eq(subject))
         .one(database)
         .await?;
-    match identity {
-        Some(identity) => find_by_id(database, identity.user_id).await,
-        None => Ok(None),
-    }
+    Ok(identity.map(|identity| identity.user_id))
 }
 
 /// Creates the user of an identity's first sign-in, with its username and identity; the caller
