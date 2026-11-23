@@ -31,8 +31,8 @@ use recto_domain::{
 };
 use recto_entity::{groups, print_jobs, sessions};
 use recto_printing::{
-    Capabilities, ColorMode, DocumentFormat, Job, JobState, PageRanges, PrintOptions, Printer,
-    PrinterState, Sides,
+    Capabilities, ColorMode, DocumentFormat, Job, JobState, Maintenance, PageRanges, PrintOptions,
+    Printer, PrinterState, Sides,
     testing::{AdminCall, MockPrintService, MockPrinterAdmin},
 };
 use recto_scanning::{MockScannerService, OutputFormat, ResultStore};
@@ -4286,9 +4286,72 @@ async fn a_failed_removal_keeps_the_rule() {
     assert_eq!(harness.printer_rules().await.len(), 1);
 }
 
-const PRINTER_ROUTES: [&str; 8] = [
-    "add", "describe", "default", "pause", "resume", "accept", "reject", "remove",
+const PRINTER_ROUTES: [&str; 9] = [
+    "add", "describe", "default", "pause", "resume", "accept", "reject", "remove", "maintain",
 ];
+
+#[tokio::test]
+async fn an_administrator_runs_the_maintenance_a_printer_lists() {
+    let harness = Harness::with(Setup {
+        managed: true,
+        printers: Some(vec![Printer {
+            maintenance: vec![Maintenance::Clean, Maintenance::ReportLevels],
+            ..office()
+        }]),
+        ..Setup::default()
+    })
+    .await;
+    let admin = harness.administrator("admin-subject", "admin").await;
+    // The keyword is read whatever its case, as CUPS lists it.
+    for (command, done, expected) in [
+        ("Clean", "cleaning", Maintenance::Clean),
+        ("reportlevels", "levels", Maintenance::ReportLevels),
+    ] {
+        let response = harness
+            .send(form(
+                "/administration/printers/maintain",
+                Some(&admin),
+                &[("printer", "office"), ("command", command)],
+            ))
+            .await;
+        assert_redirect(&response, &format!("/administration/printers?done={done}"));
+        assert_eq!(
+            harness.admin.calls().last(),
+            Some(&AdminCall::Maintain {
+                name: "office".into(),
+                command: expected,
+                by: "admin".into(),
+            })
+        );
+    }
+
+    // What the printer does not list, an unknown command, none, or a printer CUPS does not
+    // have, never reaches CUPS.
+    for fields in [
+        vec![("printer", "office"), ("command", "PrintSelfTestPage")],
+        vec![("printer", "office"), ("command", "Align")],
+        vec![("printer", "office")],
+        vec![("printer", "absent"), ("command", "Clean")],
+    ] {
+        let response = harness
+            .send(form(
+                "/administration/printers/maintain",
+                Some(&admin),
+                &fields,
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{fields:?}");
+        let html = text(response).await;
+        assert!(
+            html.contains("This printer does not offer that maintenance command."),
+            "{html}"
+        );
+    }
+    assert_eq!(harness.admin.calls().len(), 2);
+
+    // Not a print: no job in the ledger, nothing counted.
+    assert!(harness.print.submitted().is_empty());
+}
 
 #[tokio::test]
 async fn printer_management_needs_an_administrator() {

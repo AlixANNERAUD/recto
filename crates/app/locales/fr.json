@@ -299,6 +299,14 @@
         "confirm": "Retirer {printer} de CUPS. Ses impressions en attente sont annulées et sa règle d’accès est oubliée.",
         "remove": "Supprimer l’imprimante"
       },
+      "maintenance": {
+        "title": "Maintenance",
+        "hint": "L’imprimante les exécute elle-même, ce qui peut prendre quelques minutes.",
+        "clean": "Nettoyer les têtes d’impression",
+        "self_test": "Imprimer une page de test",
+        "levels": "Actualiser les niveaux d’encre",
+        "auto_configure": "Configurer automatiquement"
+      },
       "done": {
         "added": "L’imprimante a été ajoutée.",
         "described": "La description et l’emplacement ont été enregistrés.",
@@ -308,7 +316,11 @@
         "accepting": "L’imprimante accepte de nouveau les impressions.",
         "rejecting": "L’imprimante refuse les nouvelles impressions.",
         "removed": "L’imprimante a été supprimée.",
-        "prices": "Les tarifs ont été enregistrés."
+        "prices": "Les tarifs ont été enregistrés.",
+        "cleaning": "L’imprimante nettoie ses têtes d’impression.",
+        "self_test": "L’imprimante imprime une page de test.",
+        "levels": "Les niveaux d’encre ont été demandés à l’imprimante. Ils s’affichent ici dès qu’elle les indique.",
+        "configured": "L’imprimante se configure."
       },
       "errors": {
         "invalid_name": "Le nom doit contenir de 1 à 127 caractères parmi les lettres, chiffres, points, tirets bas et tirets.",
@@ -323,7 +335,8 @@
         "rejected": "CUPS a rejeté la modification : {message}",
         "cups_unavailable": "CUPS n’a pas répondu. Réessayez dans un instant.",
         "invalid_prices": "Les tarifs sont des montants en {currency} avec au plus {decimals} décimales.",
-        "invalid_whole_prices": "Les tarifs sont des montants entiers en {currency}."
+        "invalid_whole_prices": "Les tarifs sont des montants entiers en {currency}.",
+        "unsupported_command": "Cette imprimante ne propose pas cette commande de maintenance."
       },
       "change": "Modifier l’accès et les tarifs",
       "prices": {

@@ -7,6 +7,7 @@
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_query_map;
+use recto_printing::Maintenance;
 
 use super::{Section, Sections, page_data};
 use crate::{
@@ -90,6 +91,8 @@ pub struct PrinterControls {
     /// Stopped: the queue holds its jobs.
     pub paused: bool,
     pub accepting_jobs: bool,
+    /// The maintenance commands the printer's driver lists, one button each.
+    pub maintenance: Vec<Maintenance>,
 }
 
 /// A driver of the Add printer list.
@@ -180,6 +183,8 @@ pub enum DevicesProblem {
     NameTaken,
     /// The removal was not confirmed.
     NeedsConfirmation,
+    /// The maintenance command is not one the printer lists.
+    UnsupportedCommand,
     /// CUPS does not let recto administer it.
     CupsRefused,
     /// CUPS could not reach the printer, in its own words.
@@ -208,6 +213,9 @@ impl DevicesProblem {
             DevicesProblem::NameTaken => t!("administration.printers.errors.name_taken"),
             DevicesProblem::NeedsConfirmation => {
                 t!("administration.printers.errors.needs_confirmation")
+            }
+            DevicesProblem::UnsupportedCommand => {
+                t!("administration.printers.errors.unsupported_command")
             }
             DevicesProblem::CupsUnavailable => {
                 t!("administration.printers.errors.cups_unavailable")
@@ -276,6 +284,10 @@ coded! {
         Rejecting = "rejecting",
         Removed = "removed",
         Prices = "prices",
+        Cleaning = "cleaning",
+        SelfTest = "self-test",
+        Levels = "levels",
+        Configured = "configured",
     }
 }
 
@@ -293,6 +305,20 @@ impl Notice {
             Notice::Rejecting => t!("administration.printers.done.rejecting"),
             Notice::Removed => t!("administration.printers.done.removed"),
             Notice::Prices => t!("administration.printers.done.prices"),
+            Notice::Cleaning => t!("administration.printers.done.cleaning"),
+            Notice::SelfTest => t!("administration.printers.done.self_test"),
+            Notice::Levels => t!("administration.printers.done.levels"),
+            Notice::Configured => t!("administration.printers.done.configured"),
+        }
+    }
+
+    /// What the page says once the printer has `command` to run.
+    pub fn maintenance(command: Maintenance) -> Self {
+        match command {
+            Maintenance::Clean => Notice::Cleaning,
+            Maintenance::PrintSelfTestPage => Notice::SelfTest,
+            Maintenance::ReportLevels => Notice::Levels,
+            Maintenance::AutoConfigure => Notice::Configured,
         }
     }
 }
@@ -816,7 +842,49 @@ fn action_form(action: &'static str, printer: &str, label: &'static str) -> impl
     }
 }
 
-/// The actions on one printer: its texts, the default, pausing, accepting and removing.
+/// The label of a maintenance command's button.
+fn maintenance_label(command: Maintenance) -> &'static str {
+    match command {
+        Maintenance::Clean => t!("administration.printers.maintenance.clean"),
+        Maintenance::PrintSelfTestPage => t!("administration.printers.maintenance.self_test"),
+        Maintenance::ReportLevels => t!("administration.printers.maintenance.levels"),
+        Maintenance::AutoConfigure => t!("administration.printers.maintenance.auto_configure"),
+    }
+}
+
+/// A button per maintenance command the printer lists, and nothing for a printer that lists
+/// none, as most driverless ones do.
+fn maintenance_forms(printer: &str, commands: &[Maintenance]) -> Option<impl IntoView + use<>> {
+    if commands.is_empty() {
+        return None;
+    }
+    let forms = commands
+        .iter()
+        .map(|command| {
+            view! {
+                <form method="post" action=format!("{}/maintain", DeviceKind::Printer.path())>
+                    <input type="hidden" name="printer" value=printer.to_owned() />
+                    <input type="hidden" name="command" value=command.keyword() />
+                    <button type="submit" class=small_button_class(ButtonVariant::Secondary)>
+                        {maintenance_label(*command)}
+                    </button>
+                </form>
+            }
+        })
+        .collect_view();
+    Some(view! {
+        <div class="grid gap-2">
+            <h4 class="font-semibold">{t!("administration.printers.maintenance.title")}</h4>
+            <p class="text-muted-foreground text-xs">
+                {t!("administration.printers.maintenance.hint")}
+            </p>
+            <div class="flex flex-wrap items-center gap-2">{forms}</div>
+        </div>
+    })
+}
+
+/// The actions on one printer: its texts, the default, pausing, accepting, maintenance and
+/// removing.
 #[component]
 fn ManagePrinter(name: String, controls: PrinterControls) -> impl IntoView {
     // Always there, so every row has the same controls; the default printer's is spent.
@@ -846,6 +914,7 @@ fn ManagePrinter(name: String, controls: PrinterControls) -> impl IntoView {
     } else {
         action_form("accept", &name, t!("administration.printers.manage.accept")).into_any()
     };
+    let maintenance = maintenance_forms(&name, &controls.maintenance);
     view! {
         <div class="grid gap-4 border-t pt-4">
             // Every row has the same buttons: the heading says which printer they act on.
@@ -887,6 +956,7 @@ fn ManagePrinter(name: String, controls: PrinterControls) -> impl IntoView {
                 </div>
             </form>
             <div class="flex flex-wrap items-center gap-2">{default} {pause} {accept}</div>
+            {maintenance}
             <form
                 method="post"
                 action=format!("{}/remove", DeviceKind::Printer.path())

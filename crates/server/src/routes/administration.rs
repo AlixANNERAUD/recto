@@ -48,7 +48,9 @@ use recto_domain::{
     quotas::{self, Enforcement, Holder, Metric, NewRule, Period, Rule, Subject},
     users::{self, NewLocalUser, UserSummary},
 };
-use recto_printing::{AdminError, Driver, NewPrinter, PrinterAdmin, PrinterState};
+use recto_printing::{
+    AdminError, Driver, Maintenance, NewPrinter, PrintError, PrinterAdmin, PrinterState,
+};
 use serde::Deserialize;
 
 use super::{not_found, render};
@@ -689,6 +691,7 @@ async fn devices_view_with(
                             is_default: printer.is_default,
                             paused: printer.state == PrinterState::Stopped,
                             accepting_jobs: printer.accepting_jobs,
+                            maintenance: printer.maintenance.clone(),
                         });
                         let detail = [
                             printer.description,
@@ -1050,6 +1053,7 @@ enum PrinterAction {
     Accept,
     Reject,
     Remove,
+    Maintain,
 }
 
 impl PrinterAction {
@@ -1068,12 +1072,52 @@ impl PrinterAction {
             PrinterAction::Accept => tracing::info!(by, printer, "printer accepting jobs"),
             PrinterAction::Reject => tracing::info!(by, printer, "printer rejecting jobs"),
             PrinterAction::Remove => tracing::info!(by, printer, "printer removed"),
+            // Logged with its command, by `log_maintenance`.
+            PrinterAction::Maintain => {}
         }
     }
 }
 
-/// `POST /administration/printers/{add,describe,default,pause,resume,accept,reject,remove}`.
-/// Without the CUPS socket they are not there.
+/// Logs a maintenance command an administrator had a printer run, one literal per command.
+fn log_maintenance(command: Maintenance, by: &str, printer: &str) {
+    match command {
+        Maintenance::Clean => tracing::info!(by, printer, "printer cleaning started"),
+        Maintenance::PrintSelfTestPage => tracing::info!(by, printer, "printer test page started"),
+        Maintenance::ReportLevels => tracing::info!(by, printer, "printer levels requested"),
+        Maintenance::AutoConfigure => {
+            tracing::info!(by, printer, "printer configuration started")
+        }
+    }
+}
+
+/// The command a maintenance form asks for, when the printer lists it.
+async fn maintenance_command(
+    state: &AdministrationState,
+    printer: &str,
+    body: &[u8],
+) -> Result<Maintenance, Box<Refusal>> {
+    let unsupported = || Refusal::new(StatusCode::BAD_REQUEST, DevicesProblem::UnsupportedCommand);
+    let command = field(body, "command")
+        .as_deref()
+        .and_then(Maintenance::from_keyword)
+        .ok_or_else(unsupported)?;
+    // The page offers only what the driver lists; a crafted form gets no further.
+    match state.app.print.printer(printer).await {
+        Ok(listed) if listed.maintenance.contains(&command) => Ok(command),
+        Ok(_) | Err(PrintError::PrinterNotFound(_)) => Err(unsupported()),
+        Err(error) => {
+            tracing::warn!(%error, "the printing service failed");
+            Err(Refusal::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                DevicesProblem::CupsUnavailable,
+            ))
+        }
+    }
+}
+
+/// `POST /administration/printers/{add,describe,default,pause,resume,accept,reject,remove}`,
+/// and `maintain` with `printer` and `command`, a keyword of [`Maintenance`]. Without the CUPS
+/// socket they are not there.
 fn printer_forms() -> Router<AdministrationState> {
     let mut router = Router::new();
     for (name, action) in [
@@ -1085,6 +1129,7 @@ fn printer_forms() -> Router<AdministrationState> {
         ("accept", PrinterAction::Accept),
         ("reject", PrinterAction::Reject),
         ("remove", PrinterAction::Remove),
+        ("maintain", PrinterAction::Maintain),
     ] {
         router = router.route(
             &format!("{PRINTERS}/{name}"),
@@ -1279,6 +1324,13 @@ async fn perform(
                 }
             }
             removed.map(|()| DeviceNotice::Removed)
+        }
+        PrinterAction::Maintain => {
+            let command = maintenance_command(state, name, body).await?;
+            admin.maintain(name, command, by).await.map(|()| {
+                log_maintenance(command, by, name);
+                DeviceNotice::maintenance(command)
+            })
         }
     };
     match done {

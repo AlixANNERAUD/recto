@@ -27,8 +27,8 @@ use recto_domain::{
 };
 use recto_entity::{groups, users as user_rows};
 use recto_printing::{
-    Capabilities, ColorMode, DriverInfo, Job, JobState, Printer, PrinterAdmin, PrinterState, Sides,
-    StateReason, Supply,
+    Capabilities, ColorMode, DriverInfo, Job, JobState, Maintenance, Printer, PrinterAdmin,
+    PrinterState, Sides, StateReason, Supply,
     testing::{MockPrintService, MockPrinterAdmin},
 };
 use recto_scanning::{
@@ -1328,6 +1328,45 @@ async fn with_the_socket_printers_have_actions() {
     assert!(second.contains("Manage idle"), "{html}");
     // The texts CUPS keeps are bounded as recto checks them.
     assert_eq!(html.matches(r#"maxlength="1023""#).count(), 6, "{html}");
+}
+
+#[tokio::test]
+async fn maintenance_buttons_are_the_commands_the_printer_lists() {
+    let inkjet = Printer {
+        maintenance: vec![Maintenance::Clean, Maintenance::ReportLevels],
+        ..printer("inkjet", true)
+    };
+    let harness = Harness::managed(vec![inkjet, printer("laser", false)], vec![]).await;
+    let admin = administrator(&harness, "admin-subject", "admin").await;
+    let html = harness.page("/administration/printers", &admin).await;
+    let inkjet = html.find(">inkjet<").expect("inkjet");
+    let laser = html.find(">laser<").expect("laser");
+    let (first, second) = (&html[inkjet..laser], &html[laser..]);
+    assert!(first.contains("Maintenance"), "{html}");
+    assert!(
+        first.contains(r#"action="/administration/printers/maintain""#),
+        "{html}"
+    );
+    assert!(first.contains(r#"value="Clean""#), "{html}");
+    assert!(first.contains("Clean print heads"), "{html}");
+    assert!(first.contains(r#"value="ReportLevels""#), "{html}");
+    assert!(first.contains("Refresh ink levels"), "{html}");
+    assert!(!first.contains("PrintSelfTestPage"), "{html}");
+    assert!(!first.contains("AutoConfigure"), "{html}");
+    // A printer that lists none, as most driverless ones, has no maintenance section.
+    assert!(
+        !second.contains("/administration/printers/maintain"),
+        "{html}"
+    );
+    assert!(!second.contains("Maintenance"), "{html}");
+
+    let html = harness
+        .page("/administration/printers?done=cleaning", &admin)
+        .await;
+    assert!(
+        html.contains("The printer is cleaning its print heads."),
+        "{html}"
+    );
 }
 
 #[tokio::test]

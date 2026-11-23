@@ -299,6 +299,14 @@
         "confirm": "Remove {printer} from CUPS. Its waiting jobs are canceled and its access rule is forgotten.",
         "remove": "Remove printer"
       },
+      "maintenance": {
+        "title": "Maintenance",
+        "hint": "The printer runs these itself, which can take a few minutes.",
+        "clean": "Clean print heads",
+        "self_test": "Print a test page",
+        "levels": "Refresh ink levels",
+        "auto_configure": "Configure automatically"
+      },
       "done": {
         "added": "The printer was added.",
         "described": "The description and location were saved.",
@@ -308,7 +316,11 @@
         "accepting": "The printer accepts jobs again.",
         "rejecting": "The printer turns new jobs away.",
         "removed": "The printer was removed.",
-        "prices": "The prices were saved."
+        "prices": "The prices were saved.",
+        "cleaning": "The printer is cleaning its print heads.",
+        "self_test": "The printer is printing a test page.",
+        "levels": "The printer was asked for its ink levels. They show here once it reports them.",
+        "configured": "The printer is configuring itself."
       },
       "errors": {
         "invalid_name": "The name must be 1 to 127 characters among letters, digits, dots, underscores and hyphens.",
@@ -323,7 +335,8 @@
         "rejected": "CUPS declined the change: {message}",
         "cups_unavailable": "CUPS did not answer. Try again in a moment.",
         "invalid_prices": "Prices are amounts in {currency} with at most {decimals} decimals.",
-        "invalid_whole_prices": "Prices are whole amounts in {currency}."
+        "invalid_whole_prices": "Prices are whole amounts in {currency}.",
+        "unsupported_command": "This printer does not offer that maintenance command."
       },
       "change": "Change access and prices",
       "prices": {
