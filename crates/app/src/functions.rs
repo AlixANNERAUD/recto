@@ -379,16 +379,17 @@ mod server {
             let printers = printers.iter().map(|printer| printer.name.as_str());
             let applicable = quotas::applicable_on(rules, self.user.id, &groups, printers);
             let now = chrono::Utc::now();
-            let mut allowances = Vec::new();
-            for rule in &applicable {
-                let standing =
-                    quotas::standing(database, rule, self.user.id, now, self.state.timezone)
-                        .await
-                        .map_err(failed)?;
-                allowances.push(Allowance::from(&standing));
-            }
+            let standings = quotas::standings_of(
+                database,
+                &applicable,
+                self.user.id,
+                now,
+                self.state.timezone,
+            )
+            .await
+            .map_err(failed)?;
             Ok(Allowances {
-                allowances,
+                allowances: standings.iter().map(Allowance::from).collect(),
                 currency: self.state.currency.clone(),
             })
         }

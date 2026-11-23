@@ -1,12 +1,12 @@
 //! What a user, or a pool, has used of a rule in its current window.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::Hash};
 
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use recto_entity::{group_memberships, print_jobs, quota_adjustments};
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Select,
+    ColumnTrait, Condition, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect, Select,
     sea_query::{Alias, Expr, ExprTrait, Func, Query},
 };
 
@@ -39,38 +39,77 @@ pub async fn standing(
     now: DateTime<Utc>,
     tz: Tz,
 ) -> Result<Standing> {
-    let holder = match rule.subject {
+    let mut standings = standings_of(db, std::slice::from_ref(rule), user_id, now, tz).await?;
+    Ok(standings.remove(0))
+}
+
+/// [`standing`] of `user_id` against each of `rules`, in their order, for a page showing where
+/// they stand: the adjustments of every rule are read at once, then each rule's usage with one
+/// query.
+pub async fn standings_of(
+    db: &impl ConnectionTrait,
+    rules: &[Rule],
+    user_id: i64,
+    now: DateTime<Utc>,
+    tz: Tz,
+) -> Result<Vec<Standing>> {
+    let holder = |rule: &Rule| match rule.subject {
         Subject::Pool(group) => Holder::Group(group),
         _ => Holder::User(user_id),
     };
-    let reset = latest_reset(db, rule.id, holder, now).await?;
-    let used = used(db, rule, holder, reset, now, tz).await?;
-
-    let granted = quota_adjustments::Entity::find()
-        .select_only()
-        .expr_as(
-            sum(Expr::col((
-                quota_adjustments::Entity,
-                quota_adjustments::Column::Amount,
-            ))),
-            "total",
+    if rules.is_empty() {
+        return Ok(Vec::new());
+    }
+    let of_holders = rules.iter().fold(Condition::any(), |any, rule| {
+        any.add(
+            Condition::all()
+                .add(quota_adjustments::Column::RuleId.eq(rule.id))
+                .add(holder_filter(holder(rule))),
         )
-        .filter(quota_adjustments::Column::RuleId.eq(rule.id))
-        .filter(holder_filter(holder))
-        .filter(quota_adjustments::Column::Kind.eq("grant"))
+    });
+    let adjustments = quota_adjustments::Entity::find()
+        .filter(of_holders)
         .filter(quota_adjustments::Column::At.lte(now.fixed_offset()))
-        .filter(
-            quota_adjustments::Column::ExpiresAt
-                .is_null()
-                .or(quota_adjustments::Column::ExpiresAt.gt(now.fixed_offset())),
-        )
-        .into_tuple::<Option<i64>>()
-        .one(db)
-        .await?
-        .flatten()
-        .unwrap_or(0);
+        .all(db)
+        .await?;
+    let (resets, granted) = tally(adjustments, |adjustment| Some(adjustment.rule_id), now);
+    let mut standings = Vec::with_capacity(rules.len());
+    for rule in rules {
+        let reset = resets.get(&rule.id).copied();
+        let used = self::used(db, rule, holder(rule), reset, now, tz).await?;
+        let granted = granted.get(&rule.id).copied().unwrap_or(0);
+        standings.push(Standing::new(rule, used, granted));
+    }
+    Ok(standings)
+}
 
-    Ok(Standing::new(rule, used, granted))
+/// The latest reset and the total of the grants still running at `now` among `adjustments`, by
+/// `key`; an adjustment without a key counts for nothing.
+fn tally<K: Copy + Eq + Hash>(
+    adjustments: Vec<quota_adjustments::Model>,
+    key: impl Fn(&quota_adjustments::Model) -> Option<K>,
+    now: DateTime<Utc>,
+) -> (HashMap<K, DateTime<Utc>>, HashMap<K, i64>) {
+    let mut resets: HashMap<K, DateTime<Utc>> = HashMap::new();
+    let mut granted: HashMap<K, i64> = HashMap::new();
+    for adjustment in adjustments {
+        let Some(key) = key(&adjustment) else {
+            continue;
+        };
+        let at = adjustment.at.with_timezone(&Utc);
+        match adjustment.kind.as_str() {
+            "reset" => {
+                let latest = resets.entry(key).or_insert(at);
+                *latest = Ord::max(*latest, at);
+            }
+            "grant" if adjustment.expires_at.is_none_or(|expiry| expiry > now) => {
+                let total = granted.entry(key).or_default();
+                *total = total.saturating_add(adjustment.amount.unwrap_or(0));
+            }
+            _ => {}
+        }
+    }
+    (resets, granted)
 }
 
 /// [`standing`] of each of `users` against `rule`, for a page listing every user. A personal
@@ -99,25 +138,7 @@ pub async fn standings(
         .filter(quota_adjustments::Column::At.lte(now.fixed_offset()))
         .all(db)
         .await?;
-    let mut resets: HashMap<i64, DateTime<Utc>> = HashMap::new();
-    let mut granted: HashMap<i64, i64> = HashMap::new();
-    for adjustment in adjustments {
-        let Some(user) = adjustment.user_id else {
-            continue;
-        };
-        let at = adjustment.at.with_timezone(&Utc);
-        match adjustment.kind.as_str() {
-            "reset" => {
-                let latest = resets.entry(user).or_insert(at);
-                *latest = Ord::max(*latest, at);
-            }
-            "grant" if adjustment.expires_at.is_none_or(|expiry| expiry > now) => {
-                let total = granted.entry(user).or_default();
-                *total = total.saturating_add(adjustment.amount.unwrap_or(0));
-            }
-            _ => {}
-        }
-    }
+    let (resets, granted) = tally(adjustments, |adjustment| adjustment.user_id, now);
 
     let never_reset: Vec<i64> = users
         .iter()
@@ -265,22 +286,4 @@ fn holder_filter(holder: Holder) -> sea_orm::Condition {
             .add(quota_adjustments::Column::GroupId.eq(group))
             .add(quota_adjustments::Column::UserId.is_null()),
     }
-}
-
-/// When `holder`'s usage of the rule was last reset, if ever, up to `now`.
-async fn latest_reset(
-    db: &impl ConnectionTrait,
-    rule_id: i64,
-    holder: Holder,
-    now: DateTime<Utc>,
-) -> Result<Option<DateTime<Utc>>> {
-    let latest = quota_adjustments::Entity::find()
-        .filter(quota_adjustments::Column::RuleId.eq(rule_id))
-        .filter(holder_filter(holder))
-        .filter(quota_adjustments::Column::Kind.eq("reset"))
-        .filter(quota_adjustments::Column::At.lte(now.fixed_offset()))
-        .order_by_desc(quota_adjustments::Column::At)
-        .one(db)
-        .await?;
-    Ok(latest.map(|reset| reset.at.with_timezone(&Utc)))
 }

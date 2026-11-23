@@ -515,6 +515,16 @@ async fn usage_counts_the_window_after_the_latest_reset_minus_grants() {
             assert_eq!(all[&user], one, "rule {} user {user}", rule.name);
         }
     }
+    // And for one user against every rule at once, as the Print page does.
+    let rules = [rule.clone(), jobs.clone(), week.clone(), ever.clone()];
+    for user in users {
+        let all = standings_of(&db, &rules, user, now, TZ).await.unwrap();
+        assert_eq!(all.len(), rules.len());
+        for (of_all, rule) in all.iter().zip(&rules) {
+            let one = standing(&db, rule, user, now, TZ).await.unwrap();
+            assert_eq!(*of_all, one, "rule {} user {user}", rule.name);
+        }
+    }
     assert!(
         standings(&db, &rule, &[], now, TZ)
             .await
