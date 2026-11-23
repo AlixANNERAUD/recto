@@ -52,10 +52,12 @@ async fn the_sweep_runs_with_os_integration_off() {
 
     recto::serve::start_maintenance(&harness.app, &harness.auth);
     let started = std::time::Instant::now();
+    // The sweep deletes the row, then the file: wait for both.
     while held::get(&harness.database, alice, expired)
         .await
         .unwrap()
         .is_some()
+        || harness.held.read(&expired_file).is_ok()
     {
         assert!(
             started.elapsed() < std::time::Duration::from_secs(5),
@@ -63,7 +65,6 @@ async fn the_sweep_runs_with_os_integration_off() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    assert!(harness.held.read(&expired_file).is_err());
     assert!(
         held::get(&harness.database, alice, kept)
             .await
