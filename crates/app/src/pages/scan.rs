@@ -9,7 +9,7 @@ use crate::{
     },
     functions::list_scanners,
     islands::scan::Scanner,
-    layout::Layout,
+    layout::{Layout, is_administrator},
     t,
 };
 
@@ -28,7 +28,8 @@ pub fn ScanPage() -> impl IntoView {
                         Ok(scanners) => (scanners, None),
                         Err(error) => (Vec::new(), Some(error_text(&error))),
                     };
-                    view! { <Scanner scanners error /> }
+                    let administrator = is_administrator();
+                    view! { <Scanner scanners error administrator /> }
                 })}
             </Suspense>
         </Layout>

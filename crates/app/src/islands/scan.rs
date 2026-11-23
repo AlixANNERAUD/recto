@@ -255,7 +255,13 @@ fn Settings(
 /// The scan controls. `scanners` is the list the server had when it rendered the page, and
 /// `error` why it had none.
 #[island]
-pub fn Scanner(scanners: Vec<ScannerInfo>, error: Option<String>) -> impl IntoView {
+pub fn Scanner(
+    scanners: Vec<ScannerInfo>,
+    error: Option<String>,
+    /// Whether the user administers recto: others are not told to check a scanner whose access
+    /// rules may be what hides it.
+    administrator: bool,
+) -> impl IntoView {
     let first = scanners
         .first()
         .map(|scanner| scanner.id.clone())
@@ -609,7 +615,14 @@ pub fn Scanner(scanners: Vec<ScannerInfo>, error: Option<String>) -> impl IntoVi
                     {move || {
                         scanners
                             .with(Vec::is_empty)
-                            .then(|| view! { <p class=HINT>{t!("scan.no_scanners")}</p> })
+                            .then(|| {
+                                let message = if administrator {
+                                    t!("scan.no_scanners")
+                                } else {
+                                    t!("scan.none_for_you")
+                                };
+                                view! { <p class=HINT>{message}</p> }
+                            })
                     }}
                     {move || {
                         capabilities

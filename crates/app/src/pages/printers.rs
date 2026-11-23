@@ -2,12 +2,9 @@
 
 use leptos::prelude::*;
 
-use super::failure_alert;
+use super::{failure_alert, no_printers};
 use crate::{
-    components::{
-        printer::PrinterStatus,
-        ui::{Card, Empty},
-    },
+    components::{printer::PrinterStatus, ui::Card},
     functions::list_printers,
     layout::Layout,
     t,
@@ -21,10 +18,7 @@ pub fn PrintersPage() -> impl IntoView {
             <Suspense>
                 {move || Suspend::new(async move {
                     match printers.await {
-                        Ok(printers) if printers.is_empty() => {
-                            view! { <Empty title=t!("printers.empty") body=t!("printers.empty_body") /> }
-                                .into_any()
-                        }
+                        Ok(printers) if printers.is_empty() => no_printers().into_any(),
                         Ok(printers) => {
                             view! {
                                 <div class="grid gap-4 md:grid-cols-2">

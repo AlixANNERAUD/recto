@@ -64,13 +64,13 @@ fn is_current(path: &str, href: &str) -> bool {
 
 /// Whether the signed-in user administers recto.
 #[cfg(feature = "ssr")]
-fn is_administrator() -> bool {
+pub(crate) fn is_administrator() -> bool {
     crate::state::current_user().is_some_and(|user| user.is_administrator)
 }
 
 /// Pages render on the server only.
 #[cfg(not(feature = "ssr"))]
-fn is_administrator() -> bool {
+pub(crate) fn is_administrator() -> bool {
     false
 }
 

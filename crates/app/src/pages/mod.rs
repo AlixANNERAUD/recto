@@ -16,12 +16,24 @@ use leptos::prelude::*;
 use crate::{
     components::{
         error_text,
-        ui::{Alert, Tone},
+        ui::{Alert, Empty, Tone},
     },
     functions::Allowances,
+    layout::is_administrator,
     refusal::Refusal,
-    tf,
+    t, tf,
 };
+
+/// What the Print and Printers pages show without a printer: administrators are told to add
+/// one to CUPS, everyone else that none is theirs to use, as access rules may hide every one.
+pub(crate) fn no_printers() -> impl IntoView + use<> {
+    let body = if is_administrator() {
+        t!("printers.empty_body")
+    } else {
+        t!("printers.none_for_you")
+    };
+    view! { <Empty title=t!("printers.empty") body /> }
+}
 
 /// The message of a page whose data could not be loaded, such as CUPS being unreachable: the
 /// page still renders around it.

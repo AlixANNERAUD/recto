@@ -5,9 +5,9 @@
 use leptos::prelude::*;
 use leptos_router::hooks::use_query_map;
 
-use super::{failure_alert, refusal_alert};
+use super::{failure_alert, no_printers, refusal_alert};
 use crate::{
-    components::ui::{Card, Empty},
+    components::ui::Card,
     functions::{Allowances, print_choices},
     islands::print_form::PrintForm,
     layout::Layout,
@@ -59,10 +59,7 @@ pub fn PrintPage() -> impl IntoView {
             <Suspense>
                 {move || Suspend::new(async move {
                     match choices.await.map(|choices| choices.printers) {
-                        Ok(printers) if printers.is_empty() => {
-                            view! { <Empty title=t!("printers.empty") body=t!("printers.empty_body") /> }
-                                .into_any()
-                        }
+                        Ok(printers) if printers.is_empty() => no_printers().into_any(),
                         Ok(printers) => view! { <PrintForm printers max_upload_size /> }.into_any(),
                         Err(error) => failure_alert(&error).into_any(),
                     }

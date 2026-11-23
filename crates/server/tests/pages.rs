@@ -1162,6 +1162,46 @@ async fn members_and_administrators_see_restricted_devices() {
 }
 
 #[tokio::test]
+async fn only_administrators_are_told_to_add_a_printer() {
+    let harness = Harness::scanning(vec![printer("darkroom", false)], vec![scanner("net:b")]).await;
+    let plain = harness.sign_in("alice-subject", "alice").await;
+    for (kind, device) in [
+        (DeviceKind::Printer, "darkroom"),
+        (DeviceKind::Scanner, "net:b"),
+    ] {
+        access::set(&harness.database, kind, device, Access::Groups(vec![]))
+            .await
+            .unwrap();
+    }
+    for uri in ["/", "/printers"] {
+        let html = harness.page(uri, &plain).await;
+        assert!(
+            html.contains("No printer is available to you right now."),
+            "{uri}: {html}"
+        );
+        assert!(!html.contains("Add a printer to CUPS"), "{uri}: {html}");
+    }
+    let html = harness.page("/scan", &plain).await;
+    assert!(
+        html.contains("No scanner is available to you right now."),
+        "{html}"
+    );
+
+    // Administrators see every device, and an empty CUPS tells them what to do.
+    let harness = Harness::scanning(vec![], vec![]).await;
+    let admin_of_empty = administrator(&harness, "root-subject", "root").await;
+    for uri in ["/", "/printers"] {
+        let html = harness.page(uri, &admin_of_empty).await;
+        assert!(
+            html.contains("Add a printer to CUPS, then reload this page."),
+            "{uri}: {html}"
+        );
+    }
+    let html = harness.page("/scan", &admin_of_empty).await;
+    assert!(html.contains("No scanners found."), "{html}");
+}
+
+#[tokio::test]
 async fn nothing_changes_without_rules() {
     let harness = Harness::scanning(
         vec![printer("front-desk", true), printer("darkroom", false)],

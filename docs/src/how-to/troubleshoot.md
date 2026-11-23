@@ -104,7 +104,9 @@ add `ServerAlias *` to its `cupsd.conf` (see [Use an existing CUPS server](exist
 172.30.80.0/24; if you changed the subnet in `compose.yml`, change it in
 `examples/cups/cupsd.conf` too.
 
-**No printers yet.** CUPS has no printer: [Add a printer](add-printer.md).
+**No printers yet.** CUPS has no printer: [Add a printer](add-printer.md). People who are not
+administrators read **No printer is available to you right now** instead, which also means that
+access rules leave them none (see [Restrict access](restrict-access.md)).
 
 **A printer shows Offline or "The printer cannot be reached".** CUPS cannot reach it. Check its
 address with `docker compose exec cups lpstat -v`, and that the printer is on.
@@ -119,6 +121,9 @@ browsers show a connection reset instead of this message. Behind nginx, a `413` 
 **Only PDF, JPEG and PNG files can be printed.** Export the document to PDF first.
 
 ## Scanning
+
+**No scanner is available to you right now**, for someone who is not an administrator: SANE finds
+nothing, or access rules leave them none (see [Restrict access](restrict-access.md)).
 
 **No scanners found.** SANE finds nothing. Run `docker compose exec recto scanimage -L`:
 
