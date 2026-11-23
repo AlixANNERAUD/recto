@@ -92,11 +92,7 @@ pub fn printer(instance: &str, host: &str, port: u16, public_url: &Url) -> Adver
 
 /// `text` cut to at most `max` bytes, on a character boundary.
 fn cut(text: &str, max: usize) -> &str {
-    let mut end = text.len().min(max);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    &text[..end]
+    &text[..text.floor_char_boundary(max)]
 }
 
 /// The bytes a scanner's own name keeps, however long recto's instance name is.
@@ -400,13 +396,7 @@ fn fit(txt: Vec<(String, String)>) -> Vec<(String, String)> {
             let room = TXT_PAIR_MAX.checked_sub(key.len() + 1)?;
             match key.as_str() {
                 "adminurl" if value.len() > room => None,
-                _ if value.len() > room => {
-                    let mut end = room;
-                    while !value.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    Some((key, value[..end].to_owned()))
-                }
+                _ if value.len() > room => Some((key, cut(&value, room).to_owned())),
                 _ => Some((key, value)),
             }
         })

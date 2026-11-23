@@ -674,11 +674,7 @@ fn clamp(count: u32) -> i32 {
 
 /// At most `limit` bytes, cut on a character boundary.
 fn truncate(value: &str, limit: usize) -> String {
-    let mut end = value.len().min(limit);
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    value[..end].to_owned()
+    value[..value.floor_char_boundary(limit)].to_owned()
 }
 
 fn member(name: &'static str, value: IppValue) -> (IppName, IppValue) {

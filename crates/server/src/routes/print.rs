@@ -695,11 +695,7 @@ pub(crate) fn job_name(file_name: &str) -> String {
         .next()
         .unwrap_or_default()
         .trim();
-    let mut end = name.len().min(MAX_JOB_NAME);
-    while !name.is_char_boundary(end) {
-        end -= 1;
-    }
-    match &name[..end] {
+    match &name[..name.floor_char_boundary(MAX_JOB_NAME)] {
         "" => "document".to_owned(),
         name => name.to_owned(),
     }
