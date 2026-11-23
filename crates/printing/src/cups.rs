@@ -38,7 +38,7 @@ const SUBMIT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// How many finished jobs the job list shows next to the unfinished ones.
 const COMPLETED_JOBS: i32 = 20;
 
-const PRINTER_ATTRIBUTES: [&str; 18] = [
+const PRINTER_ATTRIBUTES: [&str; 15] = [
     "printer-name",
     "printer-info",
     "printer-location",
@@ -50,14 +50,15 @@ const PRINTER_ATTRIBUTES: [&str; 18] = [
     "marker-levels",
     "marker-colors",
     "marker-types",
-    "marker-high-levels",
-    "marker-low-levels",
     "copies-supported",
     "sides-supported",
     "print-color-mode-supported",
+    // Tells the default printer, saving a CUPS-Get-Default.
     "printer-type",
-    "printer-uri-supported",
 ];
+
+/// `CUPS_PRINTER_DEFAULT`: the bit of `printer-type` CUPS sets on its default printer.
+const DEFAULT_PRINTER: i32 = 0x0002_0000;
 
 const JOB_ATTRIBUTES: [&str; 8] = [
     "job-id",
@@ -192,21 +193,6 @@ impl Cups {
             .map_err(|error| Failure::Unanswered(format!("unreadable CUPS answer: {error}")))
     }
 
-    /// The name of the default printer, if CUPS has one.
-    async fn default_printer(&self) -> Result<Option<String>, PrintError> {
-        let mut request = new_request(Operation::CupsGetDefault, None)?;
-        add_requested(&mut request, &["printer-name"])?;
-        let response = self.send(&self.root_uri()?, request).await?;
-        match check(&response, || PrintError::PrinterNotFound(String::new())) {
-            Ok(()) => Ok(printer_groups(&response)
-                .next()
-                .and_then(|group| string(group, "printer-name"))),
-            // No default is a normal state of a fresh CUPS.
-            Err(PrintError::PrinterNotFound(_)) => Ok(None),
-            Err(error) => Err(error),
-        }
-    }
-
     async fn jobs_with(
         &self,
         which: &'static str,
@@ -243,9 +229,8 @@ impl PrintService for Cups {
             Err(PrintError::PrinterNotFound(_)) => return Ok(Vec::new()),
             Err(error) => return Err(error),
         }
-        let default = self.default_printer().await?;
         Ok(printer_groups(&response)
-            .filter_map(|group| parse_printer(group, default.as_deref()))
+            .filter_map(parse_printer)
             .collect())
     }
 
@@ -256,10 +241,9 @@ impl PrintService for Cups {
         let response = self.send(&uri, request).await?;
         let not_found = || PrintError::PrinterNotFound(name.to_owned());
         check(&response, not_found)?;
-        let default = self.default_printer().await?;
         printer_groups(&response)
             .next()
-            .and_then(|group| parse_printer(group, default.as_deref()))
+            .and_then(parse_printer)
             .ok_or_else(not_found)
     }
 
@@ -560,7 +544,7 @@ fn integer(group: &IppAttributeGroup, name: &str) -> Option<i32> {
     integers(group, name).into_iter().next()
 }
 
-fn parse_printer(group: &IppAttributeGroup, default: Option<&str>) -> Option<Printer> {
+fn parse_printer(group: &IppAttributeGroup) -> Option<Printer> {
     let name = string(group, "printer-name")?;
     let sides: Vec<Sides> = strings(group, "sides-supported")
         .iter()
@@ -582,7 +566,7 @@ fn parse_printer(group: &IppAttributeGroup, default: Option<&str>) -> Option<Pri
         .unwrap_or(1);
 
     Some(Printer {
-        is_default: default == Some(name.as_str()),
+        is_default: integer(group, "printer-type").is_some_and(|kind| kind & DEFAULT_PRINTER != 0),
         description: string(group, "printer-info"),
         location: string(group, "printer-location"),
         make_and_model: string(group, "printer-make-and-model"),

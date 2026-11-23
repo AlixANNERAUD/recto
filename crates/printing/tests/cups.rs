@@ -147,19 +147,26 @@ fn cups(server: &MockServer) -> Cups {
 #[tokio::test]
 async fn lists_printers_with_status_and_default() {
     let server = MockServer::start().await;
+    let mut office = printer_group("office", 3);
+    // Black and white and not shared, but not the default.
+    office
+        .1
+        .push(attribute("printer-type", IppValue::Enum(0x0020_0004)));
+    let mut lab = printer_group("lab", 4);
+    // CUPS_PRINTER_DEFAULT set: the default printer.
+    lab.1
+        .push(attribute("printer-type", IppValue::Enum(0x0002_0004)));
     Mock::given(method("POST"))
         .and(path("/"))
         .and(Ipp(Operation::CupsGetPrinters, None))
-        .respond_with(ipp(
-            StatusCode::SuccessfulOk,
-            vec![printer_group("office", 3), printer_group("lab", 4)],
-        ))
+        .respond_with(ipp(StatusCode::SuccessfulOk, vec![office, lab]))
         .mount(&server)
         .await;
+    // printer-type tells the default, so CUPS is not asked for it.
     Mock::given(method("POST"))
-        .and(path("/"))
         .and(Ipp(Operation::CupsGetDefault, None))
-        .respond_with(ipp(StatusCode::SuccessfulOk, vec![printer_group("lab", 4)]))
+        .respond_with(ipp(StatusCode::ClientErrorNotFound, vec![]))
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -200,11 +207,6 @@ async fn lists_printers_when_cups_has_no_default() {
             StatusCode::SuccessfulOk,
             vec![printer_group("office", 3)],
         ))
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(Ipp(Operation::CupsGetDefault, None))
-        .respond_with(ipp(StatusCode::ClientErrorNotFound, vec![]))
         .mount(&server)
         .await;
 
