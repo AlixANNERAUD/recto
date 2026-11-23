@@ -51,3 +51,5 @@ deny = [
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+# The mdns-sd fix pinned in Cargo.toml's [patch.crates-io] until it is released.
+allow-git = ["https://github.com/AlixANNERAUD/mdns-sd"]

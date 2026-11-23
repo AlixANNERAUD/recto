@@ -159,3 +159,9 @@ reload-port = 3001
 browserquery = "defaults"
 env = "DEV"
 lib-profile-release = "wasm-release"
+
+# mdns-sd answers unicast queries from off-link sources, which lets a spoofed query from the
+# internet turn recto into an amplifier (keepsimple1/mdns-sd#558). The fix, pinned here, is
+# keepsimple1/mdns-sd#559; drop this patch for the first mdns-sd release that includes it.
+[patch.crates-io]
+mdns-sd = { git = "https://github.com/AlixANNERAUD/mdns-sd", rev = "2628df08d1ecdb3c314fb3d467161aac5ce2ab71" }
