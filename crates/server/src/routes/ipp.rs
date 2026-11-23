@@ -898,6 +898,12 @@ impl Job<'_> {
         limit: Option<u32>,
         requested: &[String],
     ) -> recto_domain::Result<(u16, Groups)> {
+        if which == WhichJobs::Unsupported {
+            // The answer names it: the decoder put it with the unsupported attributes.
+            return Ok(status(
+                IppStatus::ClientErrorAttributesOrValuesNotSupported as u16,
+            ));
+        }
         let jobs =
             held::list_for_device(&self.state.app.database, device.device_password_id).await?;
         let limit = limit.map_or(usize::MAX, |limit| limit as usize);
@@ -910,6 +916,7 @@ impl Job<'_> {
                     WhichJobs::NotCompleted => pending,
                     WhichJobs::Completed => !pending,
                     WhichJobs::All => true,
+                    WhichJobs::Unsupported => false,
                 }
             })
             .take(limit)

@@ -1182,3 +1182,31 @@ async fn one_user_sends_two_documents_at_a_time() {
     .await;
     assert_eq!(status(&answer), 0x0000);
 }
+
+#[tokio::test]
+async fn an_unknown_which_jobs_is_named_in_the_refusal() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let laptop = device(&harness, alice, "Laptop").await;
+    let mut jobs = request(IppOperation::GetJobs);
+    operation_attribute(
+        &mut jobs,
+        "which-jobs",
+        IppValue::new_keyword("fetchable").unwrap(),
+    );
+    let answer = ipp(
+        &harness,
+        post_ipp(
+            "/ipp/print",
+            Some(&laptop.secret),
+            Body::from(jobs.to_bytes().to_vec()),
+        ),
+    )
+    .await;
+    assert_eq!(status(&answer), 0x040B);
+    assert_eq!(
+        attribute(&answer, DelimiterTag::UnsupportedAttributes, "which-jobs")
+            .map(|value| text_of(&value)),
+        Some("fetchable".to_owned())
+    );
+}

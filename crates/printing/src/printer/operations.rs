@@ -49,6 +49,10 @@ pub enum WhichJobs {
     NotCompleted,
     Completed,
     All,
+    /// A value recto does not know, already in [`Incoming::unsupported`]: refused with
+    /// `client-error-attributes-or-values-not-supported`, which then names it (RFC 8011
+    /// section 4.2.6.1), not ignored.
+    Unsupported,
 }
 
 /// An operation and what recto reads of it. `requested` lists are never empty: an absent
@@ -195,8 +199,10 @@ pub fn decode(body: Bytes) -> Result<Incoming, StatusCode> {
                 None | Some("not-completed") => WhichJobs::NotCompleted,
                 Some("completed") => WhichJobs::Completed,
                 Some("all") => WhichJobs::All,
-                // RFC 8011 section 4.2.6.1: refused, not ignored.
-                Some(_) => return Err(StatusCode::ClientErrorAttributesOrValuesNotSupported),
+                Some(_) => {
+                    unsupported.extend(request.operation.get("which-jobs").map(echoable));
+                    WhichJobs::Unsupported
+                }
             },
             limit: request
                 .operation("limit")

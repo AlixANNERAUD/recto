@@ -797,9 +797,32 @@ fn unknown_which_jobs_are_refused() {
         "which-jobs",
         keyword("fetchable"),
     );
+    let incoming = decode(get.to_bytes()).unwrap();
+    assert!(matches!(
+        incoming.operation,
+        Operation::GetJobs {
+            which: WhichJobs::Unsupported,
+            ..
+        }
+    ));
+    // RFC 8011 section 4.1.7: the refusal names the attribute and its value.
+    let answer = response(
+        &incoming,
+        StatusCode::ClientErrorAttributesOrValuesNotSupported as u16,
+        Vec::new(),
+    );
+    let answer = IppParser::new(IppReader::new(std::io::Cursor::new(answer.to_vec())))
+        .parse()
+        .unwrap();
+    assert_eq!(answer.header().operation_or_status, 0x040B);
+    let unsupported = answer
+        .attributes()
+        .groups_of(DelimiterTag::UnsupportedAttributes)
+        .next()
+        .expect("an unsupported-attributes group");
     assert_eq!(
-        decode(get.to_bytes()).unwrap_err(),
-        StatusCode::ClientErrorAttributesOrValuesNotSupported
+        unsupported.get("which-jobs").map(|a| a.value().clone()),
+        Some(keyword("fetchable"))
     );
 }
 
