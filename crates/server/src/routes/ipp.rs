@@ -515,13 +515,8 @@ impl Job<'_> {
         // The device's jobs waiting for their document; nobody's without credentials.
         let queued = match self.device {
             Some(device) => {
-                held::list_for_device(&self.state.app.database, device.device_password_id)
+                held::incoming_count(&self.state.app.database, device.device_password_id)
                     .await
-                    .map(|jobs| {
-                        jobs.iter()
-                            .filter(|job| job.state == HeldState::Incoming)
-                            .count()
-                    })
                     .unwrap_or_default()
             }
             None => 0,

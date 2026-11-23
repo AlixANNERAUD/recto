@@ -564,6 +564,19 @@ pub async fn delete_for_device(
     delete_where(database, condition).await
 }
 
+/// How many jobs of the device password wait for their document, for the printer's
+/// `queued-job-count`, which devices poll.
+pub async fn incoming_count(
+    database: &impl ConnectionTrait,
+    device_password_id: i64,
+) -> Result<u64> {
+    Ok(held_jobs::Entity::find()
+        .filter(held_jobs::Column::DevicePasswordId.eq(device_password_id))
+        .filter(held_jobs::Column::State.eq(HeldState::Incoming.keyword()))
+        .count(database)
+        .await?)
+}
+
 /// Removes expired `held` rows, `incoming` rows older than [`INCOMING_LIFETIME`] or expired,
 /// and `released` rows older than [`RELEASED_LIFETIME`]; returns `releasing` rows claimed more
 /// than [`CLAIM_LIFETIME`] ago to `held` when they have no ledger entry. A row with a ledger

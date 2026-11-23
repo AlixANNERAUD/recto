@@ -629,6 +629,38 @@ async fn delete_only_takes_held_rows() {
 }
 
 #[tokio::test]
+async fn a_device_counts_its_incoming_jobs() {
+    let database = crate::testing::database().await;
+    let alice = user(&database, "alice", false).await;
+    let phone = device(&database, alice, "Phone").await;
+    let laptop = device(&database, alice, "Laptop").await;
+    for (device, name) in [(phone, "a.pdf"), (phone, "b.pdf"), (laptop, "c.pdf")] {
+        create_incoming(
+            &database,
+            alice,
+            device,
+            name,
+            "{}",
+            noon(),
+            LIFETIME,
+            MAX_BYTES,
+        )
+        .await
+        .unwrap();
+    }
+    // A job with its document is held, no longer incoming.
+    receive(
+        &database,
+        new_held(alice, Some(phone), "sent", noon()),
+        MAX_BYTES,
+    )
+    .await
+    .unwrap();
+    assert_eq!(incoming_count(&database, phone).await.unwrap(), 2);
+    assert_eq!(incoming_count(&database, laptop).await.unwrap(), 1);
+}
+
+#[tokio::test]
 async fn an_expired_job_cannot_be_claimed() {
     let database = crate::testing::database().await;
     let alice = user(&database, "alice", false).await;
