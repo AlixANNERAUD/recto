@@ -28,15 +28,15 @@ pub enum LogFormat {
     Text,
 }
 
-/// The settings of `recto serve`. Each is also an environment variable named `RECTO_<SETTING>`.
-// A setting whose mistake needs a message naming its variable is read as text and checked when
-// it becomes a `Config`, since the parser drops a value parser's own message. The defaults are
-// literals because the help is written at compile time; the tests check they match the
-// constants.
+/// What `recto serve` needs. Each setting is also an environment variable named
+/// `RECTO_<SETTING>`.
+// A rejected value is reported with the setting's variable when it came from the environment,
+// with the parser's reason. The defaults are literals because the help is written at compile
+// time; the tests check they match the constants.
 #[derive(Clone, Debug, GetArgs)]
-pub struct ServeArguments {
-    #[arg(long, env = "RECTO_PUBLIC_URL")]
-    pub public_url: String,
+pub struct Config {
+    #[arg(long, env = "RECTO_PUBLIC_URL", value_parser = parse_url)]
+    pub public_url: Url,
     /// `sqlite://<path>` (created if missing) or `postgres://<user>:<password>@<host>/<name>`
     /// (must exist). Migrations run at startup.
     #[arg(
@@ -47,8 +47,17 @@ pub struct ServeArguments {
     pub database_url: String,
     /// The issuer URL of the OpenID Connect provider; set together with the client id, or
     /// neither for local accounts only.
-    #[arg(long, env = "RECTO_OIDC_ISSUER")]
-    pub oidc_issuer: Option<String>,
+    // Read as text, so that a blank variable means no provider; `Config::normalized` parses it
+    // into `oidc_issuer`.
+    #[arg(
+        long = "oidc-issuer",
+        env = "RECTO_OIDC_ISSUER",
+        value_name = "OIDC_ISSUER"
+    )]
+    oidc_issuer_text: Option<String>,
+    /// The OpenID Connect provider; set together with `oidc_client_id`, or neither.
+    #[arg(skip)]
+    pub oidc_issuer: Option<Url>,
     #[arg(long, env = "RECTO_OIDC_CLIENT_ID")]
     pub oidc_client_id: Option<String>,
     /// Extra scopes, separated by spaces, requested next to `openid`.
@@ -69,40 +78,74 @@ pub struct ServeArguments {
     #[arg(long, env = "RECTO_OIDC_GROUPS_CLAIM")]
     pub oidc_groups_claim: Option<String>,
     /// Sign-in with a username or email address and a password.
-    #[arg(long, env = "RECTO_LOCAL_ACCOUNTS", default_value = "true")]
-    pub local_accounts: String,
+    #[arg(long, env = "RECTO_LOCAL_ACCOUNTS", action = Set, default_value = "true")]
+    pub local_accounts: bool,
     /// Minimum length of local account passwords.
-    #[arg(long, env = "RECTO_PASSWORD_MINIMUM_LENGTH", default_value = "12")]
+    #[arg(
+        long,
+        env = "RECTO_PASSWORD_MINIMUM_LENGTH",
+        default_value = "12",
+        value_parser = parse_password_minimum_length
+    )]
     pub password_minimum_length: usize,
     /// Read the client address from `X-Forwarded-For`, `X-Real-IP` or `Forwarded`; only behind
     /// a proxy you control.
-    #[arg(long, env = "RECTO_TRUST_FORWARDED_HEADERS", default_value = "false")]
-    pub trust_forwarded_headers: String,
+    #[arg(long, env = "RECTO_TRUST_FORWARDED_HEADERS", action = Set, default_value = "false")]
+    pub trust_forwarded_headers: bool,
     /// Computers and phones print and scan through recto with device passwords; `false`
     /// removes their routes and the Account page's Devices section.
-    #[arg(long, env = "RECTO_OS_INTEGRATION", default_value = "true")]
-    pub os_integration: String,
+    #[arg(long, env = "RECTO_OS_INTEGRATION", action = Set, default_value = "true")]
+    pub os_integration: bool,
     /// Accept device passwords over plain HTTP although the public URL is `http`; loopback
     /// clients always may.
-    #[arg(long, env = "RECTO_IPP_ALLOW_PLAIN", default_value = "false")]
-    pub ipp_allow_plain: String,
+    #[arg(long, env = "RECTO_IPP_ALLOW_PLAIN", action = Set, default_value = "false")]
+    pub ipp_allow_plain: bool,
     /// Where recto keeps the documents computers and phones send, until they are released.
     #[arg(long, env = "RECTO_DATA_DIR", default_value = "/data")]
     pub data_dir: PathBuf,
     /// How many hours a held job waits for its owner before it is deleted, 1 to 720.
-    #[arg(long, env = "RECTO_HELD_JOB_HOURS", default_value = "24")]
-    pub held_job_hours: String,
+    #[arg(
+        long,
+        env = "RECTO_HELD_JOB_HOURS",
+        default_value = "24",
+        value_parser = parse_held_job_hours
+    )]
+    pub held_job_hours: u32,
     /// The paper size recto's printer offers devices by default, as a PWG media name.
-    #[arg(long, env = "RECTO_DEFAULT_MEDIA", default_value = "iso_a4_210x297mm")]
-    pub default_media: String,
+    #[arg(
+        long,
+        env = "RECTO_DEFAULT_MEDIA",
+        default_value = "iso_a4_210x297mm",
+        possible_values = [
+            "iso_a4_210x297mm",
+            "na_letter_8.5x11in",
+            "na_legal_8.5x14in",
+            "iso_a3_297x420mm",
+            "iso_a5_148x210mm",
+        ]
+    )]
+    pub default_media: Media,
     /// The networks whose devices may scan without credentials on the LAN listener, on the
     /// scanners open to everyone: CIDRs, comma separated. Empty by default.
-    #[arg(long, env = "RECTO_ESCL_OPEN_NETWORKS", default_value = "")]
-    pub escl_open_networks: String,
+    #[arg(
+        long,
+        env = "RECTO_ESCL_OPEN_NETWORKS",
+        default_value = "",
+        value_parser = parse_open_networks
+    )]
+    pub escl_open_networks: OpenNetworks,
     /// Where the LAN listener takes TLS connections from the devices that found recto through
     /// DNS-SD, such as `[::]:8631`; unset or blank leaves it off.
-    #[arg(long, env = "RECTO_LAN_LISTEN_ADDRESS")]
-    pub lan_listen_address: Option<String>,
+    // Read as text, so that a blank variable means off; `Config::normalized` parses it into
+    // `lan_listen_address`.
+    #[arg(
+        long = "lan-listen-address",
+        env = "RECTO_LAN_LISTEN_ADDRESS",
+        value_name = "LAN_LISTEN_ADDRESS"
+    )]
+    lan_listen_address_text: Option<String>,
+    #[arg(skip)]
+    pub lan_listen_address: Option<SocketAddr>,
     /// The LAN listener's certificate chain, PEM; with `lan_tls_key`, or neither for a
     /// self-signed certificate kept in the data directory.
     #[arg(long, env = "RECTO_LAN_TLS_CERTIFICATE")]
@@ -112,17 +155,31 @@ pub struct ServeArguments {
     pub lan_tls_key: Option<PathBuf>,
     /// Announce the LAN listener's printer and scanners over multicast DNS; needs the LAN
     /// listener.
-    #[arg(long, env = "RECTO_DNSSD", default_value = "false")]
-    pub dnssd: String,
+    #[arg(long, env = "RECTO_DNSSD", action = Set, default_value = "false")]
+    pub dnssd: bool,
     /// The name Print dialogs show; the brand name when unset.
     #[arg(long, env = "RECTO_DNSSD_NAME")]
     pub dnssd_name: Option<String>,
     /// The network interfaces to announce on, comma separated; when empty, every interface but
     /// loopback, Docker's, virtual machines' and VPNs'.
-    #[arg(long, env = "RECTO_DNSSD_INTERFACES", default_value = "")]
-    pub dnssd_interfaces: String,
-    #[arg(long, env = "RECTO_CUPS_URL", default_value = "http://localhost:631")]
-    pub cups_url: String,
+    // Read as text: `dnssd::parse_interfaces` names the interface it refuses, which a parser's
+    // reason cannot. `Config::normalized` parses it into `dnssd_interfaces`.
+    #[arg(
+        long = "dnssd-interfaces",
+        env = "RECTO_DNSSD_INTERFACES",
+        value_name = "DNSSD_INTERFACES",
+        default_value = ""
+    )]
+    dnssd_interfaces_text: String,
+    #[arg(skip)]
+    pub dnssd_interfaces: Vec<String>,
+    #[arg(
+        long,
+        env = "RECTO_CUPS_URL",
+        default_value = "http://localhost:631",
+        value_parser = parse_cups_url
+    )]
+    pub cups_url: Url,
     /// CUPS's Unix socket, which lets administrators manage printers; unset or blank turns
     /// printer administration off.
     #[arg(long, env = "RECTO_CUPS_ADMIN_SOCKET")]
@@ -138,14 +195,30 @@ pub struct ServeArguments {
     pub site_root: PathBuf,
     /// `all` shows every job to everyone; `own` shows people the jobs they submitted through
     /// recto, and administrators every job.
-    #[arg(long, env = "RECTO_JOB_VISIBILITY", default_value = "all")]
-    pub job_visibility: String,
+    #[arg(
+        long,
+        env = "RECTO_JOB_VISIBILITY",
+        default_value = "all",
+        possible_values = ["all", "own"],
+        value_parser = parse_job_visibility
+    )]
+    pub job_visibility: JobVisibility,
     /// The ISO 4217 code costs are shown in; display only.
-    #[arg(long, env = "RECTO_CURRENCY", default_value = "EUR")]
+    #[arg(
+        long,
+        env = "RECTO_CURRENCY",
+        default_value = "EUR",
+        value_parser = parse_currency
+    )]
     pub currency: String,
     /// The IANA time zone whose calendar the quota periods follow.
-    #[arg(long, env = "RECTO_TIMEZONE", default_value = "UTC")]
-    pub timezone: String,
+    #[arg(
+        long,
+        env = "RECTO_TIMEZONE",
+        default_value = "UTC",
+        value_parser = parse_timezone
+    )]
+    pub timezone: chrono_tz::Tz,
     #[arg(long, env = "RECTO_LOG_FORMAT", value_enum, default_value = "json")]
     pub log_format: LogFormat,
     /// The name, colors, logo and icons; checked when the server starts (`branding::load`).
@@ -153,115 +226,62 @@ pub struct ServeArguments {
     pub brand: BrandOptions,
 }
 
-/// What `recto serve` runs with: [`ServeArguments`] parsed and checked.
-#[derive(Clone, Debug)]
-pub struct Config {
-    pub public_url: Url,
-    pub database_url: String,
-    /// The OpenID Connect provider; set together with `oidc_client_id`, or neither.
-    pub oidc_issuer: Option<Url>,
-    pub oidc_client_id: Option<String>,
-    pub oidc_scopes: Vec<String>,
-    pub oidc_required_claim: Option<String>,
-    pub oidc_required_value: Option<String>,
-    pub oidc_administrator_claim: Option<String>,
-    pub oidc_administrator_value: Option<String>,
-    pub oidc_groups_claim: Option<String>,
-    pub local_accounts: bool,
-    pub password_minimum_length: usize,
-    pub trust_forwarded_headers: bool,
-    pub os_integration: bool,
-    pub ipp_allow_plain: bool,
-    pub data_dir: PathBuf,
-    pub held_job_hours: u32,
-    pub default_media: Media,
-    pub escl_open_networks: OpenNetworks,
-    pub lan_listen_address: Option<SocketAddr>,
-    pub lan_tls_certificate: Option<PathBuf>,
-    pub lan_tls_key: Option<PathBuf>,
-    pub dnssd: bool,
-    pub dnssd_name: Option<String>,
-    pub dnssd_interfaces: Vec<String>,
-    pub cups_url: Url,
-    pub cups_admin_socket: Option<PathBuf>,
-    pub scan_output_dir: Option<PathBuf>,
-    pub max_upload_size: usize,
-    pub listen_address: SocketAddr,
-    pub site_root: PathBuf,
-    pub job_visibility: JobVisibility,
-    pub currency: String,
-    pub timezone: chrono_tz::Tz,
-    pub log_format: LogFormat,
-    pub brand: BrandOptions,
-}
-
-impl TryFrom<ServeArguments> for Config {
-    type Error = String;
-
+impl Config {
     /// Drops blank optional values (a variable set to nothing means the same as no variable),
     /// parses the settings read as text, then refuses combinations that would start recto
     /// wrongly configured. The message names the variable to fix.
-    fn try_from(arguments: ServeArguments) -> Result<Self, String> {
-        let ServeArguments {
-            public_url,
-            database_url,
-            oidc_issuer,
-            oidc_client_id,
-            mut oidc_scopes,
-            oidc_required_claim,
-            oidc_required_value,
-            oidc_administrator_claim,
-            oidc_administrator_value,
-            oidc_groups_claim,
-            local_accounts,
-            password_minimum_length,
-            trust_forwarded_headers,
-            os_integration,
-            ipp_allow_plain,
-            data_dir,
-            held_job_hours,
-            default_media,
-            escl_open_networks,
-            lan_listen_address,
-            lan_tls_certificate,
-            lan_tls_key,
-            dnssd,
-            dnssd_name,
-            dnssd_interfaces,
-            cups_url,
-            cups_admin_socket,
-            scan_output_dir,
-            max_upload_size,
-            listen_address,
-            site_root,
-            job_visibility,
-            currency,
-            timezone,
-            log_format,
-            mut brand,
-        } = arguments;
-        oidc_scopes.retain(|scope| !scope.trim().is_empty());
-        brand.brand_short_name = given(brand.brand_short_name);
-        brand.brand_logo = given_path(brand.brand_logo);
-        brand.brand_icon = given_path(brand.brand_icon);
-        let oidc_issuer = match given(oidc_issuer) {
+    pub fn normalized(mut self) -> Result<Self, String> {
+        self.oidc_scopes.retain(|scope| !scope.trim().is_empty());
+        for value in [
+            &mut self.oidc_issuer_text,
+            &mut self.oidc_client_id,
+            &mut self.oidc_required_claim,
+            &mut self.oidc_required_value,
+            &mut self.oidc_administrator_claim,
+            &mut self.oidc_administrator_value,
+            &mut self.oidc_groups_claim,
+            &mut self.brand.brand_short_name,
+            &mut self.lan_listen_address_text,
+            &mut self.dnssd_name,
+        ] {
+            if value.as_deref().is_some_and(|text| text.trim().is_empty()) {
+                *value = None;
+            }
+        }
+        for path in [
+            &mut self.scan_output_dir,
+            &mut self.cups_admin_socket,
+            &mut self.brand.brand_logo,
+            &mut self.brand.brand_icon,
+            &mut self.lan_tls_certificate,
+            &mut self.lan_tls_key,
+        ] {
+            if path
+                .as_ref()
+                .is_some_and(|path| path.as_os_str().is_empty())
+            {
+                *path = None;
+            }
+        }
+        if self.data_dir.as_os_str().is_empty() {
+            self.data_dir = PathBuf::from(DEFAULT_DATA_DIR);
+        }
+        self.oidc_issuer = match self.oidc_issuer_text.as_deref().map(str::trim) {
             Some(text) => Some(
-                Url::parse(text.trim())
+                Url::parse(text)
                     .map_err(|error| format!("RECTO_OIDC_ISSUER is not a valid URL: {error}"))?,
             ),
             None => None,
         };
-        let oidc_client_id = given(oidc_client_id);
         // Half a provider would quietly turn single sign-on off.
-        if oidc_issuer.is_some() != oidc_client_id.is_some() {
+        if self.oidc_issuer.is_some() != self.oidc_client_id.is_some() {
             return Err(
                 "RECTO_OIDC_ISSUER and RECTO_OIDC_CLIENT_ID go together: set both to \
                         sign in with OpenID Connect, or neither"
                     .to_owned(),
             );
         }
-        let local_accounts = boolean("RECTO_LOCAL_ACCOUNTS", &local_accounts)?;
-        if !local_accounts && oidc_issuer.is_none() {
+        if !self.local_accounts && self.oidc_issuer.is_none() {
             return Err(
                 "RECTO_LOCAL_ACCOUNTS is false and OpenID Connect is not configured, so \
                         nobody could sign in: set RECTO_OIDC_ISSUER and RECTO_OIDC_CLIENT_ID, or \
@@ -269,29 +289,24 @@ impl TryFrom<ServeArguments> for Config {
                     .to_owned(),
             );
         }
-        let oidc_required_claim = given(oidc_required_claim);
-        let oidc_required_value = given(oidc_required_value);
         // The value alone would be ignored: a misspelt claim variable would let every account
         // of the provider in, without a word.
-        if oidc_required_value.is_some() && oidc_required_claim.is_none() {
+        if self.oidc_required_value.is_some() && self.oidc_required_claim.is_none() {
             return Err(
                 "RECTO_OIDC_REQUIRED_VALUE is set without RECTO_OIDC_REQUIRED_CLAIM: set \
                         the claim the value applies to, or remove the value"
                     .to_owned(),
             );
         }
-        let oidc_administrator_claim = given(oidc_administrator_claim);
-        let oidc_administrator_value = given(oidc_administrator_value);
         // Likewise, the value alone would grant administration to nobody, without a word.
-        if oidc_administrator_value.is_some() && oidc_administrator_claim.is_none() {
+        if self.oidc_administrator_value.is_some() && self.oidc_administrator_claim.is_none() {
             return Err("RECTO_OIDC_ADMINISTRATOR_VALUE is set without \
                         RECTO_OIDC_ADMINISTRATOR_CLAIM: set the claim the value applies to, or \
                         remove the value"
                 .to_owned());
         }
-        check_password_minimum_length(password_minimum_length)?;
-        let lan_listen_address = match given(lan_listen_address) {
-            Some(text) => Some(text.trim().parse().map_err(|_| {
+        self.lan_listen_address = match self.lan_listen_address_text.as_deref().map(str::trim) {
+            Some(text) => Some(text.parse().map_err(|_| {
                 format!(
                     "RECTO_LAN_LISTEN_ADDRESS must be an address and a port, such as [::]:8631 \
                      or 0.0.0.0:8631, not {text}"
@@ -299,10 +314,8 @@ impl TryFrom<ServeArguments> for Config {
             })?),
             None => None,
         };
-        let lan_tls_certificate = given_path(lan_tls_certificate);
-        let lan_tls_key = given_path(lan_tls_key);
         // One file alone would quietly fall back to the self-signed certificate.
-        if lan_tls_certificate.is_some() != lan_tls_key.is_some() {
+        if self.lan_tls_certificate.is_some() != self.lan_tls_key.is_some() {
             return Err(
                 "RECTO_LAN_TLS_CERTIFICATE and RECTO_LAN_TLS_KEY go together: set both \
                         to use your own certificate on the LAN listener, or neither for a \
@@ -310,10 +323,8 @@ impl TryFrom<ServeArguments> for Config {
                     .to_owned(),
             );
         }
-        let os_integration = boolean("RECTO_OS_INTEGRATION", &os_integration)?;
-        let dnssd = boolean("RECTO_DNSSD", &dnssd)?;
         // The services announced point at the LAN listener: without it there is nothing to find.
-        if dnssd && lan_listen_address.is_none() {
+        if self.dnssd && self.lan_listen_address.is_none() {
             return Err(
                 "RECTO_DNSSD is true but RECTO_LAN_LISTEN_ADDRESS is not set: DNS-SD \
                         announces the LAN listener, so set it too, such as [::]:8631"
@@ -321,7 +332,7 @@ impl TryFrom<ServeArguments> for Config {
             );
         }
         // Its printer and scanners answer 404 when OS integration is off.
-        if dnssd && !os_integration {
+        if self.dnssd && !self.os_integration {
             return Err(
                 "RECTO_DNSSD is true but RECTO_OS_INTEGRATION is false: DNS-SD would \
                         announce a printer and scanners that are turned off, so turn OS \
@@ -329,80 +340,28 @@ impl TryFrom<ServeArguments> for Config {
                     .to_owned(),
             );
         }
-        let dnssd_name = given(dnssd_name).map(|name| name.trim().to_owned());
-        if let Some(name) = &dnssd_name
-            && name.len() > dnssd::INSTANCE_MAX
-        {
-            return Err(format!(
-                "RECTO_DNSSD_NAME must be at most {} bytes long, not {}",
-                dnssd::INSTANCE_MAX,
-                name.len()
-            ));
+        if let Some(name) = &mut self.dnssd_name {
+            *name = name.trim().to_owned();
+            if name.len() > dnssd::INSTANCE_MAX {
+                return Err(format!(
+                    "RECTO_DNSSD_NAME must be at most {} bytes long, not {}",
+                    dnssd::INSTANCE_MAX,
+                    name.len()
+                ));
+            }
         }
-        let public_url = Url::parse(public_url.trim())
-            .map_err(|error| format!("RECTO_PUBLIC_URL is not a valid URL: {error}"))?;
+        self.dnssd_interfaces =
+            dnssd::parse_interfaces(&self.dnssd_interfaces_text).map_err(|error| {
+                format!("RECTO_DNSSD_INTERFACES must be interface names, comma separated: {error}")
+            })?;
         // Routes, redirects and the cookie path all assume recto is the whole site.
-        if public_url.path() != "/" {
+        if self.public_url.path() != "/" {
             return Err("RECTO_PUBLIC_URL must be the root of its site, such as \
                         https://recto.example.org: recto cannot be served under a path"
                 .to_owned());
         }
-        Ok(Self {
-            public_url,
-            database_url,
-            oidc_issuer,
-            oidc_client_id,
-            oidc_scopes,
-            oidc_required_claim,
-            oidc_required_value,
-            oidc_administrator_claim,
-            oidc_administrator_value,
-            oidc_groups_claim: given(oidc_groups_claim),
-            local_accounts,
-            password_minimum_length,
-            trust_forwarded_headers: boolean(
-                "RECTO_TRUST_FORWARDED_HEADERS",
-                &trust_forwarded_headers,
-            )?,
-            os_integration,
-            ipp_allow_plain: boolean("RECTO_IPP_ALLOW_PLAIN", &ipp_allow_plain)?,
-            data_dir: if data_dir.as_os_str().is_empty() {
-                PathBuf::from(DEFAULT_DATA_DIR)
-            } else {
-                data_dir
-            },
-            held_job_hours: parse_held_job_hours(&held_job_hours)?,
-            default_media: parse_default_media(&default_media)?,
-            escl_open_networks: parse_open_networks(&escl_open_networks)?,
-            lan_listen_address,
-            lan_tls_certificate,
-            lan_tls_key,
-            dnssd,
-            dnssd_name,
-            dnssd_interfaces: parse_dnssd_interfaces(&dnssd_interfaces)?,
-            cups_url: parse_cups_url(&cups_url)
-                .map_err(|error| format!("RECTO_CUPS_URL is not a valid URL: {error}"))?,
-            cups_admin_socket: given_path(cups_admin_socket),
-            scan_output_dir: given_path(scan_output_dir),
-            max_upload_size,
-            listen_address,
-            site_root,
-            job_visibility: parse_job_visibility(&job_visibility)?,
-            currency: parse_currency(&currency)?,
-            timezone: parse_timezone(&timezone)?,
-            log_format,
-            brand,
-        })
+        Ok(self)
     }
-}
-
-/// `None` for a blank value, which an unset-but-declared environment variable produces.
-fn given(value: Option<String>) -> Option<String> {
-    value.filter(|text| !text.trim().is_empty())
-}
-
-fn given_path(path: Option<PathBuf>) -> Option<PathBuf> {
-    path.filter(|path| !path.as_os_str().is_empty())
 }
 
 /// Refuses a minimum password length no password could meet, or one of 0, which would accept
@@ -418,43 +377,34 @@ pub fn check_password_minimum_length(length: usize) -> Result<(), String> {
     }
 }
 
-fn boolean(variable: &str, value: &str) -> Result<bool, String> {
-    match value.trim() {
-        "true" => Ok(true),
-        "false" => Ok(false),
-        _ => Err(format!("{variable} must be true or false, not {value}")),
-    }
+fn parse_password_minimum_length(value: &str) -> Result<usize, &'static str> {
+    value
+        .trim()
+        .parse()
+        .ok()
+        .filter(|length| check_password_minimum_length(*length).is_ok())
+        .ok_or("must be a number of characters from 1 to 1024")
 }
 
-fn parse_job_visibility(value: &str) -> Result<JobVisibility, String> {
-    match value.trim() {
+fn parse_url(value: &str) -> Result<Url, &'static str> {
+    Url::parse(value.trim()).map_err(|_| "must be a URL such as https://recto.example.org")
+}
+
+fn parse_job_visibility(value: &str) -> Result<JobVisibility, &'static str> {
+    match value {
         "all" => Ok(JobVisibility::All),
         "own" => Ok(JobVisibility::Own),
-        _ => Err(format!(
-            "RECTO_JOB_VISIBILITY must be all or own, not {value}"
-        )),
+        _ => Err("must be all or own"),
     }
 }
 
-fn parse_held_job_hours(value: &str) -> Result<u32, String> {
+fn parse_held_job_hours(value: &str) -> Result<u32, &'static str> {
     value
         .trim()
         .parse()
         .ok()
         .filter(|hours| (1..=MAX_HELD_JOB_HOURS).contains(hours))
-        .ok_or_else(|| {
-            format!(
-                "RECTO_HELD_JOB_HOURS must be a number of hours from 1 to \
-                 {MAX_HELD_JOB_HOURS}, not {value}"
-            )
-        })
-}
-
-fn parse_default_media(value: &str) -> Result<Media, String> {
-    value
-        .trim()
-        .parse()
-        .map_err(|error| format!("RECTO_DEFAULT_MEDIA is an {error}"))
+        .ok_or("must be a number of hours from 1 to 720")
 }
 
 /// Networks, by the addresses of their devices (`RECTO_ESCL_OPEN_NETWORKS`).
@@ -477,7 +427,7 @@ impl OpenNetworks {
 /// CIDRs separated by commas, such as `192.168.1.0/24, fd00::/8`; an address alone is a network
 /// of that one address, and blank means none. IPv4-mapped IPv6 networks are read as IPv4, like
 /// the addresses they are compared with.
-pub fn parse_open_networks(value: &str) -> Result<OpenNetworks, String> {
+pub fn parse_open_networks(value: &str) -> Result<OpenNetworks, &'static str> {
     let network = |item: &str| -> Option<IpNet> {
         let network = item
             .parse::<IpNet>()
@@ -496,43 +446,33 @@ pub fn parse_open_networks(value: &str) -> Result<OpenNetworks, String> {
         .map(str::trim)
         .filter(|item| !item.is_empty())
         .map(|item| {
-            network(item).map(|network| network.trunc()).ok_or_else(|| {
-                format!(
-                    "RECTO_ESCL_OPEN_NETWORKS must be networks such as 192.168.1.0/24, comma \
-                     separated, not {item}"
-                )
-            })
+            network(item)
+                .map(|network| network.trunc())
+                .ok_or("must be networks such as 192.168.1.0/24, comma separated")
         })
         .collect::<Result<_, _>>()
         .map(OpenNetworks)
 }
 
-fn parse_dnssd_interfaces(value: &str) -> Result<Vec<String>, String> {
-    dnssd::parse_interfaces(value).map_err(|error| {
-        format!("RECTO_DNSSD_INTERFACES must be interface names, comma separated: {error}")
-    })
-}
-
-fn parse_currency(value: &str) -> Result<String, String> {
+fn parse_currency(value: &str) -> Result<String, &'static str> {
     let code = value.trim();
     if code.len() == 3 && code.bytes().all(|byte| byte.is_ascii_alphabetic()) {
         Ok(code.to_ascii_uppercase())
     } else {
-        Err(format!(
-            "RECTO_CURRENCY must be an ISO 4217 code of three letters, such as EUR, not {value}"
-        ))
+        Err("must be an ISO 4217 code of three letters, such as EUR")
     }
 }
 
-fn parse_timezone(value: &str) -> Result<chrono_tz::Tz, String> {
-    value.trim().parse().map_err(|_| {
-        format!("RECTO_TIMEZONE must be an IANA time zone name, such as Europe/Paris, not {value}")
-    })
+fn parse_timezone(value: &str) -> Result<chrono_tz::Tz, &'static str> {
+    value
+        .trim()
+        .parse()
+        .map_err(|_| "must be an IANA time zone name, such as Europe/Paris")
 }
 
 /// CUPS clients commonly write the server as `ipp://` or `ipps://`; IPP runs over HTTP, so the
 /// scheme is mapped to the one the HTTP client needs.
-fn parse_cups_url(value: &str) -> Result<Url, url::ParseError> {
+fn parse_cups_url(value: &str) -> Result<Url, &'static str> {
     let value = value.trim();
     let mapped = if let Some(rest) = value.strip_prefix("ipps://") {
         format!("https://{rest}")
@@ -541,7 +481,7 @@ fn parse_cups_url(value: &str) -> Result<Url, url::ParseError> {
     } else {
         value.to_owned()
     };
-    Url::parse(&mapped)
+    Url::parse(&mapped).map_err(|_| "must be a URL such as http://localhost:631")
 }
 
 /// What `recto healthcheck` needs: where the server listens.
@@ -592,7 +532,12 @@ pub struct CreateAdministratorOptions {
     #[arg(long)]
     pub email: Option<String>,
     /// Minimum length of the password.
-    #[arg(long, env = "RECTO_PASSWORD_MINIMUM_LENGTH", default_value = "12")]
+    #[arg(
+        long,
+        env = "RECTO_PASSWORD_MINIMUM_LENGTH",
+        default_value = "12",
+        value_parser = parse_password_minimum_length
+    )]
     pub password_minimum_length: usize,
     #[command(flatten)]
     pub database: DatabaseOptions,
@@ -616,7 +561,7 @@ pub struct DnssdServicesOptions {
     #[arg(long, default_value_t = 8631)]
     pub port: u16,
     /// The printer's UUID and the pages the records link to derive from it.
-    #[arg(long, env = "RECTO_PUBLIC_URL")]
+    #[arg(long, env = "RECTO_PUBLIC_URL", value_parser = parse_url)]
     pub public_url: Url,
     /// The name Print dialogs show; the brand name when unset.
     #[arg(long, env = "RECTO_DNSSD_NAME")]
@@ -627,12 +572,13 @@ pub struct DnssdServicesOptions {
     pub database: DatabaseOptions,
 }
 
-// The arguments of `serve` are large, but parsed once at startup.
+// getargs-derive parses a variant's own type, not a `Box` of it; the command line is parsed
+// once, at startup.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Run the web server.
-    Serve(ServeArguments),
+    Serve(Config),
     /// Exit 0 when a running server answers `/health`; for container health checks.
     Healthcheck(Healthcheck),
     /// Apply the pending database migrations and exit.
@@ -663,12 +609,33 @@ mod tests {
         "recto",
     ];
 
-    /// Parses the arguments after the program name only: the environment is ignored, so RECTO_*
-    /// variables exported in a developer's shell cannot change the outcome.
+    /// Reads `--name value` (or `--name=value`) after the program name as the variable
+    /// `RECTO_NAME`: recto is configured through its environment, whose variables the messages
+    /// name. Nothing else is read, so RECTO_* variables exported in a developer's shell cannot
+    /// change the outcome.
     fn parse_arguments<'a>(arguments: impl IntoIterator<Item = &'a str>) -> Result<Config, String> {
-        let arguments = ServeArguments::from_args_with_env(arguments.into_iter().skip(1), |_| None)
-            .map_err(|error| error.to_string())?;
-        Config::try_from(arguments)
+        let mut variables = Vec::new();
+        let mut arguments = arguments.into_iter().skip(1);
+        while let Some(argument) = arguments.next() {
+            let option = argument.strip_prefix("--").expect("only options");
+            let (name, value) = match option.split_once('=') {
+                Some((name, value)) => (name, value),
+                None => (option, arguments.next().expect("a value")),
+            };
+            variables.push((
+                format!("RECTO_{}", name.replace('-', "_").to_uppercase()),
+                value,
+            ));
+        }
+        let lookup = |name: &str| {
+            variables
+                .iter()
+                .find(|(variable, _)| variable == name)
+                .map(|(_, value)| *value)
+        };
+        Config::from_args_with_env(std::iter::empty(), lookup)
+            .map_err(|error| error.to_string())?
+            .normalized()
     }
 
     fn parse(extra: &[&str]) -> Result<Config, String> {
@@ -687,6 +654,17 @@ mod tests {
         assert_eq!(config.max_upload_size, 50 * 1024 * 1024);
         assert_eq!(config.brand.brand_name, crate::branding::DEFAULT_NAME);
         assert_eq!(config.brand.brand_color, crate::branding::DEFAULT_COLOR);
+        // The parsers' reasons are literals too.
+        let hours = parse(&["--held-job-hours", "0"]).unwrap_err();
+        assert!(
+            hours.contains(&format!("from 1 to {MAX_HELD_JOB_HOURS}")),
+            "{hours}"
+        );
+        let length = parse(&["--password-minimum-length", "0"]).unwrap_err();
+        assert!(
+            length.contains(&format!("from 1 to {}", passwords::MAXIMUM_LENGTH)),
+            "{length}"
+        );
         let database = DatabaseOptions::from_args_with_env([].into_iter(), |_| None).unwrap();
         assert_eq!(database.database_url, DEFAULT_DATABASE_URL);
     }

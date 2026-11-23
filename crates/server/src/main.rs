@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use recto::{
     commands,
-    config::{Command, CommandLine, Config, DatabaseOptions, LogFormat},
+    config::{Command, CommandLine, DatabaseOptions, LogFormat},
     serve,
     state::open_database,
 };
@@ -20,8 +20,8 @@ async fn main() -> ExitCode {
         Err(error) => return usage_error(&error),
     };
     let result: Result<(), Box<dyn std::error::Error>> = match command_line.command {
-        Command::Serve(arguments) => {
-            let config = match Config::try_from(arguments) {
+        Command::Serve(config) => {
+            let config = match config.normalized() {
                 Ok(config) => config,
                 Err(message) => return usage_error(&message),
             };
