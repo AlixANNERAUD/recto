@@ -96,7 +96,6 @@ pub fn JobsPage() -> impl IntoView {
     });
     let jobs = OnceResource::new(list_jobs());
     let held = OnceResource::new(my_held_jobs());
-    let printers = OnceResource::new(list_printers());
     let currency = currency();
     view! {
         <Layout title=t!("jobs.title")>
@@ -108,7 +107,9 @@ pub fn JobsPage() -> impl IntoView {
                         // Absent until a device sends something.
                         Ok(rows) if rows.is_empty() => None,
                         Ok(rows) => {
-                            let printers = printers.await;
+                            // Only held jobs need the printers: asking CUPS for them on every
+                            // visit would cost a round trip for nothing.
+                            let printers = list_printers().await;
                             Some(view! { <Waiting rows printers now=unix_now() /> }.into_any())
                         }
                         Err(error) => Some(failure_alert(&error).into_any()),
