@@ -81,7 +81,10 @@ documents up to `RECTO_MAX_UPLOAD_SIZE` already get through.
 **Keep `/device/` out of the access log.** A personal address holds a device password. recto
 never logs it, but most proxies log every path. The examples turn it off for `/device/`:
 
-- **nginx:** a `location /device/` with `access_log off;` and the same proxy settings.
+- **nginx:** a `location /device/` with `access_log off;` and the same proxy settings. nginx's
+  error log quotes the request too, for instance when recto is restarting and the proxy cannot
+  reach it, so the block also sets `error_log <your error log> crit;`: only critical errors, such
+  as a full disk, are still written for `/device/`, and they may still name the path.
 - **Caddy:** `log_skip /device/*` (Caddy 2.8 or later).
 - **Apache:** `SetEnvIf Request_URI "^/device/" dontlog` and `env=!dontlog` on `CustomLog`.
 - **HAProxy:** `http-request set-log-level silent if { path_beg /device/ }`.
@@ -179,7 +182,7 @@ location / {
 
 The file also redirects port 80 to HTTPS. `proxy_buffering off` and `proxy_request_buffering off`
 stream bodies instead of writing them to temporary files. The `location /device/` block keeps
-personal printer addresses out of the access log (see
+personal printer addresses out of the access log and, but for critical errors, the error log (see
 [Printing from computers and phones](#printing-from-computers-and-phones)). To reach recto on the host, publish its
 port to the loopback address only (`127.0.0.1:8080:8080` under `ports`).
 
@@ -304,8 +307,8 @@ and Pro plans raises it: scan long batches in smaller stacks. Do not enable cach
 
    It prints `400` (an empty IPP request), not `302` or `401`, and the proxy's access log has no
    line for `/device/`.
-4. Scan a long batch, or one that takes more than a minute. **The connection to recto was cut
+5. Scan a long batch, or one that takes more than a minute. **The connection to recto was cut
    before the scan finished** means the proxy's timeout is too short.
-5. If you set `RECTO_TRUST_FORWARDED_HEADERS`, enter a wrong password from two devices. Each
+6. If you set `RECTO_TRUST_FORWARDED_HEADERS`, enter a wrong password from two devices. Each
    should be counted on its own (see [Password sign-in limit](../reference/accounts.md#password-sign-in-limit)).
-6. [Install recto as an app](install-app.md) on a phone or computer.
+7. [Install recto as an app](install-app.md) on a phone or computer.
