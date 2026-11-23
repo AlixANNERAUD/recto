@@ -30,7 +30,11 @@ flowchart LR
   there, devices can still add recto by its address (see the guides for each system), but not
   find it.
 - The host's firewall lets in TCP on the LAN listener's port (`8631` below) and UDP on port 5353
-  from the LAN.
+  from the LAN, and never UDP 5353 from the internet. recto's responder answers a query sent
+  from another port with a direct reply about twenty times its size, whatever the sender's
+  address, so on a host that is reachable from the internet it could be used to flood someone
+  else with replies to forged queries. On such a host, also set `RECTO_DNSSD_INTERFACES` to the
+  LAN interface alone, such as `RECTO_DNSSD_INTERFACES: eth1`.
 
 ## Announce recto with host networking
 

@@ -155,7 +155,11 @@ host's, which the host's avahi-daemon owns, and only on the interfaces of
 `RECTO_DNSSD_INTERFACES`: by default not on Docker's, virtual machines' or VPNs', whose addresses
 the LAN cannot reach and which would tell a VPN's peers about the printer. It announces where
 recto is, its name and the pages `/jobs` and `/scan`, as any network printer does, and no
-secret.
+secret. The responder, the `mdns-sd` library, answers a query sent from a port other than 5353
+directly, without checking that the sender is on the local network as RFC 6762 asks, and with an
+answer about twenty times the query's size. A spoofed query from the internet would turn recto
+into an amplifier, so UDP port 5353 must be firewalled from outside the LAN, and on a host with
+a public interface `RECTO_DNSSD_INTERFACES` should name the LAN interface alone.
 
 ## Scanning without a password
 
