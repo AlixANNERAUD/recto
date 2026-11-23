@@ -207,6 +207,9 @@ async fn available_username(database: &impl ConnectionTrait, base: &str) -> Resu
 
 /// Makes the user a member of exactly these groups, creating the ones not seen before. Groups
 /// left without members are kept: they are never deleted automatically.
+///
+/// It runs at every single sign-on, where the groups rarely change: when they have not, the
+/// user's groups are the only query.
 async fn replace_memberships(
     database: &impl ConnectionTrait,
     user_id: i64,
@@ -217,14 +220,38 @@ async fn replace_memberships(
         .map(String::as_str)
         .filter(|name| !name.is_empty())
         .collect();
-    let mut wanted = BTreeSet::new();
-    for name in names {
-        let existing = groups::Entity::find()
-            .filter(groups::Column::Name.eq(name))
-            .one(database)
-            .await?;
-        let group = match existing {
-            Some(group) => group,
+    let current: HashMap<String, i64> = groups::Entity::find()
+        .inner_join(group_memberships::Entity)
+        .filter(group_memberships::Column::UserId.eq(user_id))
+        .all(database)
+        .await?
+        .into_iter()
+        .map(|group| (group.name, group.id))
+        .collect();
+    if current.len() == names.len() && names.iter().all(|name| current.contains_key(*name)) {
+        return Ok(());
+    }
+
+    let joined: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|name| !current.contains_key(*name))
+        .collect();
+    let mut known: HashMap<String, i64> = if joined.is_empty() {
+        HashMap::new()
+    } else {
+        groups::Entity::find()
+            .filter(groups::Column::Name.is_in(joined.iter().copied()))
+            .all(database)
+            .await?
+            .into_iter()
+            .map(|group| (group.name, group.id))
+            .collect()
+    };
+    let mut added = Vec::new();
+    for name in joined {
+        let id = match known.remove(name) {
+            Some(id) => id,
             None => {
                 groups::ActiveModel {
                     name: Set(name.to_owned()),
@@ -233,30 +260,33 @@ async fn replace_memberships(
                 }
                 .insert(database)
                 .await?
+                .id
             }
         };
-        wanted.insert(group.id);
+        added.push(id);
     }
 
-    group_memberships::Entity::delete_many()
-        .filter(group_memberships::Column::UserId.eq(user_id))
-        .filter(group_memberships::Column::GroupId.is_not_in(wanted.iter().copied()))
-        .exec(database)
-        .await?;
-    let current: BTreeSet<i64> = group_memberships::Entity::find()
-        .filter(group_memberships::Column::UserId.eq(user_id))
-        .all(database)
-        .await?
-        .into_iter()
-        .map(|membership| membership.group_id)
+    let left: Vec<i64> = current
+        .iter()
+        .filter(|(name, _)| !names.contains(name.as_str()))
+        .map(|(_, id)| *id)
         .collect();
-    for group_id in wanted.difference(&current) {
-        group_memberships::ActiveModel {
-            group_id: Set(*group_id),
-            user_id: Set(user_id),
-            ..Default::default()
-        }
-        .insert(database)
+    if !left.is_empty() {
+        group_memberships::Entity::delete_many()
+            .filter(group_memberships::Column::UserId.eq(user_id))
+            .filter(group_memberships::Column::GroupId.is_in(left))
+            .exec(database)
+            .await?;
+    }
+    if !added.is_empty() {
+        group_memberships::Entity::insert_many(added.into_iter().map(|group_id| {
+            group_memberships::ActiveModel {
+                group_id: Set(group_id),
+                user_id: Set(user_id),
+                ..Default::default()
+            }
+        }))
+        .exec(database)
         .await?;
     }
     Ok(())
@@ -914,6 +944,39 @@ mod tests {
                 .await
                 .unwrap(),
             0
+        );
+    }
+
+    #[tokio::test]
+    async fn claimed_groups_join_existing_ones_and_create_the_others() {
+        let database = crate::testing::database().await;
+        let mut bob = identity("b", "bob");
+        bob.groups = Some(vec!["lab".to_owned()]);
+        let bob = sign_in_with_identity(&database, &bob).await.unwrap();
+        let mut alice = identity("s", "alice");
+        alice.groups = Some(vec!["staff".to_owned(), "x".to_owned()]);
+        let user = sign_in_with_identity(&database, &alice).await.unwrap();
+
+        alice.groups = Some(vec![
+            "staff".to_owned(),
+            "lab".to_owned(),
+            "new".to_owned(),
+            "new".to_owned(),
+            String::new(),
+        ]);
+        sign_in_with_identity(&database, &alice).await.unwrap();
+        assert_eq!(
+            group_names(&database, user.id).await,
+            ["lab", "new", "staff"]
+        );
+        assert_eq!(group_names(&database, bob.id).await, ["lab"]);
+        assert_eq!(groups::Entity::find().count(&database).await.unwrap(), 4);
+
+        // The same groups again change nothing.
+        sign_in_with_identity(&database, &alice).await.unwrap();
+        assert_eq!(
+            group_names(&database, user.id).await,
+            ["lab", "new", "staff"]
         );
     }
 
