@@ -173,17 +173,18 @@ pub async fn revoke_for_identity(
 /// How many device passwords each user has, for the Users page; users without any are left
 /// out.
 pub async fn counts(database: &impl ConnectionTrait) -> Result<HashMap<i64, usize>> {
-    let owners: Vec<i64> = device_passwords::Entity::find()
+    let counted: Vec<(i64, i64)> = device_passwords::Entity::find()
         .select_only()
         .column(device_passwords::Column::UserId)
+        .column_as(device_passwords::Column::Id.count(), "count")
+        .group_by(device_passwords::Column::UserId)
         .into_tuple()
         .all(database)
         .await?;
-    let mut counts = HashMap::new();
-    for owner in owners {
-        *counts.entry(owner).or_insert(0) += 1;
-    }
-    Ok(counts)
+    Ok(counted
+        .into_iter()
+        .map(|(owner, count)| (owner, usize::try_from(count).unwrap_or(0)))
+        .collect())
 }
 
 /// The id of the user's device password with this secret, if they have one.
