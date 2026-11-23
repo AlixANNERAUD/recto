@@ -711,10 +711,12 @@ fn purge_expired_results(results: Arc<ResultStore>) {
         let mut interval = tokio::time::interval(PURGE_INTERVAL);
         loop {
             interval.tick().await;
-            let results = Arc::clone(&results);
-            // Deleting files blocks.
-            let purged =
-                tokio::task::spawn_blocking(move || results.purge_expired(SystemTime::now())).await;
+            let purged = results
+                .blocking(|results| {
+                    results.purge_expired(SystemTime::now());
+                    Ok(())
+                })
+                .await;
             if let Err(error) = purged {
                 tracing::warn!(%error, "purging expired scan results failed");
             }

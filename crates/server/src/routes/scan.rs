@@ -2,7 +2,7 @@
 //! belongs to the id of the user who scanned it; anyone else's, an expired one and an
 //! unknown one all answer 404 alike.
 
-use std::{sync::Arc, time::SystemTime};
+use std::time::SystemTime;
 
 use axum::{
     Extension, Json,
@@ -93,15 +93,17 @@ pub async fn save(
 /// The bytes of a stored result, `None` when its file went missing under the index (a cleaned
 /// temporary directory).
 async fn read(state: &AppState, result: &ScanResult) -> Option<Vec<u8>> {
-    let results = Arc::clone(&state.results);
     let result = result.clone();
-    match tokio::task::spawn_blocking(move || results.read(&result)).await {
-        Ok(Ok(bytes)) => Some(bytes),
-        Ok(Err(error)) => {
+    match state
+        .results
+        .blocking(move |results| results.read(&result))
+        .await
+    {
+        Ok(bytes) => Some(bytes),
+        Err(error) => {
             tracing::warn!(%error, "reading a scan result failed");
             None
         }
-        Err(_) => None,
     }
 }
 

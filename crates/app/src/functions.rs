@@ -230,7 +230,7 @@ pub fn visible(
 
 #[cfg(feature = "ssr")]
 mod server {
-    use std::{collections::BTreeMap, sync::Arc};
+    use std::collections::BTreeMap;
 
     use embedded_i18n::Locale;
     use leptos::prelude::ServerFnError;
@@ -595,15 +595,16 @@ mod server {
             pages: Vec<ScannedPage>,
             format: OutputFormat,
         ) -> Result<ScanOutcome, ScanError> {
-            let results = Arc::clone(&self.state.results);
             let owner = self.user.id.to_string();
-            let stored = tokio::task::spawn_blocking(move || {
-                let count = pages.len();
-                let bytes = recto_scanning::assemble(pages, format)?;
-                results.put(&owner, format, count, &bytes)
-            })
-            .await
-            .map_err(|_| ScanError::Interrupted)??;
+            let stored = self
+                .state
+                .results
+                .blocking(move |results| {
+                    let count = pages.len();
+                    let bytes = recto_scanning::assemble(pages, format)?;
+                    results.put(&owner, format, count, &bytes)
+                })
+                .await?;
             Ok(ScanOutcome {
                 id: stored.id,
                 file_name: stored.file_name,

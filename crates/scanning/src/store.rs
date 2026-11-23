@@ -24,8 +24,8 @@ pub struct ScanResult {
     pub file_name: String,
 }
 
-/// Holds finished scans on disk until they expire. The I/O is blocking: callers run it through
-/// `spawn_blocking`.
+/// Holds finished scans on disk until they expire. The I/O is blocking: async callers run it
+/// through [`blocking`](Self::blocking).
 pub struct ResultStore {
     dir: PathBuf,
     ttl: Duration,
@@ -67,6 +67,18 @@ impl ResultStore {
             std::env::temp_dir().join(format!("recto-scans-{}", Uuid::new_v4())),
             ttl,
         )
+    }
+
+    /// Runs `work` on the blocking thread pool, so the file system never stalls the runtime. A
+    /// task that panicked is [`ScanError::Interrupted`].
+    pub async fn blocking<T: Send + 'static>(
+        self: &std::sync::Arc<Self>,
+        work: impl FnOnce(&ResultStore) -> Result<T, ScanError> + Send + 'static,
+    ) -> Result<T, ScanError> {
+        let store = std::sync::Arc::clone(self);
+        tokio::task::spawn_blocking(move || work(&store))
+            .await
+            .unwrap_or(Err(ScanError::Interrupted))
     }
 
     fn path(&self, result: &ScanResult) -> PathBuf {

@@ -34,7 +34,7 @@ pub struct AppState {
     pub printer_admin: Option<Arc<dyn PrinterAdmin>>,
     pub scan: Arc<dyn ScannerService>,
     /// Finished scans waiting to be downloaded or saved. Its I/O blocks: call it through
-    /// `tokio::task::spawn_blocking`. Results belong to the [`User::id`], as text.
+    /// [`ResultStore::blocking`]. Results belong to the [`User::id`], as text.
     pub results: Arc<ResultStore>,
     /// Where "Save" writes scans; `None` hides the button.
     pub output_dir: Option<PathBuf>,
