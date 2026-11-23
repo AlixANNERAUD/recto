@@ -148,7 +148,22 @@ async fn release(
         Ok(None) => return not_found(&state, parts).await,
         Err(status) => return status.into_response(),
     };
-    match release_held(&state.app, &user, job.id, fields.choices()).await {
+    // In a task of its own: the request is dropped when the browser goes away, and a release cut
+    // short after it was counted, before CUPS has the document, would leave it released and
+    // never printed.
+    let app = state.app.clone();
+    let releasing = user.clone();
+    let id = job.id;
+    let choices = fields.choices();
+    let outcome = tokio::spawn(async move { release_held(&app, &releasing, id, choices).await });
+    let outcome = match outcome.await {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            tracing::error!(%error, job = id, "releasing a held job failed");
+            Err(Rejected::Refusal(Refusal::Unavailable))
+        }
+    };
+    match outcome {
         Ok(Submitted { job, over }) => {
             let mut to = format!("/jobs?submitted={job}");
             if !over.is_empty() {

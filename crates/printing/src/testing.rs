@@ -55,6 +55,7 @@ pub struct MockPrintService {
     unavailable: Mutex<Option<String>>,
     refusal: Mutex<Option<String>>,
     lost_answer: Mutex<Option<String>>,
+    submit_delay: Mutex<std::time::Duration>,
 }
 
 /// A panicking test elsewhere must not hide the state from the assertions of this one.
@@ -110,6 +111,11 @@ impl MockPrintService {
         *lock(&self.lost_answer) = Some(reason.to_owned());
     }
 
+    /// Makes `submit` take `delay` before it queues the job, as a slow CUPS does.
+    pub fn delay_submissions(&self, delay: std::time::Duration) {
+        *lock(&self.submit_delay) = delay;
+    }
+
     pub fn submitted(&self) -> Vec<PrintRequest> {
         lock(&self.submitted).clone()
     }
@@ -146,6 +152,10 @@ impl PrintService for MockPrintService {
 
     async fn submit(&self, request: PrintRequest) -> Result<i32, PrintError> {
         self.check_available()?;
+        let delay = *lock(&self.submit_delay);
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
         if let Some(reason) = lock(&self.refusal).clone() {
             return Err(PrintError::Refused(reason));
         }

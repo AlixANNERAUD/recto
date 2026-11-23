@@ -152,6 +152,35 @@ async fn released_and_counted_in_one_transaction() {
 }
 
 #[tokio::test]
+async fn a_release_goes_on_when_the_browser_goes_away() {
+    let harness = Harness::new().await;
+    let (alice, cookie) = alice(&harness).await;
+    let (id, _) = hold(&harness, alice).await;
+    // The tab is closed while CUPS is slow: the proxy drops the request, counted but not sent.
+    harness
+        .print
+        .delay_submissions(std::time::Duration::from_millis(500));
+    let cut = tokio::time::timeout(
+        std::time::Duration::from_millis(150),
+        harness.send(release(id, &cookie, &[("printer", "office")])),
+    )
+    .await;
+    assert!(cut.is_err(), "the request was still waiting for CUPS");
+    // The release still reaches CUPS, rather than leaving a released job that never printed.
+    let started = std::time::Instant::now();
+    while harness.print.submitted().is_empty() {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the document reaches CUPS"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let released = job(&harness, alice, id).await.unwrap();
+    assert_eq!(released.state, HeldState::Released);
+    assert_eq!(ledger_rows(&harness).await[0].cups_job_id, Some(8));
+}
+
+#[tokio::test]
 async fn a_refused_release_stays_held() {
     let harness = Harness::new().await;
     let (alice, cookie) = alice(&harness).await;
