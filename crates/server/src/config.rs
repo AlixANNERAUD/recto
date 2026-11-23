@@ -338,6 +338,14 @@ impl Config {
                  the LAN listener, so set it too, such as [::]:8631",
             );
         }
+        // Its printer and scanners answer 404 when OS integration is off.
+        if config.dnssd && !config.os_integration {
+            return invalid(
+                "RECTO_DNSSD is true but RECTO_OS_INTEGRATION is false: DNS-SD would announce a \
+                 printer and scanners that are turned off, so turn OS integration on or DNS-SD \
+                 off",
+            );
+        }
         if let Some(name) = &mut config.dnssd_name {
             *name = name.trim().to_owned();
             if name.len() > dnssd::INSTANCE_MAX {
@@ -878,6 +886,18 @@ mod tests {
             (&["--dnssd", "yes"][..], "RECTO_DNSSD"),
             // DNS-SD announces the LAN listener: without it there is nothing to find.
             (&["--dnssd", "true"][..], "RECTO_LAN_LISTEN_ADDRESS"),
+            // Nor without OS integration, whose printer and scanners it would announce.
+            (
+                &[
+                    "--dnssd",
+                    "true",
+                    "--lan-listen-address",
+                    "[::]:8631",
+                    "--os-integration",
+                    "false",
+                ][..],
+                "RECTO_OS_INTEGRATION",
+            ),
             (
                 &[
                     "--lan-listen-address",

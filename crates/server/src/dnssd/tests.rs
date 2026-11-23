@@ -92,16 +92,11 @@ fn a_queue_without_apple_raster_announces_no_urf_and_plain_ipp_no_tls() {
 }
 
 #[test]
-fn a_public_url_under_a_path_keeps_it_and_a_huge_one_is_left_out() {
+fn a_huge_admin_url_is_left_out() {
     let mut advertised = advertised();
-    advertised.public_url = Url::parse("https://example.org/recto").unwrap();
-    let txt = printer_txt(&advertised);
-    assert_eq!(
-        value(&txt, "adminurl"),
-        Some("https://example.org/recto/jobs")
-    );
+    // RECTO_PUBLIC_URL has no path; only a very long host name makes the URL this long.
     advertised.public_url =
-        Url::parse(&format!("https://example.org/{}", "a".repeat(300))).unwrap();
+        Url::parse(&format!("https://{}.example.org", "a".repeat(240))).unwrap();
     assert_eq!(value(&printer_txt(&advertised), "adminurl"), None);
     advertised.instance = "é".repeat(200);
     let note = value(&printer_txt(&advertised), "note").unwrap().to_owned();
@@ -259,7 +254,7 @@ fn the_example_avahi_file_is_what_recto_writes() {
 }
 
 #[test]
-fn subtypes_are_registered() {
+fn the_printer_has_the_universal_subtype_and_scanners_none() {
     let advertised = advertised();
     let services = services(&advertised);
     let printer = service_info(&services[0], &advertised.host, advertised.port).unwrap();
@@ -386,18 +381,37 @@ fn info(id: &str, vendor: &str, model: &str) -> recto_scanning::ScannerInfo {
 #[test]
 fn scanner_instances_name_the_scanner_and_recto() {
     assert_eq!(
-        scanner_instance(&info("a", "Canon", "LiDE 300"), "recto"),
+        scanner_instance(&info("a", "Canon", "LiDE 300"), "recto", None),
         "Canon LiDE 300 (recto)"
     );
     assert_eq!(
-        scanner_instance(&info("a", " ", "LiDE 300 "), "Office"),
+        scanner_instance(&info("a", " ", "LiDE 300 "), "Office", None),
         "LiDE 300 (Office)"
     );
     // At most 63 bytes, cut on a character, the instance name kept.
-    let long = scanner_instance(&info("a", "Épson", &"é".repeat(40)), "recto");
+    let long = scanner_instance(&info("a", "Épson", &"é".repeat(40)), "recto", None);
     assert!(long.len() <= 63, "{long}");
     assert!(long.starts_with("Épson éé"), "{long}");
     assert!(long.ends_with(" (recto)"), "{long}");
+    // The key that tells two of one model apart is never cut off.
+    let tagged = scanner_instance(
+        &info("a", "Épson", &"é".repeat(40)),
+        "recto",
+        Some("1a2b3c4d"),
+    );
+    assert!(tagged.len() <= 63, "{tagged}");
+    assert!(tagged.ends_with(" 1a2b3c4d (recto)"), "{tagged}");
+    // A brand name as long as RECTO_DNSSD_NAME allows still leaves the scanner its name.
+    let brand = "b".repeat(61);
+    for tag in [None, Some("1a2b3c4d")] {
+        let name = scanner_instance(&info("a", "Canon", "LiDE 300"), &brand, tag);
+        assert!(name.len() <= 63, "{name}");
+        assert!(name.starts_with("Canon LiDE 300 "), "{name}");
+        assert!(name.ends_with("bb)"), "{name}");
+        if let Some(tag) = tag {
+            assert!(name.contains(tag), "{name}");
+        }
+    }
 }
 
 #[test]

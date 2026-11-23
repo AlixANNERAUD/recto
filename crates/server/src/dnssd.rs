@@ -109,12 +109,19 @@ fn label(info: &ScannerInfo) -> String {
         .join(" ")
 }
 
+/// The bytes a scanner's own name keeps, however long recto's instance name is.
+const LABEL_MIN: usize = 16;
+
 /// A scanner's instance name: `<vendor> <model> (<instance>)`, so that it differs from the name
-/// a network scanner announces itself under, at most [`INSTANCE_MAX`] bytes with the label cut.
-pub fn scanner_instance(info: &ScannerInfo, instance: &str) -> String {
-    let suffix = format!(" ({})", instance.trim());
-    let room = INSTANCE_MAX.saturating_sub(suffix.len());
-    format!("{}{suffix}", cut(&label(info), room).trim_end())
+/// a network scanner announces itself under, with `tag` after the model when two scanners share
+/// it. At most [`INSTANCE_MAX`] bytes: recto's instance name is cut to leave the scanner
+/// [`LABEL_MIN`] bytes, then the vendor and model are, never the tag.
+pub fn scanner_instance(info: &ScannerInfo, instance: &str, tag: Option<&str>) -> String {
+    let tag = tag.map(|tag| format!(" {tag}")).unwrap_or_default();
+    let room = INSTANCE_MAX.saturating_sub(LABEL_MIN + tag.len() + " ()".len());
+    let suffix = format!(" ({})", cut(instance.trim(), room).trim_end());
+    let room = INSTANCE_MAX.saturating_sub(suffix.len() + tag.len());
+    format!("{}{tag}{suffix}", cut(&label(info), room).trim_end())
 }
 
 /// A scanner as its eSCL capabilities describe it, announced as `name`.
@@ -174,16 +181,11 @@ pub async fn open_scanners(
                 continue;
             }
         };
-        let mut name = scanner_instance(&scanner, instance);
+        let mut name = scanner_instance(&scanner, instance, None);
         // A second scanner of one model: the key tells it apart, as its eSCL address does.
         if announced.iter().any(|known| known.name == name) {
-            let mut labelled = scanner.clone();
-            labelled.model = format!(
-                "{} {}",
-                scanner.model.trim(),
-                escl::scanner_key(&scanner.id)
-            );
-            name = scanner_instance(&labelled, instance);
+            let key = escl::scanner_key(&scanner.id);
+            name = scanner_instance(&scanner, instance, Some(&key));
         }
         announced.push(advertised_scanner(&scanner, &caps, public_url, name));
     }
