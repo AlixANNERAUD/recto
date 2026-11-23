@@ -31,6 +31,7 @@ fn printer() -> VirtualPrinter {
         default_media: Media::A4,
         formats: DOCUMENT_FORMATS.to_vec(),
         started_at: Utc.with_ymd_and_hms(2026, 11, 23, 8, 0, 0).unwrap(),
+        accepting_jobs: true,
     }
 }
 
@@ -460,6 +461,16 @@ fn unknown_operations_and_versions_are_refused() {
         decode(future.to_bytes()).unwrap_err(),
         StatusCode::ServerErrorVersionNotSupported
     );
+    // Only the versions recto speaks: 1.0 and 1.1, 2.0 to 2.2.
+    for version in [0x0102, 0x0203, 0x0209] {
+        let mut odd = request(IppOperation::GetPrinterAttributes);
+        odd.header_mut().version = IppVersion(version);
+        assert_eq!(
+            decode(odd.to_bytes()).unwrap_err(),
+            StatusCode::ServerErrorVersionNotSupported,
+            "{version:x}"
+        );
+    }
     for version in [IppVersion::v1_0(), IppVersion::v2_1(), IppVersion::v2_2()] {
         let mut old = request(IppOperation::GetPrinterAttributes);
         old.header_mut().version = version;
@@ -723,5 +734,79 @@ fn the_printer_accepts_its_formats() {
     assert_ne!(
         VirtualPrinter::uuid_for("https://print.example.org"),
         VirtualPrinter::uuid_for("https://other.example.org")
+    );
+}
+
+#[test]
+fn unknown_which_jobs_are_refused() {
+    let mut get = request(IppOperation::GetJobs);
+    add(
+        &mut get,
+        DelimiterTag::OperationAttributes,
+        "which-jobs",
+        keyword("fetchable"),
+    );
+    assert_eq!(
+        decode(get.to_bytes()).unwrap_err(),
+        StatusCode::ClientErrorAttributesOrValuesNotSupported
+    );
+}
+
+#[test]
+fn unsupported_values_that_cannot_encode_go_back_out_of_band() {
+    // An unclosed collection parses as an empty set, which would encode without a length.
+    for value in [
+        IppValue::Array(Vec::new()),
+        IppValue::Array(vec![IppValue::Integer(1), IppValue::Array(Vec::new())]),
+    ] {
+        let echoed = super::operations::echoable(&attribute("copies", value));
+        assert_eq!(echoed.name().as_str(), "copies");
+        assert!(matches!(echoed.value(), IppValue::Other { tag: 0x10, .. }));
+    }
+    let kept = super::operations::echoable(&attribute("copies", IppValue::Integer(0)));
+    assert_eq!(kept.value(), &IppValue::Integer(0));
+}
+
+#[test]
+fn extra_operation_attributes_join_the_operation_group() {
+    let incoming = decode(request(IppOperation::GetJobs).to_bytes()).unwrap();
+    let message = attribute(
+        "status-message",
+        IppValue::new_text_without_language("Held").unwrap(),
+    );
+    let answer = parse(&response(
+        &incoming,
+        0,
+        vec![(DelimiterTag::OperationAttributes, vec![message])],
+    ));
+    let operation = answer
+        .attributes()
+        .first_of(DelimiterTag::OperationAttributes)
+        .unwrap();
+    assert!(operation.get("attributes-charset").is_some());
+    assert!(operation.get("status-message").is_some());
+}
+
+#[test]
+fn long_job_names_are_cut_and_a_full_queue_refuses() {
+    let printer = VirtualPrinter {
+        accepting_jobs: false,
+        ..printer()
+    };
+    let long = JobView {
+        name: "é".repeat(200),
+        ..job(JobViewState::Completed)
+    };
+    let attributes = printer.job_attributes(&long, &plain(), "", &strings(&["job-name"]), now());
+    let IppValue::NameWithoutLanguage(name) = find(&attributes, "job-name").unwrap() else {
+        panic!("no job-name");
+    };
+    assert!(name.as_str().len() <= 255);
+    assert!(name.as_str().chars().all(|c| c == 'é'));
+    let attributes =
+        printer.printer_attributes(&plain(), &strings(&["printer-is-accepting-jobs"]), 0, now());
+    assert_eq!(
+        find(&attributes, "printer-is-accepting-jobs"),
+        Some(&IppValue::Boolean(false))
     );
 }

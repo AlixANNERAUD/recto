@@ -152,13 +152,17 @@ pub struct VirtualPrinter {
     pub uuid: Uuid,
     /// The page where the person releases their jobs.
     pub more_info: String,
-    /// Absolute URLs of PNG icons; none leaves `printer-icons` out.
+    /// Absolute URLs of PNG icons; none leaves `printer-icons` out, which PWG 5100.14 requires,
+    /// so the server always gives the brand's.
     pub icons: Vec<String>,
     pub default_media: Media,
     /// MIME types, [`DOCUMENT_FORMATS`] today.
     pub formats: Vec<&'static str>,
     /// When recto started: the printer's configuration and state date from then.
     pub started_at: DateTime<Utc>,
+    /// Whether jobs can be kept: `false` when the held documents' directory is not usable, so
+    /// devices are told before they send rather than failing at the write.
+    pub accepting_jobs: bool,
 }
 
 /// The address a request came in on, echoed in every URI recto returns: clients switch to the
@@ -382,7 +386,10 @@ impl VirtualPrinter {
             set(self.icons.iter().map(|icon| uri_value(icon))),
         );
         put("printer-info", text(&self.name));
-        put("printer-is-accepting-jobs", Some(IppValue::Boolean(true)));
+        put(
+            "printer-is-accepting-jobs",
+            Some(IppValue::Boolean(self.accepting_jobs)),
+        );
         put("printer-location", text(""));
         put(
             "printer-make-and-model",
@@ -465,7 +472,7 @@ impl VirtualPrinter {
             "job-uuid",
             uri_value(&format!("urn:uuid:{}", self.job_uuid(job.id))),
         );
-        put("job-name", name(&job.name));
+        put("job-name", name(&truncate(&job.name, 255)));
         put("job-originating-user-name", name(&job.device));
         let (state, reason) = if completed {
             (9, "job-completed-successfully")

@@ -121,7 +121,7 @@ pub fn decode(body: Bytes) -> Result<Incoming, StatusCode> {
 
     let first: &[u8; 8] = body.get(..8).and_then(|b| b.try_into().ok()).ok_or(Bad)?;
     let head = header(first);
-    if !matches!(head.version.0, 1 | 2) {
+    if !matches!(head.version, (1, 0..=1) | (2, 0..=2)) {
         return Err(StatusCode::ServerErrorVersionNotSupported);
     }
     if head.request_id == 0 || i32::try_from(head.request_id).is_err() {
@@ -195,10 +195,8 @@ pub fn decode(body: Bytes) -> Result<Incoming, StatusCode> {
                 None | Some("not-completed") => WhichJobs::NotCompleted,
                 Some("completed") => WhichJobs::Completed,
                 Some("all") => WhichJobs::All,
-                Some(_) => {
-                    unsupported.extend(request.attribute("which-jobs").cloned());
-                    WhichJobs::NotCompleted
-                }
+                // RFC 8011 section 4.2.6.1: refused, not ignored.
+                Some(_) => return Err(StatusCode::ClientErrorAttributesOrValuesNotSupported),
             },
             limit: request
                 .operation("limit")
@@ -264,12 +262,38 @@ pub fn response(
     )
 }
 
+/// An unsupported attribute as it can go back to the client: as sent, or with the out-of-band
+/// `unsupported` value when it holds an empty set, which would encode without a value length
+/// (a collection left unclosed parses as one) and desync the client's parser.
+pub(super) fn echoable(attribute: &IppAttribute) -> IppAttribute {
+    fn encodes(value: &IppValue) -> bool {
+        match value {
+            IppValue::Array(values) => !values.is_empty() && values.iter().all(encodes),
+            IppValue::Collection(members) => members.values().all(encodes),
+            _ => true,
+        }
+    }
+    if encodes(attribute.value()) {
+        attribute.clone()
+    } else {
+        IppAttribute::new(
+            attribute.name().clone(),
+            IppValue::Other {
+                tag: 0x10,
+                data: Bytes::new(),
+            },
+        )
+    }
+}
+
 /// The answer to a request [`decode`] refused, from the header the route already read.
 pub fn refusal(header: &Header, status: u16) -> Bytes {
     // Answer in the closest version recto speaks when the request's is not one of them.
     let version = match header.version {
-        (1 | 2, _) => IppVersion(u16::from_be_bytes([header.version.0, header.version.1])),
-        (0, _) => IppVersion::v1_1(),
+        (1, 0..=1) | (2, 0..=2) => {
+            IppVersion(u16::from_be_bytes([header.version.0, header.version.1]))
+        }
+        (0 | 1, _) => IppVersion::v1_1(),
         _ => IppVersion::v2_0(),
     };
     encode(version, header.request_id, status, std::iter::empty())
@@ -286,6 +310,18 @@ fn encode(
         .expect("a response header always builds");
     response.header_mut().operation_or_status = i16::from_be_bytes(status.to_be_bytes());
     for (tag, attributes) in groups {
+        // The encoder writes only the first operation group: extra operation attributes, such
+        // as a status message, join it.
+        if tag == DelimiterTag::OperationAttributes
+            && let Some(operation) = response
+                .attributes_mut()
+                .groups_mut()
+                .iter_mut()
+                .find(|group| group.tag() == DelimiterTag::OperationAttributes)
+        {
+            operation.attributes_mut().extend(attributes);
+            continue;
+        }
         let mut group = IppAttributeGroup::new(tag);
         group.attributes_mut().extend(attributes);
         // One group each: `IppAttributes::add` would merge every job into the first job group.
@@ -360,10 +396,6 @@ impl Request<'_> {
             .map(|k| k.as_str().to_owned())
     }
 
-    fn attribute(&self, name: &str) -> Option<&IppAttribute> {
-        self.operation.get(name)
-    }
-
     fn name(&self) -> Option<String> {
         self.operation("job-name").and_then(string)
     }
@@ -429,7 +461,7 @@ impl Request<'_> {
             if let Some(attribute) = self.template(name)
                 && !apply(attribute.value())
             {
-                unsupported.push(attribute.clone());
+                unsupported.push(echoable(attribute));
             }
         };
 
