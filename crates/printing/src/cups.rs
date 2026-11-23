@@ -1,7 +1,14 @@
 //! The real print service: IPP requests to a CUPS server.
 
-use std::io::{Cursor, Read};
+use std::collections::VecDeque;
+use std::convert::Infallible;
+use std::io::Cursor;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Duration;
+
+use bytes::Bytes;
+use http_body::{Frame, SizeHint};
 
 use ipp::attribute::{IppAttribute, IppAttributeGroup};
 use ipp::model::{DelimiterTag, IppVersion, Operation, StatusCode};
@@ -122,17 +129,7 @@ impl Cups {
         uri: &Uri,
         request: impl Into<IppRequestResponse>,
     ) -> Result<IppRequestResponse, PrintError> {
-        self.send_within(uri, request, None).await
-    }
-
-    /// [`send`](Self::send) with another total timeout than the client's.
-    async fn send_within(
-        &self,
-        uri: &Uri,
-        request: impl Into<IppRequestResponse>,
-        timeout: Option<Duration>,
-    ) -> Result<IppRequestResponse, PrintError> {
-        self.exchange(uri, request, timeout)
+        self.exchange(uri, request, None, None)
             .await
             .map_err(|failure| match failure {
                 Failure::Unsent(error) => error,
@@ -140,20 +137,22 @@ impl Cups {
             })
     }
 
-    /// Sends an IPP request and reads the answer, telling a request CUPS never got from one it
-    /// may have acted on.
+    /// Sends an IPP request, followed by `document` if any, and reads the answer, telling a
+    /// request CUPS never got from one it may have acted on. `timeout` replaces the client's.
     async fn exchange(
         &self,
         uri: &Uri,
         request: impl Into<IppRequestResponse>,
+        document: Option<Bytes>,
         timeout: Option<Duration>,
     ) -> Result<IppRequestResponse, Failure> {
-        let request = request.into();
-        let mut body = request.to_bytes().to_vec();
-        request
-            .into_payload()
-            .read_to_end(&mut body)
-            .map_err(|error| Failure::Unsent(PrintError::Unavailable(error.to_string())))?;
+        let attributes = request.into().to_bytes();
+        let body = match document {
+            None => reqwest::Body::from(attributes),
+            // The document goes out as it is, never copied next to the attributes: it can be
+            // as large as the upload limit.
+            Some(document) => reqwest::Body::wrap(Chunks(VecDeque::from([attributes, document]))),
+        };
 
         let mut post = self
             .client
@@ -188,7 +187,7 @@ impl Cups {
             .bytes()
             .await
             .map_err(|error| Failure::Unanswered(error_chain(&error)))?;
-        IppParser::new(IppReader::new(Cursor::new(bytes.to_vec())))
+        IppParser::new(IppReader::new(Cursor::new(bytes)))
             .parse()
             .map_err(|error| Failure::Unanswered(format!("unreadable CUPS answer: {error}")))
     }
@@ -269,7 +268,8 @@ impl PrintService for Cups {
         // The builder keeps the URI as given, and CUPS expects the ipp scheme in the attribute.
         let operation = IppOperationBuilder::print_job(
             ipp::util::canonicalize_uri(&uri),
-            IppPayload::new(Cursor::new(request.document)),
+            // The document follows the attributes in `exchange`, without a copy.
+            IppPayload::empty(),
         )
         .user_name(&request.user)
         .job_title(&request.job_name)
@@ -280,7 +280,12 @@ impl PrintService for Cups {
         // What follows sending may hide a job CUPS queued: the caller must not take it as a
         // refusal.
         let response = self
-            .exchange(&uri, operation, Some(SUBMIT_TIMEOUT))
+            .exchange(
+                &uri,
+                operation,
+                Some(request.document),
+                Some(SUBMIT_TIMEOUT),
+            )
             .await
             .map_err(|failure| match failure {
                 Failure::Unsent(error) => error,
@@ -365,6 +370,30 @@ impl PrintService for Cups {
         );
         let response = self.send(&root, cancel).await?;
         check(&response, not_found)
+    }
+}
+
+/// An IPP request's attributes then its document, each sent as its own chunk. The exact length
+/// gives CUPS a `Content-Length`.
+struct Chunks(VecDeque<Bytes>);
+
+impl http_body::Body for Chunks {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
+        Poll::Ready(self.0.pop_front().map(|chunk| Ok(Frame::data(chunk))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        SizeHint::with_exact(self.0.iter().map(|chunk| chunk.len() as u64).sum())
     }
 }
 

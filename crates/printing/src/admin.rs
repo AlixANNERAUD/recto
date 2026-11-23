@@ -102,7 +102,7 @@ impl CupsAdmin {
             .header("content-type", "application/ipp")
             .header("authorization", format!("PeerCred {USER}"))
             .timeout(timeout)
-            .body(request.to_bytes().to_vec())
+            .body(request.to_bytes())
             .send()
             .await
             .map_err(|error| AdminError::Unavailable(error_chain(&error)))?;
@@ -120,7 +120,7 @@ impl CupsAdmin {
             .bytes()
             .await
             .map_err(|error| AdminError::Unavailable(error_chain(&error)))?;
-        IppParser::new(IppReader::new(Cursor::new(bytes.to_vec())))
+        IppParser::new(IppReader::new(Cursor::new(bytes)))
             .parse()
             .map_err(|error| AdminError::Unavailable(format!("unreadable CUPS answer: {error}")))
     }

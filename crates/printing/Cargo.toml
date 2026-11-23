@@ -16,7 +16,7 @@ workspace = true
 # Everything touching `ipp` or `bytes` stays out of the default build so the models compile for
 # wasm32 in the browser bundle. The server and the `ssr` feature of the interface enable it.
 # The virtual printer names itself and its jobs with UUID v5 and dates its attributes with chrono.
-service = ["dep:ipp", "ipp/chrono", "dep:bytes", "dep:async-trait", "dep:url", "dep:percent-encoding", "dep:reqwest", "dep:lopdf", "dep:flate2", "dep:tokio", "dep:uuid", "uuid/v5", "dep:chrono"]
+service = ["dep:ipp", "ipp/chrono", "dep:bytes", "dep:http-body", "dep:async-trait", "dep:url", "dep:percent-encoding", "dep:reqwest", "dep:lopdf", "dep:flate2", "dep:tokio", "dep:uuid", "uuid/v5", "dep:chrono"]
 # Test doubles for the consumers of `PrintService`. Never enabled in the release build.
 testing = ["service"]
 
@@ -25,6 +25,7 @@ serde.workspace = true
 thiserror.workspace = true
 ipp = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
+http-body = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }

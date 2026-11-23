@@ -264,6 +264,11 @@ async fn submits_pdf_with_options() {
 
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 1);
+    // Sent in chunks, but with its length: not every server takes a chunked request.
+    assert_eq!(
+        requests[0].headers["content-length"],
+        requests[0].body.len().to_string()
+    );
     let sent = parse(&requests[0].body);
     assert_eq!(
         sent.header().operation_or_status,
