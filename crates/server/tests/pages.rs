@@ -171,7 +171,7 @@ impl Harness {
             print,
             scan: scan.clone(),
             results: Arc::new(ResultStore::new(
-                dir.path().join("results"),
+                dir.path().to_owned(),
                 Duration::from_secs(3600),
             )),
             output_dir: Some(dir.path().join("saved")),

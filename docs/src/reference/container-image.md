@@ -53,7 +53,7 @@ container next to recto's: with `--network container:<recto>` it shares recto's 
 | `/data` | The SQLite database, `recto.db` with its `-wal` and `-shm` files, unless `RECTO_DATABASE_URL` points elsewhere. Mount a volume here: `compose.yml` mounts `recto-data`. |
 | `/data/held` | Documents sent from computers and phones, until they are released, deleted or expire (`RECTO_HELD_JOB_HOURS`). Readable by recto alone. `RECTO_DATA_DIR` moves it with `/data`. |
 | `/data/lan-tls` | The LAN listener's self-signed certificate and key, made at its first start and kept, since devices remember the certificate. Readable by recto alone. Not written with `RECTO_LAN_TLS_CERTIFICATE` and `RECTO_LAN_TLS_KEY`. |
-| `/tmp/recto-scans` | Scan results, deleted after an hour. In `compose.yml`, `/tmp` is a memory-backed `tmpfs`. |
+| `/tmp/recto-scans-*` | Scan results, deleted after an hour, in a directory named at random when recto starts and readable by recto alone. In `compose.yml`, `/tmp` is a memory-backed `tmpfs`. |
 | `RECTO_SCAN_OUTPUT_DIR` | Scans saved with **Save to folder**. |
 
 Everything else can be read-only: `compose.yml` runs the container with `read_only: true`. A new

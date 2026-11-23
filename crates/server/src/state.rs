@@ -1,6 +1,6 @@
 //! Building the services from the configuration.
 
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use recto_app::{
@@ -162,20 +162,6 @@ pub fn without_password(url: &str) -> String {
     }
 }
 
-/// The directory of scan results, private to recto. Results of a previous run are unreachable
-/// (they were only indexed in memory), so it starts empty.
-pub fn results_dir() -> std::io::Result<PathBuf> {
-    let dir = std::env::temp_dir().join("recto-scans");
-    match std::fs::remove_dir_all(&dir) {
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
-        _ => {}
-    }
-    std::fs::create_dir_all(&dir)?;
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-    Ok(dir)
-}
-
 /// The printer administration client, when the CUPS socket is configured. CUPS may start after
 /// recto, so a socket that is not there yet only earns a warning.
 fn printer_admin(config: &Config) -> Option<Arc<dyn PrinterAdmin>> {
@@ -215,13 +201,11 @@ pub async fn build(
     database: DatabaseConnection,
     branding: Branding,
 ) -> (AppState, AuthState) {
-    let dir = results_dir().unwrap_or_else(|error| {
+    let results = ResultStore::private(SCAN_RESULT_TTL).unwrap_or_else(|error| {
         // Scanning reports the storage error when it is used; printing must not suffer.
-        let dir = std::env::temp_dir().join("recto-scans");
-        tracing::warn!(%error, dir = %dir.display(), "the scan results directory is not usable");
-        dir
+        tracing::warn!(%error, "the scan results directory is not usable");
+        ResultStore::unusable(SCAN_RESULT_TTL)
     });
-    let results = ResultStore::new(dir, SCAN_RESULT_TTL);
     let state = AppState {
         print: Arc::new(Cups::new(config.cups_url.clone())),
         printer_admin: printer_admin(config),

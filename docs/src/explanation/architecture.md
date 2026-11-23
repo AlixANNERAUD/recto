@@ -103,7 +103,7 @@ recto keeps little, and only in its database on disk:
 | Printer prices | the database | until changed or forgotten |
 | Quota rules, their grants and resets | the database | until the rule is deleted |
 | The scan log: who scanned how many pages, on which scanner, and when | the database | kept |
-| Scan results | `/tmp/recto-scans` | 1 hour, or until recto restarts |
+| Scan results | `/tmp/recto-scans-*` | 1 hour, or until recto restarts |
 | Documents sent from computers and phones, held | `RECTO_DATA_DIR/held`, and a row in the database | until released, deleted or expired (`RECTO_HELD_JOB_HOURS`) |
 | The scanner list | memory | until someone looks again |
 | Password sign-in attempts | memory | a few seconds, or until recto restarts |

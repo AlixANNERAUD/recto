@@ -1,6 +1,8 @@
 use std::{
     collections::HashMap,
     fs,
+    io::Write,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::PathBuf,
     sync::Mutex,
     time::{Duration, SystemTime},
@@ -28,15 +30,43 @@ pub struct ResultStore {
     dir: PathBuf,
     ttl: Duration,
     results: Mutex<HashMap<Uuid, ScanResult>>,
+    /// Removes the directory of [`private`](Self::private) with the store.
+    _owned: Option<tempfile::TempDir>,
 }
 
 impl ResultStore {
+    /// A store in `dir`, which must exist: the store never creates it, so a missing one fails
+    /// every scan rather than being made with whatever rights the process happens to have.
     pub fn new(dir: PathBuf, ttl: Duration) -> Self {
         Self {
             dir,
             ttl,
             results: Mutex::new(HashMap::new()),
+            _owned: None,
         }
+    }
+
+    /// A store in a new directory of the system's temporary one, named at random and readable by
+    /// recto alone, so no other local user can have made it first or read what it holds. It is
+    /// removed with the store. Results of an earlier run were only indexed in memory, so starting
+    /// empty loses nothing.
+    pub fn private(ttl: Duration) -> std::io::Result<Self> {
+        let owned = tempfile::Builder::new()
+            .prefix("recto-scans-")
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()?;
+        let mut store = Self::new(owned.path().to_owned(), ttl);
+        store._owned = Some(owned);
+        Ok(store)
+    }
+
+    /// A store whose every scan fails with a storage error, for when [`private`](Self::private)
+    /// could not make its directory: its path is random and never created.
+    pub fn unusable(ttl: Duration) -> Self {
+        Self::new(
+            std::env::temp_dir().join(format!("recto-scans-{}", Uuid::new_v4())),
+            ttl,
+        )
     }
 
     fn path(&self, result: &ScanResult) -> PathBuf {
@@ -76,8 +106,14 @@ impl ResultStore {
             path: self.dir.clone(),
             reason: e.to_string(),
         };
-        fs::create_dir_all(&self.dir).map_err(storage)?;
-        fs::write(self.path(&result), bytes).map_err(storage)?;
+        // Readable by recto alone, like its directory; never over an existing file.
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(self.path(&result))
+            .and_then(|mut file| file.write_all(bytes))
+            .map_err(storage)?;
         self.lock().insert(result.id, result.clone());
         Ok(result)
     }
@@ -125,8 +161,10 @@ mod tests {
     #[test]
     fn store_round_trip_and_owner_isolation() {
         let dir = temp_dir();
-        let store = ResultStore::new(dir.path().join("results"), Duration::from_secs(60));
+        let store = ResultStore::new(dir.path().to_owned(), Duration::from_secs(60));
         let r = store.put("alice", OutputFormat::Pdf, 2, b"%PDF").unwrap();
+        let mode = fs::metadata(store.path(&r)).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
         assert_eq!(r.pages, 2);
         assert!(r.file_name.starts_with("scan-") && r.file_name.ends_with(".pdf"));
         assert_eq!(r.file_name.len(), "scan-20260101-120000.pdf".len());
@@ -134,6 +172,34 @@ mod tests {
         assert_eq!(store.read(&got).unwrap(), b"%PDF");
         assert_eq!(store.get("bob", r.id), None);
         assert_eq!(store.get("alice", Uuid::new_v4()), None);
+    }
+
+    #[test]
+    fn a_private_store_is_new_closed_and_removed_with_it() {
+        let store = ResultStore::private(Duration::from_secs(60)).unwrap();
+        let dir = store.dir.clone();
+        assert!(
+            dir.file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("recto-scans-")
+        );
+        let mode = fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+        store.put("alice", OutputFormat::Png, 1, b"png").unwrap();
+        drop(store);
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn an_unusable_store_fails_without_creating_its_directory() {
+        let store = ResultStore::unusable(Duration::from_secs(60));
+        assert!(matches!(
+            store.put("alice", OutputFormat::Png, 1, b"png"),
+            Err(ScanError::Storage { .. })
+        ));
+        assert!(!store.dir.exists());
     }
 
     #[test]

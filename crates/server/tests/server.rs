@@ -181,10 +181,7 @@ impl Harness {
                 })),
         );
         let scan = Arc::new(setup.scanner.unwrap_or_default());
-        let results = Arc::new(ResultStore::new(
-            dir.path().join("results"),
-            setup.result_ttl,
-        ));
+        let results = Arc::new(ResultStore::new(dir.path().to_owned(), setup.result_ttl));
         let site = dir.path().join("site");
         std::fs::create_dir_all(site.join("pkg")).unwrap();
         std::fs::write(site.join("pkg/recto.css"), STYLESHEET).unwrap();

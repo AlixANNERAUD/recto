@@ -85,7 +85,7 @@ only.
 | warn | `recording a device's last use failed`: the device is still let in | `error`, `device_password_id` |
 | warn | `reading the user information failed` | `error` |
 | warn | `SANE could not start; scanning is off`, `SANE crashed while starting; scanning is off` | `error` |
-| warn | `the scan results directory is not usable` | `error`, `dir` |
+| warn | `the scan results directory is not usable`: scanning fails until recto restarts | `error` |
 | warn | `the held documents directory is not usable` | `error`, `dir` |
 | warn | `held jobs whose release never finished are held again`: recto stopped during a release, before the job was counted | `count` |
 | warn | `a held job that never reached the printing service is held again`: the job was counted, then refused by CUPS and could not be put back, or recto stopped before sending it; 10 minutes later the sweep refunds it and puts it back with its document | `job`, `entry` |

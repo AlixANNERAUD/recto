@@ -22,8 +22,9 @@ the scanner does better by re-feeding the stack.
 
 ## Results belong to one person, for an hour
 
-The finished file is written to `/tmp/recto-scans` under a random id, and the page shows **Scan
-ready**. Only the person who scanned can download or save it: a result found under someone
+The finished file is written under a random id to a directory recto makes when it starts,
+`/tmp/recto-scans-` followed by random characters and readable by recto alone, and the page
+shows **Scan ready**. Only the person who scanned can download or save it: a result found under someone
 else's id answers as if it did not exist.
 
 Results are deleted an hour after the scan, and all of them when recto restarts, so the

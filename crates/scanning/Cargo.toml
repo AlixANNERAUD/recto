@@ -26,6 +26,7 @@ service = [
     "dep:rustix",
     "dep:quick-xml",
     "dep:sha2",
+    "dep:tempfile",
 ]
 # Test doubles for the consumers of `ScannerService`. Never enabled in the release build.
 testing = ["service"]
@@ -47,6 +48,8 @@ libsane = { version = "0.1", features = ["image"], optional = true }
 # eSCL: the ScanSettings parser, and the scanner keys (SHA-256 of the SANE id).
 quick-xml = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
+# The scan results' directory: named at random and private to recto.
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Enables `service` for this crate's own tests, so `cargo nextest run -p recto-scanning` compiles
