@@ -69,14 +69,23 @@ impl StateReason {
         } else {
             (keyword, Severity::Error)
         };
-        // A printer that is only being connected to is not offline: CUPS reports this on a
-        // healthy printer at the start of most jobs, without a suffix, so it is a report
-        // whatever the suffix says.
-        if base == "connecting-to-device" {
-            return Some(StateReason {
-                kind: ReasonKind::Connecting,
-                severity: Severity::Report,
-            });
+        // A printer that is only being connected to, or paused, is not offline: CUPS sends both
+        // without a suffix (`connecting-to-device` at the start of most jobs on a healthy
+        // printer, `paused` after Pause-Printer), so they are reports whatever the suffix says.
+        match base {
+            "connecting-to-device" => {
+                return Some(StateReason {
+                    kind: ReasonKind::Connecting,
+                    severity: Severity::Report,
+                });
+            }
+            "paused" => {
+                return Some(StateReason {
+                    kind: ReasonKind::Paused,
+                    severity: Severity::Report,
+                });
+            }
+            _ => {}
         }
         let kind = match base {
             "offline" => ReasonKind::Offline,
@@ -89,7 +98,6 @@ impl StateReason {
             "marker-supply-low" => ReasonKind::MarkerSupplyLow,
             "door-open" => ReasonKind::DoorOpen,
             "cover-open" => ReasonKind::CoverOpen,
-            "paused" => ReasonKind::Paused,
             other => ReasonKind::Other(other.to_owned()),
         };
         Some(StateReason { kind, severity })
