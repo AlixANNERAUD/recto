@@ -15,6 +15,7 @@ use crate::{
     ScannedPage, ScannerCapabilities, ScannerInfo, Source, capabilities, check_page_bytes,
 };
 
+use crate::escl;
 use crate::service::ScannerService;
 
 type Reply<T> = oneshot::Sender<Result<T, ScanError>>;
@@ -107,6 +108,8 @@ pub struct SaneScanners {
     /// without blocking the runtime.
     worker: tokio::sync::Mutex<Option<Arc<Worker>>>,
     cache: Mutex<Option<Vec<ScannerInfo>>>,
+    /// The DNS-SD instance names recto advertises its scanners under.
+    advertised: Mutex<Vec<String>>,
 }
 
 impl SaneScanners {
@@ -115,7 +118,17 @@ impl SaneScanners {
         Ok(Self {
             worker: tokio::sync::Mutex::new(Some(Worker::spawn()?)),
             cache: Mutex::new(None),
+            advertised: Mutex::new(Vec::new()),
         })
+    }
+
+    /// The DNS-SD instance names recto advertises its own scanners under. sane-airscan lists a
+    /// scanner it discovered under that name, so such devices are left out of [`scanners`]
+    /// along with those whose model starts with [`escl::MODEL`]. Replaces the previous names.
+    ///
+    /// [`scanners`]: ScannerService::scanners
+    pub fn hide_advertised(&self, names: Vec<String>) {
+        *self.advertised.lock().unwrap() = names;
     }
 
     async fn current(&self) -> Result<Arc<Worker>, ScanError> {
@@ -168,12 +181,17 @@ impl SaneScanners {
 #[async_trait]
 impl ScannerService for SaneScanners {
     async fn scanners(&self, refresh: bool) -> Result<Vec<ScannerInfo>, ScanError> {
-        if !refresh && let Some(cached) = self.cache.lock().unwrap().clone() {
-            return Ok(cached);
-        }
-        let list = self.ask(Command::List).await?;
-        *self.cache.lock().unwrap() = Some(list.clone());
-        Ok(list)
+        let cached = self.cache.lock().unwrap().clone().filter(|_| !refresh);
+        let list = match cached {
+            Some(cached) => cached,
+            None => {
+                let list = self.ask(Command::List).await?;
+                *self.cache.lock().unwrap() = Some(list.clone());
+                list
+            }
+        };
+        // Filtered on the way out, so names advertised after the listing apply at once.
+        Ok(visible(list, &self.advertised.lock().unwrap()))
     }
 
     async fn capabilities(&self, id: &str) -> Result<ScannerCapabilities, ScanError> {
@@ -233,6 +251,15 @@ fn open<'s>(sane: &'s Sane, id: &str) -> Result<Device<'s>, ScanError> {
         libsane::Error::Invalid => ScanError::NotFound(id.to_owned()),
         other => map_error(&other),
     })
+}
+
+/// The devices without recto's own eSCL scanners, which a sane-airscan that discovers them
+/// would list: scanning one would loop from SANE to eSCL and back.
+fn visible(devices: Vec<ScannerInfo>, advertised: &[String]) -> Vec<ScannerInfo> {
+    devices
+        .into_iter()
+        .filter(|device| !escl::is_own_scanner(&device.model, advertised))
+        .collect()
 }
 
 fn list(sane: &Sane) -> Result<Vec<ScannerInfo>, ScanError> {
@@ -471,6 +498,23 @@ mod tests {
         assert_eq!(map_error(&E::CoverOpen), ScanError::CoverOpen);
         assert_eq!(map_error(&E::DeviceBusy), ScanError::Busy);
         assert!(matches!(map_error(&E::Io), ScanError::Device(_)));
+    }
+
+    #[test]
+    fn recto_never_lists_its_own_scanners() {
+        let device = |model: &str| ScannerInfo {
+            id: format!("airscan:e0:{model}"),
+            vendor: "eSCL".into(),
+            model: model.into(),
+            kind: "eSCL network scanner".into(),
+        };
+        let devices = vec![
+            device("recto 0.3"),
+            device("Office scanner"),
+            device("Canon LiDE 300"),
+        ];
+        let advertised = ["Office scanner".to_owned()];
+        assert_eq!(visible(devices, &advertised), [device("Canon LiDE 300")]);
     }
 
     fn stopped_error() -> ScanError {
