@@ -23,6 +23,7 @@ embedded_i18n::i18n!(
 );
 
 pub mod branding;
+mod coded;
 pub mod components;
 #[cfg(feature = "ssr")]
 pub mod cookies;

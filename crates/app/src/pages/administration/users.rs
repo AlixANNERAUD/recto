@@ -14,6 +14,7 @@ use super::{
 };
 use crate::{
     NotFound,
+    coded::coded,
     components::ui::{
         Alert, Badge, ButtonVariant, Card, Field, INPUT, LABEL, Tone, button_class,
         small_button_class,
@@ -132,53 +133,23 @@ impl UsersRefusal {
     }
 }
 
-/// What an accepted form did, named by the `done` query parameter. Only the code and a user id
-/// travel in the address, so a crafted link cannot put arbitrary text on the page.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Notice {
-    Created,
-    Granted,
-    Removed,
-    Disabled,
-    Enabled,
-    PasswordSet,
-    QuotaGranted,
-    QuotaReset,
-    DevicesRevoked,
+coded! {
+    /// What an accepted form did, named by the `done` query parameter. Only the code and a user id
+    /// travel in the address, so a crafted link cannot put arbitrary text on the page.
+    pub enum Notice {
+        Created = "created",
+        Granted = "granted",
+        Removed = "removed",
+        Disabled = "disabled",
+        Enabled = "enabled",
+        PasswordSet = "password_set",
+        QuotaGranted = "quota_granted",
+        QuotaReset = "quota_reset",
+        DevicesRevoked = "devices_revoked",
+    }
 }
 
 impl Notice {
-    const ALL: [Notice; 9] = [
-        Notice::Created,
-        Notice::Granted,
-        Notice::Removed,
-        Notice::Disabled,
-        Notice::Enabled,
-        Notice::PasswordSet,
-        Notice::QuotaGranted,
-        Notice::QuotaReset,
-        Notice::DevicesRevoked,
-    ];
-
-    /// The value of the `done` query parameter.
-    pub fn code(self) -> &'static str {
-        match self {
-            Notice::Created => "created",
-            Notice::Granted => "granted",
-            Notice::Removed => "removed",
-            Notice::Disabled => "disabled",
-            Notice::Enabled => "enabled",
-            Notice::PasswordSet => "password_set",
-            Notice::QuotaGranted => "quota_granted",
-            Notice::QuotaReset => "quota_reset",
-            Notice::DevicesRevoked => "devices_revoked",
-        }
-    }
-
-    fn from_code(code: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|notice| notice.code() == code)
-    }
-
     fn message(self, username: String) -> String {
         match self {
             Notice::Created => tf!("administration.done.created", username = username),

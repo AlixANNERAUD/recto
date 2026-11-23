@@ -11,6 +11,7 @@ use leptos_router::hooks::use_query_map;
 use super::{Section, Sections, page_data};
 use crate::{
     NotFound,
+    coded::coded,
     components::ui::{
         Alert, Badge, ButtonVariant, Card, Empty, Field, INPUT, LABEL, Tone, button_class,
         small_button_class,
@@ -228,46 +229,20 @@ impl QuotasProblem {
     }
 }
 
-/// What an accepted form did, named by the `done` query parameter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuotasNotice {
-    Created,
-    Saved,
-    Enabled,
-    Disabled,
-    Deleted,
-    Granted,
-    Reset,
+coded! {
+    /// What an accepted form did, named by the `done` query parameter.
+    pub enum QuotasNotice {
+        Created = "created",
+        Saved = "saved",
+        Enabled = "enabled",
+        Disabled = "disabled",
+        Deleted = "deleted",
+        Granted = "granted",
+        Reset = "reset",
+    }
 }
 
 impl QuotasNotice {
-    const ALL: [QuotasNotice; 7] = [
-        QuotasNotice::Created,
-        QuotasNotice::Saved,
-        QuotasNotice::Enabled,
-        QuotasNotice::Disabled,
-        QuotasNotice::Deleted,
-        QuotasNotice::Granted,
-        QuotasNotice::Reset,
-    ];
-
-    /// The value of the `done` query parameter.
-    pub fn code(self) -> &'static str {
-        match self {
-            QuotasNotice::Created => "created",
-            QuotasNotice::Saved => "saved",
-            QuotasNotice::Enabled => "enabled",
-            QuotasNotice::Disabled => "disabled",
-            QuotasNotice::Deleted => "deleted",
-            QuotasNotice::Granted => "granted",
-            QuotasNotice::Reset => "reset",
-        }
-    }
-
-    fn from_code(code: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|notice| notice.code() == code)
-    }
-
     fn message(self) -> &'static str {
         match self {
             QuotasNotice::Created => t!("administration.quotas.done.created"),

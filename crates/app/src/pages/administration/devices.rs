@@ -11,6 +11,7 @@ use leptos_router::hooks::use_query_map;
 use super::{Section, Sections, page_data};
 use crate::{
     NotFound,
+    coded::coded,
     components::ui::{
         Alert, ButtonVariant, Card, Empty, Field, INPUT, Tone, button_class, small_button_class,
     },
@@ -260,59 +261,25 @@ pub const PRINTER_TEXT_MAX: usize = 1023;
 /// The guide to the CUPS setup that lets recto administer printers.
 const SETUP_GUIDE: &str = "https://alixanneraud.github.io/recto/how-to/add-printer.html";
 
-/// What an accepted form did, named by the `done` query parameter: only a code travels in the
-/// address, so a crafted link cannot put arbitrary text on the page.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Notice {
-    Access,
-    Forgotten,
-    Added,
-    Described,
-    Default,
-    Paused,
-    Resumed,
-    Accepting,
-    Rejecting,
-    Removed,
-    Prices,
+coded! {
+    /// What an accepted form did, named by the `done` query parameter: only a code travels in the
+    /// address, so a crafted link cannot put arbitrary text on the page.
+    pub enum Notice {
+        Access = "access",
+        Forgotten = "forgotten",
+        Added = "added",
+        Described = "described",
+        Default = "default",
+        Paused = "paused",
+        Resumed = "resumed",
+        Accepting = "accepting",
+        Rejecting = "rejecting",
+        Removed = "removed",
+        Prices = "prices",
+    }
 }
 
 impl Notice {
-    const ALL: [Notice; 11] = [
-        Notice::Access,
-        Notice::Forgotten,
-        Notice::Added,
-        Notice::Described,
-        Notice::Default,
-        Notice::Paused,
-        Notice::Resumed,
-        Notice::Accepting,
-        Notice::Rejecting,
-        Notice::Removed,
-        Notice::Prices,
-    ];
-
-    /// The value of the `done` query parameter.
-    pub fn code(self) -> &'static str {
-        match self {
-            Notice::Access => "access",
-            Notice::Forgotten => "forgotten",
-            Notice::Added => "added",
-            Notice::Described => "described",
-            Notice::Default => "default",
-            Notice::Paused => "paused",
-            Notice::Resumed => "resumed",
-            Notice::Accepting => "accepting",
-            Notice::Rejecting => "rejecting",
-            Notice::Removed => "removed",
-            Notice::Prices => "prices",
-        }
-    }
-
-    fn from_code(code: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|notice| notice.code() == code)
-    }
-
     fn message(self) -> &'static str {
         match self {
             Notice::Access => t!("administration.devices.done.access"),

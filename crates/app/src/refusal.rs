@@ -2,88 +2,38 @@
 //! the `error` query parameter (`/?error=too_large`), and the page shows its message. Only codes
 //! travel in the address, so a crafted link cannot put arbitrary text on the page.
 
-use crate::i18n::Locale;
+use crate::{coded::coded, i18n::Locale};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Refusal {
-    TooLarge,
-    NoFile,
-    EmptyFile,
-    UnsupportedFormat,
-    PrinterNotFound,
-    NotAccepting,
-    InvalidCopies,
-    UnsupportedSides,
-    UnsupportedColor,
-    InvalidPageRanges,
-    InvalidForm,
-    JobNotFound,
-    Unavailable,
-    Refused,
-    /// The print request may have reached CUPS, which did not confirm it: the job may print.
-    Unconfirmed,
-    /// A hard quota rule has too little left; the rule's id travels next to the code.
-    Quota,
-    /// Quota rules count pages and recto could not count the document's.
-    Uncountable,
-    /// Quota rules count pages and recto was busy counting other documents.
-    CountingBusy,
-    /// A held job is no longer waiting: released, deleted or expired.
-    HeldGone,
+coded! {
+    pub enum Refusal {
+        TooLarge = "too_large",
+        NoFile = "no_file",
+        EmptyFile = "empty_file",
+        UnsupportedFormat = "unsupported_format",
+        PrinterNotFound = "printer_not_found",
+        NotAccepting = "not_accepting",
+        InvalidCopies = "invalid_copies",
+        UnsupportedSides = "unsupported_sides",
+        UnsupportedColor = "unsupported_color",
+        InvalidPageRanges = "invalid_page_ranges",
+        InvalidForm = "invalid_form",
+        JobNotFound = "job_not_found",
+        Unavailable = "unavailable",
+        Refused = "refused",
+        /// The print request may have reached CUPS, which did not confirm it: the job may print.
+        Unconfirmed = "unconfirmed",
+        /// A hard quota rule has too little left; the rule's id travels next to the code.
+        Quota = "quota",
+        /// Quota rules count pages and recto could not count the document's.
+        Uncountable = "uncountable",
+        /// Quota rules count pages and recto was busy counting other documents.
+        CountingBusy = "counting_busy",
+        /// A held job is no longer waiting: released, deleted or expired.
+        HeldGone = "held_gone",
+    }
 }
 
 impl Refusal {
-    const ALL: [Refusal; 19] = [
-        Refusal::TooLarge,
-        Refusal::NoFile,
-        Refusal::EmptyFile,
-        Refusal::UnsupportedFormat,
-        Refusal::PrinterNotFound,
-        Refusal::NotAccepting,
-        Refusal::InvalidCopies,
-        Refusal::UnsupportedSides,
-        Refusal::UnsupportedColor,
-        Refusal::InvalidPageRanges,
-        Refusal::InvalidForm,
-        Refusal::JobNotFound,
-        Refusal::Unavailable,
-        Refusal::Refused,
-        Refusal::Unconfirmed,
-        Refusal::Quota,
-        Refusal::Uncountable,
-        Refusal::CountingBusy,
-        Refusal::HeldGone,
-    ];
-
-    /// The value of the `error` query parameter.
-    pub fn code(self) -> &'static str {
-        match self {
-            Refusal::TooLarge => "too_large",
-            Refusal::NoFile => "no_file",
-            Refusal::EmptyFile => "empty_file",
-            Refusal::UnsupportedFormat => "unsupported_format",
-            Refusal::PrinterNotFound => "printer_not_found",
-            Refusal::NotAccepting => "not_accepting",
-            Refusal::InvalidCopies => "invalid_copies",
-            Refusal::UnsupportedSides => "unsupported_sides",
-            Refusal::UnsupportedColor => "unsupported_color",
-            Refusal::InvalidPageRanges => "invalid_page_ranges",
-            Refusal::InvalidForm => "invalid_form",
-            Refusal::JobNotFound => "job_not_found",
-            Refusal::Unavailable => "unavailable",
-            Refusal::Refused => "refused",
-            Refusal::Unconfirmed => "unconfirmed",
-            Refusal::Quota => "quota",
-            Refusal::Uncountable => "uncountable",
-            Refusal::CountingBusy => "counting_busy",
-            Refusal::HeldGone => "held_gone",
-        }
-    }
-
-    pub fn from_code(code: &str) -> Option<Refusal> {
-        Self::ALL.into_iter().find(|refusal| refusal.code() == code)
-    }
-
     /// The message shown on the page, in the request's language.
     pub fn message(self) -> String {
         self.message_in(crate::i18n::locale())
@@ -140,7 +90,7 @@ mod tests {
 
     #[test]
     fn codes_round_trip() {
-        for refusal in Refusal::ALL {
+        for &refusal in Refusal::ALL {
             assert_eq!(Refusal::from_code(refusal.code()), Some(refusal));
             assert!(!refusal.message().is_empty());
         }
