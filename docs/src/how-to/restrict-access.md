@@ -12,7 +12,7 @@ Two settings do it:
 
 - `RECTO_OIDC_REQUIRED_CLAIM`: the claim that must be in the token.
 - `RECTO_OIDC_REQUIRED_VALUE`: the value the claim must hold. Without it, the claim only has to be
-  present.
+  present and not empty: an empty list of groups or roles is refused.
 
 How the value is matched depends on the claim (see
 [Configuration](../reference/configuration.md#required-claim) for the exact rules): a string must

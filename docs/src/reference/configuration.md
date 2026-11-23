@@ -107,6 +107,7 @@ nested objects: `realm_access.roles` reads `roles` inside `realm_access`.
 | A string | allowed | allowed if equal to the value |
 | A list | allowed | allowed if it contains the value |
 | An object | allowed | allowed if it has the value as a key |
+| An empty string, list or object | refused | refused |
 | `null` or `false` | refused | refused |
 | Anything else | allowed | refused |
 | Nothing (missing) | refused | refused |

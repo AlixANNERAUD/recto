@@ -19,14 +19,21 @@ pub fn lookup<'a>(claims: &'a Map<String, Value>, claim: &str) -> Option<&'a Val
 }
 
 /// Whether the claims satisfy the requirement. Without a `value`, the claim only has to be
-/// present (not `null`, not `false`). With one, a string claim must equal it, an array must
+/// present and hold something: not `null`, `false`, an empty string, an empty list or an empty
+/// object, which providers send for a user without groups or roles. With one, a string claim must equal it, an array must
 /// contain it, and an object must have it as a key (Zitadel lists roles as object keys).
 pub fn allows(claims: &Map<String, Value>, claim: &str, value: Option<&str>) -> bool {
     let Some(found) = lookup(claims, claim) else {
         return false;
     };
     let Some(expected) = value else {
-        return !matches!(found, Value::Null | Value::Bool(false));
+        return match found {
+            Value::Null | Value::Bool(false) => false,
+            Value::String(text) => !text.is_empty(),
+            Value::Array(items) => !items.is_empty(),
+            Value::Object(map) => !map.is_empty(),
+            _ => true,
+        };
     };
     match found {
         Value::String(text) => text == expected,
@@ -119,5 +126,12 @@ mod tests {
         assert!(allows(&claims, "text", None));
         assert!(!allows(&claims, "no", None));
         assert!(!allows(&claims, "null", None));
+
+        // Providers send these for a user without groups or roles.
+        let claims = self::claims(json!({"empty": "", "none": [], "nothing": {}, "one": ["a"]}));
+        assert!(!allows(&claims, "empty", None));
+        assert!(!allows(&claims, "none", None));
+        assert!(!allows(&claims, "nothing", None));
+        assert!(allows(&claims, "one", None));
     }
 }
