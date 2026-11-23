@@ -59,6 +59,32 @@ pub fn applicable(rules: &[Rule], user_id: i64, groups: &[i64], printer: &str) -
     applicable
 }
 
+/// The rules that apply to `user_id`, member of `groups`, on any of `printers`, each once, by
+/// id: where someone stands on the printers they print on.
+pub fn applicable_on<'a>(
+    rules: &[Rule],
+    user_id: i64,
+    groups: &[i64],
+    printers: impl IntoIterator<Item = &'a str>,
+) -> Vec<Rule> {
+    let mut found = BTreeMap::new();
+    for printer in printers {
+        for rule in applicable(rules, user_id, groups, printer) {
+            found.entry(rule.id).or_insert(rule);
+        }
+    }
+    found.into_values().collect()
+}
+
+/// The rules that apply to `user_id`, member of `groups`, on some printer, whichever: a name no
+/// printer has picks the rules for every printer, and each printer a rule names picks its own.
+pub fn applicable_anywhere(rules: &[Rule], user_id: i64, groups: &[i64]) -> Vec<Rule> {
+    let named = rules
+        .iter()
+        .flat_map(|rule| rule.printers.iter().map(String::as_str));
+    applicable_on(rules, user_id, groups, std::iter::once("").chain(named))
+}
+
 fn rank_of(rule: &Rule) -> Rank {
     match rule.subject {
         Subject::User(_) => Rank::User,
@@ -127,6 +153,27 @@ mod tests {
 
     fn limits(rules: &[Rule]) -> Vec<(i64, i64)> {
         rules.iter().map(|rule| (rule.id, rule.limit)).collect()
+    }
+
+    #[test]
+    fn rules_on_several_printers_are_listed_once() {
+        let mut lab = rule(2, Subject::Everyone, Metric::Pages, 100);
+        lab.printers = vec!["Lab".into()];
+        let mut front = rule(3, Subject::Everyone, Metric::Jobs, 10);
+        front.printers = vec!["front".into()];
+        let rules = vec![
+            rule(1, Subject::Everyone, Metric::ColorPages, 50),
+            lab,
+            front,
+        ];
+        assert_eq!(
+            limits(&applicable_on(&rules, OTHER, &[], ["lab", "office", "LAB"])),
+            [(1, 50), (2, 100)]
+        );
+        assert_eq!(
+            limits(&applicable_anywhere(&rules, OTHER, &[])),
+            [(1, 50), (2, 100), (3, 10)]
+        );
     }
 
     #[test]

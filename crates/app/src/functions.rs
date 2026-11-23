@@ -376,15 +376,11 @@ mod server {
             let groups = access::group_ids_of(database, self.user.id)
                 .await
                 .map_err(failed)?;
-            let mut applicable = BTreeMap::new();
-            for printer in printers {
-                for rule in quotas::applicable(rules, self.user.id, &groups, &printer.name) {
-                    applicable.insert(rule.id, rule);
-                }
-            }
+            let printers = printers.iter().map(|printer| printer.name.as_str());
+            let applicable = quotas::applicable_on(rules, self.user.id, &groups, printers);
             let now = chrono::Utc::now();
             let mut allowances = Vec::new();
-            for rule in applicable.values() {
+            for rule in &applicable {
                 let standing =
                     quotas::standing(database, rule, self.user.id, now, self.state.timezone)
                         .await

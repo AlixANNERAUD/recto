@@ -7,7 +7,7 @@
 //! page it came from with a notice; a refused one renders that page again with the problem,
 //! keeping what was typed except a password.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 use axum::{
     Extension, Form, Router,
@@ -290,27 +290,23 @@ async fn add_usage(
     if !rules.iter().any(|rule| rule.enabled) {
         return Ok(());
     }
-    // A name no printer has picks the rules for every printer; each printer a rule names picks
-    // its own.
-    let mut printers = vec![String::new()];
-    printers.extend(rules.iter().flat_map(|rule| rule.printers.iter().cloned()));
     let mut applicable: BTreeMap<i64, (Rule, Vec<i64>)> = BTreeMap::new();
     let mut applying: HashMap<i64, Vec<i64>> = HashMap::new();
     for row in rows.iter() {
         let groups = groups.get(&row.id).map_or(&[][..], Vec::as_slice);
-        let mut rule_ids = BTreeSet::new();
-        for printer in &printers {
-            for rule in quotas::applicable(&rules, row.id, groups, printer) {
-                if !matches!(rule.subject, Subject::Pool(_)) && rule_ids.insert(rule.id) {
-                    applicable
-                        .entry(rule.id)
-                        .or_insert_with(|| (rule, Vec::new()))
-                        .1
-                        .push(row.id);
-                }
+        let mut rule_ids = Vec::new();
+        for rule in quotas::applicable_anywhere(&rules, row.id, groups) {
+            if matches!(rule.subject, Subject::Pool(_)) {
+                continue;
             }
+            rule_ids.push(rule.id);
+            applicable
+                .entry(rule.id)
+                .or_insert_with(|| (rule, Vec::new()))
+                .1
+                .push(row.id);
         }
-        applying.insert(row.id, rule_ids.into_iter().collect());
+        applying.insert(row.id, rule_ids);
     }
     let now = chrono::Utc::now();
     let mut standings = HashMap::new();
