@@ -7,6 +7,7 @@ use leptos::prelude::*;
 use leptos_router::hooks::use_location;
 
 use crate::{
+    coded::coded,
     components::icons::{Icon, IconKind},
     t,
 };
@@ -14,35 +15,20 @@ use crate::{
 /// Name of the cookie remembering the chosen theme.
 pub const COOKIE: &str = "recto_theme";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Theme {
-    /// Follow the device's setting.
-    System,
-    Light,
-    Dark,
+coded! {
+    /// The code is the cookie's value and what the theme form posts.
+    pub enum Theme {
+        /// Follow the device's setting.
+        System = "system",
+        Light = "light",
+        Dark = "dark",
+    }
 }
 
 impl Theme {
-    pub fn parse(value: &str) -> Option<Theme> {
-        match value {
-            "system" => Some(Theme::System),
-            "light" => Some(Theme::Light),
-            "dark" => Some(Theme::Dark),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Theme::System => "system",
-            Theme::Light => "light",
-            Theme::Dark => "dark",
-        }
-    }
-
     /// The value of `<html data-theme>`; none for System, so the media query decides.
     pub fn attribute(self) -> Option<&'static str> {
-        (self != Theme::System).then(|| self.as_str())
+        (self != Theme::System).then(|| self.code())
     }
 
     /// The value of the `color-scheme` meta tag, which tells the browser which colors to use
@@ -61,7 +47,7 @@ impl Theme {
 #[cfg(feature = "ssr")]
 pub fn from_headers(headers: &axum::http::HeaderMap) -> Theme {
     crate::cookies::values(headers, COOKIE)
-        .filter_map(Theme::parse)
+        .filter_map(Theme::from_code)
         .next_back()
         .unwrap_or(Theme::System)
 }
@@ -102,7 +88,7 @@ pub fn ThemeSwitch() -> impl IntoView {
             <button
                 type="submit"
                 name="theme"
-                value=theme.as_str()
+                value=theme.code()
                 aria-label=label
                 title=label
                 aria-pressed=pressed.to_string()

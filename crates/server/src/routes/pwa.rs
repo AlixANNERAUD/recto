@@ -212,7 +212,7 @@ async fn choose_theme(
     headers: HeaderMap,
     Form(form): Form<ThemeForm>,
 ) -> Response {
-    let Some(chosen) = Theme::parse(&form.theme) else {
+    let Some(chosen) = Theme::from_code(&form.theme) else {
         let message = messages::unknown_theme(i18n::from_headers(&headers));
         return (StatusCode::BAD_REQUEST, message).into_response();
     };
@@ -222,7 +222,7 @@ async fn choose_theme(
         _ => format!(
             "{}={}; Max-Age={CHOICE_MAX_AGE}{flags}",
             theme::COOKIE,
-            chosen.as_str()
+            chosen.code()
         ),
     };
     let mut response = Redirect::to(local_path(form.next.as_deref())).into_response();
