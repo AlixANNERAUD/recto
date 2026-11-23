@@ -91,7 +91,9 @@ documents are then held with the reason, until you choose again.
 
 Each person may have at most 20 jobs waiting, and documents of at most 10 times
 `RECTO_MAX_UPLOAD_SIZE` in all; beyond that the device is answered `server-error-too-many-jobs`
-before its document is written.
+before its document is written. A job whose release the printer refused comes back to wait even
+when that makes 21, or goes over the size: it is the same job, not a new one, and the limits only
+stop new documents.
 
 A device sees only the jobs it sent with its own device password, never those of the person's
 other devices. It may cancel a job only while its document has not arrived (Create-Job without

@@ -88,6 +88,7 @@ only.
 | warn | `the scan results directory is not usable` | `error`, `dir` |
 | warn | `the held documents directory is not usable` | `error`, `dir` |
 | warn | `held jobs whose release never finished are held again`: recto stopped during a release, before the job was counted | `count` |
+| warn | `a held job that never reached the printing service is held again`: the job was counted, then refused by CUPS and could not be put back, or recto stopped before sending it; 10 minutes later the sweep refunds it and puts it back with its document | `job`, `entry` |
 | warn | `removing a held document failed`, `removing held documents failed`, `listing the held documents failed`: the next sweep tries again | `error`, and `file` or `dir` |
 | warn | `removing a held document that was not recorded failed`: the orphan sweep removes it within the hour | |
 | warn | `removing a released document failed`, `removing a deleted held document failed`: the sweep removes it | `job` |
@@ -104,7 +105,7 @@ only.
 | error | `reading the scanner access rules to announce failed`: no scanner is announced | `error` |
 | error | `creating a device password failed`, `revoking a device password failed`, `checking a device password failed`: the last answers the device, or the profile download, `503` | `error` |
 | error | `password sign-in failed`, `changing a password failed`, `changing a user failed` | `error` |
-| error | `writing the ledger entry failed` | `error` |
+| error | `writing the ledger entry failed`: with no quota enforced, the job prints uncounted | `error` |
 | error | `recording the scan failed` | `error`, `user` |
 | error | `recording the eSCL scan failed` | `error`, `scanner` |
 | error | `reading the quota rules failed`, `reading the groups of the user failed`, `checking the print quotas failed`: the job is refused | `error` |
@@ -130,18 +131,21 @@ only.
 | error | `listing the held jobs failed`: the Jobs page shows the error instead of the documents waiting | `error` |
 | error | `reading a held job failed`, `claiming a held job failed`, `reading a held document failed`, `deleting a held job failed` | `error`, `job` |
 | error | `writing the ledger entry of a held job failed`: the document is not printed and stays waiting | `error` |
-| error | `returning a refused held job failed`, `returning a held job failed`: the sweep returns it within 15 minutes, unless it has a ledger entry | `error` |
+| error | `returning a refused held job failed`: the sweep refunds it and puts it back once its ledger entry has waited 10 minutes for CUPS | `error`, `job`, `entry` |
+| error | `returning a held job failed`: a release refused before it was counted; the sweep puts it back within 15 minutes | `error`, `job` |
+| error | `reading the unsent held jobs failed`, `returning an unsent held job failed`: the next sweep tries again | `error`, and `job` for the second |
 | error | `sweeping the held jobs failed`, `reading the held documents' names failed`: the next sweep tries again | `error` |
 
 Commands such as `recto create-administrator` write their messages as text.
 
 Tokens, cookies, passwords, device passwords and file contents are never logged, nor the path of
 a request to a personal address, which holds a device password: log lines name the device
-password's id. A device
-password refused again from memory is logged at `debug` only (`device password refused again`),
-so a phone polling with a revoked password does not fill the log, and so are TLS handshakes on the
-LAN listener that fail or time out (`LAN TLS handshake failed`, `LAN TLS handshake timed out`). The password of a PostgreSQL URL
-is hidden in messages.
+password's id. A device password refused again from memory is logged at `debug` only (`device
+password refused again`), so a phone polling with a revoked password does not fill the log, and
+so are TLS handshakes on the LAN listener that fail or time out (`LAN TLS handshake failed`, `LAN
+TLS handshake timed out`) and connections refused because their address has too many (`LAN
+connection refused: too many from this address`). The password of a PostgreSQL URL is hidden in
+messages.
 
 ## Health
 

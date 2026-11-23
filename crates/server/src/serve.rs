@@ -547,10 +547,51 @@ pub async fn sweep_held_once(
         }
         Err(error) => tracing::error!(%error, "sweeping the held jobs failed"),
     }
+    return_unsent_held(database, files, now).await;
     let written_before = SystemTime::now()
         .checked_sub(ORPHAN_AGE)
         .unwrap_or(SystemTime::UNIX_EPOCH);
     remove_orphan_held_files(database, files, written_before).await;
+}
+
+/// Puts back to `held` the released jobs that never reached CUPS and still have their document:
+/// CUPS refused them and returning them failed, or recto stopped before sending them. Their
+/// ledger entry is refunded with them.
+async fn return_unsent_held(
+    database: &DatabaseConnection,
+    files: &Arc<HeldFiles>,
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    let unsent = match held::unsent(database, now).await {
+        Ok(unsent) => unsent,
+        Err(error) => {
+            tracing::error!(%error, "reading the unsent held jobs failed");
+            return;
+        }
+    };
+    for job in unsent {
+        let (Some(file), Some(entry)) = (job.file.clone(), job.ledger_entry_id) else {
+            continue;
+        };
+        let held_files = Arc::clone(files);
+        let present = tokio::task::spawn_blocking(move || held_files.dir().join(&file).is_file())
+            .await
+            .unwrap_or(false);
+        if !present {
+            continue;
+        }
+        let code = recto_app::refusal::Refusal::Unavailable.code();
+        match held::return_refunded(database, job.id, job.claim, entry, code, now).await {
+            Ok(()) => tracing::warn!(
+                job = job.id,
+                entry,
+                "a held job that never reached the printing service is held again"
+            ),
+            Err(error) => {
+                tracing::error!(%error, job = job.id, "returning an unsent held job failed")
+            }
+        }
+    }
 }
 
 /// Removes the held documents no row names, written before `written_before`, and returns how

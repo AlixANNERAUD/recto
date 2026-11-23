@@ -214,7 +214,13 @@ pub(crate) async fn print_document(
                     )
                     .await
                     {
-                        tracing::error!(%error, "returning a refused held job failed");
+                        // The sweep returns it once the entry's grace is over.
+                        tracing::error!(
+                            %error,
+                            job = held.id,
+                            entry = entry_id,
+                            "returning a refused held job failed"
+                        );
                     }
                 }
                 (None, Some(entry_id)) => {

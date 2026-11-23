@@ -17,7 +17,7 @@ pub mod files;
 use std::collections::HashSet;
 
 use chrono::{DateTime, TimeDelta, Utc};
-use recto_entity::{device_passwords, held_jobs, users};
+use recto_entity::{device_passwords, held_jobs, print_jobs, users};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait, DatabaseBackend,
     DatabaseTransaction, DbErr, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
@@ -640,6 +640,44 @@ pub async fn sweep(
         .rows_affected;
     transaction.commit().await?;
     Ok(swept)
+}
+
+/// Released jobs whose ledger entry never got a CUPS job id within
+/// [`ATTACH_GRACE`](crate::ledger::ATTACH_GRACE): CUPS refused them and returning them failed,
+/// or recto stopped before sending them. The caller returns with [`return_refunded`] those
+/// whose document is still there: a document CUPS took is removed at once, so a job whose file
+/// remains never reached it.
+pub async fn unsent(database: &impl ConnectionTrait, now: DateTime<Utc>) -> Result<Vec<HeldJob>> {
+    let entries: Vec<i64> = print_jobs::Entity::find()
+        .select_only()
+        .column(print_jobs::Column::Id)
+        .filter(print_jobs::Column::CupsJobId.is_null())
+        .filter(
+            print_jobs::Column::SubmittedAt.lt((now - crate::ledger::ATTACH_GRACE).fixed_offset()),
+        )
+        .filter(
+            print_jobs::Column::Id.in_subquery(
+                sea_orm::sea_query::Query::select()
+                    .column(held_jobs::Column::LedgerEntryId)
+                    .from(held_jobs::Entity)
+                    .and_where(held_jobs::Column::State.eq(HeldState::Released.keyword()))
+                    .to_owned(),
+            ),
+        )
+        .into_tuple()
+        .all(database)
+        .await?;
+    if entries.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = held_jobs::Entity::find()
+        .filter(held_jobs::Column::State.eq(HeldState::Released.keyword()))
+        .filter(held_jobs::Column::LedgerEntryId.is_in(entries))
+        .filter(held_jobs::Column::File.is_not_null())
+        .order_by_asc(held_jobs::Column::Id)
+        .all(database)
+        .await?;
+    rows.into_iter().map(job).collect()
 }
 
 /// Every file a row names, for the orphan sweep.

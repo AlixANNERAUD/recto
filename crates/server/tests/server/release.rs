@@ -181,6 +181,38 @@ async fn a_release_goes_on_when_the_browser_goes_away() {
 }
 
 #[tokio::test]
+async fn a_release_that_never_reached_cups_is_held_again() {
+    let harness = Harness::new().await;
+    let (alice, cookie) = alice(&harness).await;
+    let document = sample_pdf(2);
+    let (id, file) = hold_with(&harness, alice, &document, "{}").await;
+    // Counted and marked released, with no CUPS job: here an answer lost, after which recto
+    // removes the document. Were the document still there, as when CUPS refused the job and
+    // putting it back failed, or recto stopped before sending it, CUPS never had it.
+    harness.print.lose_answers("timed out");
+    let response = harness
+        .send(release(id, &cookie, &[("printer", "office")]))
+        .await;
+    assert_redirect(&response, "/jobs?error=unconfirmed");
+    std::fs::write(harness.held.dir().join(&file), &document).unwrap();
+
+    // Not before the entry's grace is over: CUPS may still answer.
+    sweep_held_once(&harness.database, &harness.held, Utc::now()).await;
+    assert_eq!(
+        job(&harness, alice, id).await.unwrap().state,
+        HeldState::Released
+    );
+    let later = Utc::now() + ledger::ATTACH_GRACE + TimeDelta::minutes(1);
+    sweep_held_once(&harness.database, &harness.held, later).await;
+    let returned = job(&harness, alice, id).await.unwrap();
+    assert_eq!(returned.state, HeldState::Held);
+    assert_eq!(returned.refusal.as_deref(), Some("unavailable"));
+    assert_eq!(returned.ledger_entry_id, None);
+    let rows = ledger_rows(&harness).await;
+    assert!(rows[0].refunded);
+}
+
+#[tokio::test]
 async fn a_refused_release_stays_held() {
     let harness = Harness::new().await;
     let (alice, cookie) = alice(&harness).await;
