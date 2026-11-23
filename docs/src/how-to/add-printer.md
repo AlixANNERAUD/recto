@@ -51,7 +51,8 @@ carry the multicast that discovery uses: give the address yourself.
 
 Each printer's row has a **Manage** section with who may use it and the other actions: edit the
 description and location (up to 1023 characters each, on one line), make it the default printer (the first on the Print page), pause or
-resume it, make it accept or turn away new jobs, and remove it. Removing asks for a tick in a
+resume it, make it accept or turn away new jobs, run its maintenance commands (see
+[Run maintenance](#run-maintenance)), and remove it. Removing asks for a tick in a
 checkbox, cancels the printer's waiting jobs and forgets its access rule. These actions also work
 on printers added with `lpadmin` under names the Add form would not take, such as `Büro`.
 
@@ -142,6 +143,27 @@ docker compose exec cups cupsreject office    # new jobs are refused: "Not accep
 docker compose exec cups cupsaccept office
 docker compose exec cups lpadmin -x office    # remove it
 ```
+
+## Run maintenance
+
+When the printer's driver offers maintenance commands, its **Manage** section has a
+**Maintenance** part with a button for each:
+
+| Button | CUPS command | Does |
+| --- | --- | --- |
+| **Clean print heads** | `Clean all` | Cleans every print head, for streaks or missing colors. |
+| **Print a test page** | `PrintSelfTestPage` | Prints the printer's own test page. |
+| **Refresh ink levels** | `ReportLevels` | Asks the printer for its supply levels, which the Printers page shows once it answers. |
+| **Configure automatically** | `AutoConfigure` | Asks the printer for its installed options and sets the queue's defaults from them. |
+
+recto offers only the commands the queue lists in CUPS, as the CUPS web interface does. Many
+driverless (IPP Everywhere) queues list none, so their row has no Maintenance part: use the
+printer's own controls for them. Queues with a driver, such as Gutenprint or HPLIP ones, often
+list some.
+
+A command reaches the printer as a job that CUPS hands to the driver instead of printing it. It
+waits behind the printer's other jobs, waits while the printer is paused, and is refused while
+the printer turns jobs away. recto never records it, counts it against a quota or holds it.
 
 ## Check
 

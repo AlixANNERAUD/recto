@@ -47,6 +47,7 @@ only.
 | info | `quota granted` | `by`, `rule`, `user` or `group`, `amount` (minor units for cost) |
 | info | `quota reset` | `by`, `rule`, `user` or `group` |
 | info | `printer described`, `default printer set`, `printer paused`, `printer resumed`, `printer accepting jobs`, `printer rejecting jobs`, `printer removed` | `by`, `printer` |
+| info | `printer cleaning started`, `printer test page started`, `printer levels requested`, `printer configuration started`: an administrator ran a maintenance command | `by`, `printer` |
 | info | `the CUPS socket does not exist yet`: harmless while CUPS is still starting, since recto connects at each request | `socket` |
 | info | `scan saved` | `user`, `path` |
 | info | `escl scan started`: a computer or phone started a scan over eSCL | `user` (`anonymous` without a device password), `device_password_id`, `peer`, `scanner` (the scanner's 8-digit key), `format` |
