@@ -342,7 +342,10 @@ fn choose(device: &Device<'_>, name: &str, wanted: impl Fn(&str) -> bool) -> Opt
     }
 }
 
-fn apply(device: &mut Device<'_>, settings: &ScanSettings) -> Result<(), ScanError> {
+/// Sets the scan's options. Returns the resolution the device will scan at, read back after
+/// setting it: a backend may round the one asked for, and a device without the option scans at
+/// its own, which the asked one then stands in for. Pages are sized from it.
+fn apply(device: &mut Device<'_>, settings: &ScanSettings) -> Result<u32, ScanError> {
     if let Some(source) = &settings.source {
         let exact = choose(device, well_known::SOURCE, |s| {
             s.eq_ignore_ascii_case(source)
@@ -388,7 +391,16 @@ fn apply(device: &mut Device<'_>, settings: &ScanSettings) -> Result<(), ScanErr
             set(device, name, value)?;
         }
     }
-    Ok(())
+    let applied = device
+        .value(well_known::RESOLUTION)
+        .ok()
+        .and_then(|value| match value {
+            Value::Int(dpi) => u32::try_from(dpi).ok(),
+            Value::Fixed(dpi) => Some(dpi.to_f64().round() as u32),
+            _ => None,
+        })
+        .filter(|&dpi| dpi > 0);
+    Ok(applied.unwrap_or(settings.resolution))
 }
 
 /// The raw size of the image the parameters describe once read, the way [`Frame::to_image`]
@@ -446,7 +458,7 @@ fn scan(
 ) -> Result<Vec<ScannedPage>, ScanError> {
     let settings: &ScanSettings = &request.settings;
     let mut device = open(sane, id)?;
-    apply(&mut device, settings)?;
+    let resolution = apply(&mut device, settings)?;
     // The device's own estimate also covers scanners without geometry options, whose size the
     // server cannot work out from the settings. A feeder that finds the page end itself does
     // not know the line count; the server's estimate from the area is all there is then.
@@ -472,11 +484,7 @@ fn scan(
         // anyway.
         if pages.is_empty() || every_page {
             let image = into_image(frame)?;
-            pages.push(ScannedPage::encode(
-                &image,
-                settings.resolution,
-                request.format,
-            )?);
+            pages.push(ScannedPage::encode(&image, resolution, request.format)?);
         }
         if !feeder || request.single_page {
             break;

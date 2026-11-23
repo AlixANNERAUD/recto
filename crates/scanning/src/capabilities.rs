@@ -69,18 +69,29 @@ fn resolutions(c: &OptionConstraint) -> Vec<u32> {
             .iter()
             .filter_map(|v| positive(v.round() as i64))
             .collect(),
-        OptionConstraint::IntRange { min, max, .. } => snap(f64::from(*min), f64::from(*max)),
-        OptionConstraint::FixedRange { min, max, .. } => snap(*min, *max),
+        OptionConstraint::IntRange { min, max, quant } => {
+            snap(f64::from(*min), f64::from(*max), f64::from(*quant))
+        }
+        OptionConstraint::FixedRange { min, max, quant } => snap(*min, *max, *quant),
         _ => Vec::new(),
     }
 }
 
-/// A range can hold thousands of values; users only want the familiar steps.
-fn snap(min: f64, max: f64) -> Vec<u32> {
+/// A range can hold thousands of values; users only want the familiar steps, of those the range
+/// holds: within it and on its steps (`quant`, 0 for any value), else the backend would round
+/// the one asked for.
+fn snap(min: f64, max: f64, quant: f64) -> Vec<u32> {
+    let on_step = |r: f64| {
+        if quant <= 0.0 {
+            return true;
+        }
+        let steps = (r - min) / quant;
+        (steps - steps.round()).abs() < 1e-6
+    };
     let mut v: Vec<u32> = COMMON_RESOLUTIONS
         .iter()
         .copied()
-        .filter(|r| f64::from(*r) >= min && f64::from(*r) <= max)
+        .filter(|r| f64::from(*r) >= min && f64::from(*r) <= max && on_step(f64::from(*r)))
         .collect();
     if v.is_empty() && min >= 1.0 {
         v.push(min.ceil() as u32);
@@ -214,6 +225,20 @@ mod tests {
             },
         )];
         assert_eq!(capabilities(&narrow).resolutions, [76]);
+        // Steps of 50 from 50: 75 is not one the backend would scan at.
+        let stepped = [opt(
+            "resolution",
+            OptionUnit::Dpi,
+            OptionConstraint::IntRange {
+                min: 50,
+                max: 1200,
+                quant: 50,
+            },
+        )];
+        assert_eq!(
+            capabilities(&stepped).resolutions,
+            [100, 150, 200, 300, 600, 1200]
+        );
     }
 
     #[test]
