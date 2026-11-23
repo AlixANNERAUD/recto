@@ -122,6 +122,11 @@ came with and its pages, with:
   access rules, page count, quotas and ledger;
 - **Delete**, which deletes it at once.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../images/jobs-dark.png">
+  <img src="../images/jobs-light.png" alt="The Jobs page: under Waiting for you, three documents sent from a MacBook and an iPhone, each with when it arrived, the device, its pages, a Preview button and a form with the printer, copies, sides, color and pages filled as the device asked, a Print button and a Delete button; below, the print jobs with their states.">
+</picture>
+
 A refused print leaves the document waiting, with the reason shown at the top of the page and
 under the document (**Last attempt**), as on the Print page: a quota names the rule and what is
 left of it. A printed document is deleted from the data folder as soon as CUPS accepts it, or
