@@ -5,14 +5,14 @@
 use leptos::prelude::*;
 use leptos_router::hooks::use_query_map;
 
-use super::failure_alert;
+use super::{failure_alert, refusal_alert};
 use crate::{
-    components::ui::{Alert, Card, Empty, Tone},
+    components::ui::{Card, Empty},
     functions::{Allowances, print_choices},
     islands::print_form::PrintForm,
     layout::Layout,
     refusal::Refusal,
-    t, tf,
+    t,
 };
 
 /// The largest accepted upload, which the form states and checks before sending.
@@ -46,24 +46,12 @@ pub fn PrintPage() -> impl IntoView {
     // One listing of the printers serves the form and the quotas.
     let choices = OnceResource::new(print_choices());
     let refusal = refusal.map(|refusal| {
-        view! {
-            <Suspense>
-                {move || Suspend::new(async move {
-                    // A quota refusal names the rule and what is left of it, read now; only
-                    // its id travels in the address.
-                    let message = match (refusal, rule) {
-                        (Refusal::Quota, Some(rule)) => choices
-                            .await
-                            .ok()
-                            .and_then(|choices| choices.quotas)
-                            .and_then(|quotas| quota_refusal(&quotas, rule))
-                            .unwrap_or_else(|| refusal.message()),
-                        _ => refusal.message(),
-                    };
-                    view! { <Alert tone=Tone::Danger>{message}</Alert> }
-                })}
-            </Suspense>
-        }
+        refusal_alert(
+            refusal,
+            rule,
+            || choices,
+            |choices| choices.ok().and_then(|choices| choices.quotas),
+        )
     });
     view! {
         <Layout title=t!("print.title")>
@@ -94,19 +82,6 @@ pub fn PrintPage() -> impl IntoView {
             </Suspense>
         </Layout>
     }
-}
-
-/// The message of a job refused by the rule `rule`, when it still applies to the user.
-pub(crate) fn quota_refusal(quotas: &Allowances, rule: i64) -> Option<String> {
-    let allowance = quotas
-        .allowances
-        .iter()
-        .find(|allowance| allowance.rule == rule)?;
-    Some(tf!(
-        "print.errors.quota_rule",
-        rule = allowance.name.clone(),
-        left = allowance.left(&quotas.currency)
-    ))
 }
 
 /// What the user has left of each rule that applies to them.

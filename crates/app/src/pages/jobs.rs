@@ -11,7 +11,7 @@ use leptos::prelude::*;
 use leptos_router::hooks::use_query_map;
 use recto_printing::Printer;
 
-use super::{failure_alert, print::quota_refusal};
+use super::{failure_alert, refusal_alert};
 use crate::{
     components::ui::{
         Alert, Badge, ButtonVariant, Card, Field, INPUT, Tone, button_class, small_button_class,
@@ -50,7 +50,15 @@ pub fn JobsPage() -> impl IntoView {
             .and_then(|code| Refusal::from_code(&code))
         {
             let rule = query.get("rule").and_then(|id| id.parse::<i64>().ok());
-            (Some(refusal_alert(refusal, rule)), Vec::new())
+            (
+                Some(refusal_alert(
+                    refusal,
+                    rule,
+                    || OnceResource::new(my_quotas()),
+                    Result::ok,
+                )),
+                Vec::new(),
+            )
         } else if query.get("done").is_some_and(|done| done == "deleted") {
             (
                 Some(
@@ -156,28 +164,6 @@ fn over_messages(quotas: Option<&Allowances>, over: &[i64]) -> Vec<String> {
     } else {
         named
     }
-}
-
-/// A refused form's message; a quota refusal names the rule and what is left of it, read now,
-/// as on the Print page.
-fn refusal_alert(refusal: Refusal, rule: Option<i64>) -> AnyView {
-    let Some(rule) = rule.filter(|_| refusal == Refusal::Quota) else {
-        return view! { <Alert tone=Tone::Danger>{refusal.message()}</Alert> }.into_any();
-    };
-    let quotas = OnceResource::new(my_quotas());
-    view! {
-        <Suspense>
-            {move || Suspend::new(async move {
-                let message = quotas
-                    .await
-                    .ok()
-                    .and_then(|quotas| quota_refusal(&quotas, rule))
-                    .unwrap_or_else(|| refusal.message());
-                view! { <Alert tone=Tone::Danger>{message}</Alert> }
-            })}
-        </Suspense>
-    }
-    .into_any()
 }
 
 /// The documents waiting for the user, each with its release and delete forms. Without the
