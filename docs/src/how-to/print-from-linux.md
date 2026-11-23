@@ -1,5 +1,9 @@
 # Print from Linux
 
+> **Not yet checked.** Printing from Linux follows the CUPS behaviour recto is tested against,
+> but has not yet passed its checks on real computers. If something does not work, printing from
+> recto's Print page in the browser always does.
+
 Add recto as a printer on a Linux computer, so that any application's Print dialog can send
 documents to it. They wait in recto until you print them from the Jobs page, where you choose the
 printer (see [How printing from devices works](../explanation/devices.md)). This works with CUPS,

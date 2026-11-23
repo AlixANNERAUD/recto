@@ -97,14 +97,16 @@ scanner this way send no password, and only those scanners can work for them.
 
 | System | How it adds recto | Status |
 | --- | --- | --- |
-| macOS | Printer address and a password prompt, or the personal address, by hand or with a profile | Supported |
-| Linux (CUPS, GNOME, KDE) | Printer address and a password prompt, or the personal address | Supported |
+| macOS | Printer address and a password prompt, or the personal address, by hand or with a profile | Not yet checked |
+| Linux (CUPS, GNOME, KDE) | Printer address and a password prompt, or the personal address | Not yet checked |
 | Windows 10 and 11 | Personal address only | Experimental |
 | iOS and iPadOS | A profile with the personal address, or a discovered printer and a password | Experimental |
 | Android | A discovered printer and a password, through Mopria Print Service | Experimental |
 
-A system is experimental until printing from it has passed its checks on real devices. On every
-system, printing from recto's Print page in the browser works.
+macOS and Linux print through CUPS, which recto's tests and `ipptool` already exercise, but
+neither has passed its checks on real computers yet: they are supported once they do. A system is
+experimental until printing from it has passed its checks on real devices, and its support is
+less certain. On every system, printing from recto's Print page in the browser works.
 
 recto converts the picture formats that phones and Windows send, PWG raster and Apple raster, to
 a PDF as they arrive, so the preview, the page count and page ranges work the same whatever sent
