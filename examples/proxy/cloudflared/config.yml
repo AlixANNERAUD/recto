@@ -12,6 +12,8 @@
 #
 # Cloudflare appends the client's address to any X-Forwarded-For the client sent, so leave
 # RECTO_TRUST_FORWARDED_HEADERS off behind it.
+# Computers and phones print to /ipp/ and /device/: do not put these paths behind Cloudflare
+# Access (see docs/src/how-to/reverse-proxy.md).
 tunnel: recto
 credentials-file: /etc/cloudflared/recto.json
 

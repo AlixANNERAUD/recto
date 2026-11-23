@@ -14,7 +14,7 @@ use recto_domain::{
     passwords::{self, PasswordPolicy},
 };
 use recto_printing::count::PageCounter;
-use recto_printing::{Cups, CupsAdmin, PrinterAdmin};
+use recto_printing::{Cups, CupsAdmin, PrinterAdmin, printer::Media};
 use recto_scanning::{
     ResultStore, SaneScanners, ScanError, ScanRequest, ScannedPage, ScannerCapabilities,
     ScannerInfo, ScannerService,
@@ -50,12 +50,14 @@ pub struct AuthState {
     /// Whether devices may send their passwords over plain HTTP although the public URL is
     /// `http` (`RECTO_IPP_ALLOW_PLAIN`); see [`crate::device_auth::DeviceAuth::plain_allowed`].
     pub ipp_allow_plain: bool,
+    /// The paper size recto's printer offers devices by default (`RECTO_DEFAULT_MEDIA`).
+    pub default_media: Media,
 }
 
 impl AuthState {
     /// The sign-in state with the defaults of the configuration: local accounts on, passwords of
     /// at least [`passwords::DEFAULT_MINIMUM_LENGTH`] characters, forwarded headers ignored,
-    /// device passwords refused over plain HTTP.
+    /// device passwords refused over plain HTTP, A4 paper.
     pub fn new(openid: Option<Arc<OpenId>>, public_url: Url, database: DatabaseConnection) -> Self {
         let secure_cookies = public_url.scheme() == "https";
         Self {
@@ -70,6 +72,7 @@ impl AuthState {
             },
             trust_forwarded_headers: false,
             ipp_allow_plain: false,
+            default_media: Media::A4,
         }
     }
 
@@ -237,6 +240,7 @@ pub async fn build(
         },
         trust_forwarded_headers: config.trust_forwarded_headers,
         ipp_allow_plain: config.ipp_allow_plain,
+        default_media: config.default_media,
         ..AuthState::new(openid, config.public_url.clone(), database)
     };
     (state, auth)

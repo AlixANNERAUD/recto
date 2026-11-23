@@ -103,7 +103,11 @@ impl HeldFiles {
             let Ok(name) = entry.file_name().into_string() else {
                 continue;
             };
-            let metadata = entry.metadata()?;
+            // Renamed or removed since the listing: nothing to sweep.
+            let metadata = match entry.metadata() {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                metadata => metadata?,
+            };
             if !metadata.is_file() || known.contains(&name) {
                 continue;
             }

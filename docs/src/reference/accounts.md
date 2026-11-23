@@ -132,21 +132,31 @@ again lets them sign in; it does not bring their sessions back.
 
 Computers and phones print and scan through recto with a **device password**, never with the
 account's password, which would otherwise sit in every device's keychain. Every user has them,
-single sign-on users included, as long as OS integration is on (`RECTO_OS_INTEGRATION=true`; it
-is off by default). They are kept in the **Devices** section of the Account page, at `/account`:
+single sign-on users included, as long as OS integration is on (`RECTO_OS_INTEGRATION`, on by
+default). They are kept in the **Devices** section of the Account page, at `/account`:
 
 - **Create** one per device, with a name of 1 to 64 characters on one line, such as
   `Work laptop`. recto draws a random password of 32 characters (letters `a` to `z` and digits
-  `2` to `7`, 160 bits) and shows it once, with your username. Copy it then: it is stored only
-  as its SHA-256 and cannot be shown again. The page that shows it is not cached by the browser.
+  `2` to `7`, 160 bits) and shows it once, with your username, the printer's address and your
+  personal address (see below). Copy them then: the password is stored only as its SHA-256 and
+  cannot be shown again. The page that shows it is not cached by the browser.
 - **Revoke** one when a device is lost, sold or no longer used. The device's next request is
   refused.
 - Each user has at most 20. The list shows when each was created and last used, to within 5
   minutes.
 
-A device sends its password as the password of HTTP Basic authentication, with any username:
-computers fill in their own login name, so recto ignores it. Capital letters are accepted. A
-device password cannot sign in to the web pages or change the account.
+A device sends its password in one of two ways:
+
+- as the password of HTTP Basic authentication, with any username, to the printer's address,
+  `ipps://<host>:<port>/ipp/print`: computers fill in their own login name, so recto ignores
+  it. Capital letters are accepted;
+- in its **personal address**, `ipps://<host>:<port>/device/<password>/ipp/print`, for devices
+  that cannot answer a password prompt, such as Windows. A wrong password there answers `404`,
+  like any address that does not exist. The address holds the password: anyone who reads it can
+  print as you, so keep it as private as the password.
+
+A device password cannot sign in to the web pages or change the account. See
+[Printing from computers and phones](printing.md#printing-from-computers-and-phones).
 
 A device password does not expire. It stops working:
 

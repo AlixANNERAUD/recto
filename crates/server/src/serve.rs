@@ -13,7 +13,7 @@ use axum::{
     http::{HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{any, get, post},
+    routing::{get, post},
 };
 use leptos::config::LeptosOptions;
 use leptos::prelude::provide_context;
@@ -44,7 +44,7 @@ use crate::{
     branding,
     config::Config,
     device_auth,
-    routes::{administration, auth, devices, password, print, pwa, scan},
+    routes::{administration, auth, devices, ipp, password, print, pwa, scan},
     session, state,
 };
 
@@ -78,8 +78,9 @@ pub fn leptos_options(config: &Config) -> LeptosOptions {
 /// `/health` (it touches neither CUPS nor the identity provider, so a container stays healthy
 /// while they are down), the sign-in addresses (`/sign-in`, the `/auth/*` routes and pages,
 /// `/no-access`), `POST /theme`, `/brand/*`, `/manifest.webmanifest`, `/sw.js`, `/pwa.js`,
-/// `/offline`, the personal device addresses `/device/*` (a bare 404 for now), and the static
-/// files the fallback serves (see `fallback`). The
+/// `/offline`, the printer's addresses for devices under `/ipp/` and `/device/` (which
+/// authenticate devices themselves, see [`ipp`]), and the static files the fallback serves
+/// (see `fallback`). The
 /// `/administration` pages and forms need an administrator.
 ///
 /// Must be called inside a Tokio runtime: the sign-in rate limit forgets old clients in the
@@ -110,6 +111,7 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
     let password = password::router(state.clone(), &auth);
     let devices = devices::router(state.clone(), &auth);
     let administration = administration::router(state.clone(), &auth);
+    let devices_ipp = ipp::router(state.clone(), &auth);
     let interface = Router::new()
         .route(
             "/print",
@@ -126,12 +128,8 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         .route_layer(middleware::from_fn(session::require_user))
         .fallback(move |state, request| fallback(state, methods, request))
         .with_state(state);
-    Router::new()
+    let web = Router::new()
         .route("/health", get(|| async { "ok" }))
-        // Until a device route matches, a personal address is unknown: a bare 404, never the
-        // sign-in redirect or the not-found page of the fallback, which would carry the secret
-        // into a `Location` header or the browser's history.
-        .route("/device/{*rest}", any(|| async { StatusCode::NOT_FOUND }))
         .merge(auth::router().with_state(auth.clone()))
         .merge(password)
         .merge(devices)
@@ -146,7 +144,14 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         .layer(middleware::from_fn_with_state(
             (AllowedOrigin::new(&auth.public_url), branding_for_refusal),
             refuse_cross_site,
-        ))
+        ));
+    // Devices have no session and send no `Origin`: they authenticate in their routes. Any
+    // other address under theirs is a bare 404, never the sign-in redirect or the not-found
+    // page of the fallback, which would carry a secret into a `Location` header or the
+    // browser's history.
+    Router::new()
+        .merge(devices_ipp)
+        .merge(web)
         .layer(middleware::from_fn(security_headers))
 }
 
@@ -356,8 +361,14 @@ pub async fn sweep_held_once(
 ) {
     match held::sweep(database, now).await {
         Ok(swept) => {
-            if swept.removed > 0 {
-                tracing::info!(count = swept.removed, "held jobs expired");
+            if swept.expired > 0 {
+                tracing::info!(count = swept.expired, "held jobs expired");
+            }
+            if swept.abandoned > 0 {
+                tracing::info!(
+                    count = swept.abandoned,
+                    "held jobs whose document never came were removed"
+                );
             }
             if swept.returned > 0 {
                 tracing::warn!(

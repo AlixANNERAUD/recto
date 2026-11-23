@@ -87,9 +87,28 @@ or with local accounts off, while `RECTO_OS_INTEGRATION` is off. The password fo
 to users without a password, and the device forms answer `404` while `RECTO_OS_INTEGRATION` is
 off.
 
-Personal device addresses, `/device/<secret>/...`, answer a bare `404` with no body to any
-method, signed in or not, until a device route matches: never the sign-in redirect, which would
-copy the secret into a `Location` header and the browser's history.
+## Devices
+
+recto's printer, for computers and phones. These addresses take no session and no cross-site
+check: devices authenticate with a [device password](accounts.md#device-passwords). Bodies are
+IPP requests (`Content-Type: application/ipp`) of at most `RECTO_MAX_UPLOAD_SIZE` plus 64 KiB,
+and answers carry `Cache-Control: no-cache`. See
+[Printing from computers and phones](printing.md#printing-from-computers-and-phones).
+
+| Method and path | Does |
+| --- | --- |
+| `POST /ipp/print` | The printer, with the device password as the password of HTTP Basic. recto reads the 8-byte IPP header first: Get-Printer-Attributes needs no credentials, every other operation answers `401` with `WWW-Authenticate: Basic` before the rest of the body is read when they are missing or wrong. |
+| `POST /ipp/print/{job}` | The same: the address of a job that recto hands out as its `job-uri`. |
+| `POST /device/{password}/ipp/print` and `/device/{password}/ipp/print/{job}` | The personal address. The password is checked before any of the body is read; a wrong one answers `404`. |
+
+Other answers: `403` for device credentials over plain HTTP (see `RECTO_IPP_ALLOW_PLAIN`), `413`
+for a body over the limit, `429` with `Retry-After: 1` after too many wrong passwords from one
+address (see [Device password limit](accounts.md#device-password-limit)), `503` when the
+database cannot check the password.
+
+Any other method or path under `/ipp/`, `/device/` and `/eSCL/` answers a bare `404` with no
+body, signed in or not, and so do all of them while `RECTO_OS_INTEGRATION` is off: never the
+sign-in redirect, which would copy a password into a `Location` header and the browser's history.
 
 The Scan page and the live parts of the other pages call server functions under `/api/`. They
 are internal to the interface and may change between versions.

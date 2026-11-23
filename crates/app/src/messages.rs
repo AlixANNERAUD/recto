@@ -4,6 +4,8 @@
 //! context to read it from (see [`crate::i18n::from_headers`]).
 
 use embedded_i18n::{Locale, t};
+#[cfg(feature = "ssr")]
+use recto_domain::held::HeldState;
 use recto_scanning::ScanError;
 
 /// The message of the server function error answered to a call without a signed-in user. It is
@@ -48,6 +50,18 @@ pub fn invalid_usage_dates(locale: Locale) -> &'static str {
 /// Why a usage export failed: the database did.
 pub fn usage_unavailable(locale: Locale) -> &'static str {
     t!("administration.usage.load_failed", locale = locale)
+}
+
+/// The `job-state-message` a device shows for a job it sent: where the job is in recto. `name`
+/// is the app's name.
+#[cfg(feature = "ssr")]
+pub fn held_job(state: HeldState, name: &str, locale: Locale) -> String {
+    match state {
+        HeldState::Incoming => t!("ipp.incoming", locale = locale).to_owned(),
+        HeldState::Held => format!("{}", t!("ipp.held", name = name, locale = locale)),
+        HeldState::Releasing => format!("{}", t!("ipp.releasing", name = name, locale = locale)),
+        HeldState::Released => format!("{}", t!("ipp.released", name = name, locale = locale)),
+    }
 }
 
 /// What went wrong while scanning or storing a scan, readable by the user. `name` is the app's

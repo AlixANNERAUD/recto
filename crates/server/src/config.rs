@@ -5,6 +5,7 @@ use std::{net::SocketAddr, path::PathBuf};
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use recto_app::state::JobVisibility;
 use recto_domain::passwords;
+use recto_printing::printer::Media;
 use url::Url;
 
 use crate::branding::BrandOptions;
@@ -85,12 +86,11 @@ pub struct Config {
     )]
     pub trust_forwarded_headers: bool,
     /// Computers and phones print and scan through recto with device passwords; `false`
-    /// removes their routes and the Account page's Devices section. Off by default until the
-    /// device routes exist, so that nobody is handed device passwords that print nothing yet.
+    /// removes their routes and the Account page's Devices section.
     #[arg(
         long,
         env = "RECTO_OS_INTEGRATION",
-        default_value = "false",
+        default_value = "true",
         value_parser = boolean("RECTO_OS_INTEGRATION"),
         action = ArgAction::Set
     )]
@@ -116,6 +116,14 @@ pub struct Config {
         value_parser = parse_held_job_hours
     )]
     pub held_job_hours: u32,
+    /// The paper size recto's printer offers devices by default, as a PWG media name.
+    #[arg(
+        long,
+        env = "RECTO_DEFAULT_MEDIA",
+        default_value = "iso_a4_210x297mm",
+        value_parser = parse_default_media
+    )]
+    pub default_media: Media,
     #[arg(long, env = "RECTO_CUPS_URL", default_value = "http://localhost:631", value_parser = parse_cups_url)]
     pub cups_url: Url,
     /// CUPS's Unix socket, which lets administrators manage printers; unset or blank turns
@@ -301,6 +309,13 @@ fn parse_held_job_hours(value: &str) -> Result<u32, String> {
                  {MAX_HELD_JOB_HOURS}, not {value}"
             )
         })
+}
+
+fn parse_default_media(value: &str) -> Result<Media, String> {
+    value
+        .trim()
+        .parse()
+        .map_err(|error| format!("RECTO_DEFAULT_MEDIA is an {error}"))
 }
 
 fn parse_currency(value: &str) -> Result<String, String> {
@@ -531,9 +546,9 @@ mod tests {
         assert!(!config.trust_forwarded_headers);
         assert_eq!(config.oidc_administrator_claim, None);
         assert_eq!(config.oidc_groups_claim, None);
-        // Off until the device routes exist: device passwords would print nothing yet.
-        assert!(!config.os_integration);
+        assert!(config.os_integration);
         assert!(!config.ipp_allow_plain);
+        assert_eq!(config.default_media, Media::A4);
     }
 
     #[test]
@@ -558,9 +573,21 @@ mod tests {
     }
 
     #[test]
+    fn the_default_media_is_one_of_five() {
+        let config = parse(&["--default-media", "na_letter_8.5x11in"]).unwrap();
+        assert_eq!(config.default_media, Media::Letter);
+        for media in ["letter", "iso_a6_105x148mm", ""] {
+            let error = parse(&[&format!("--default-media={media}")]).unwrap_err();
+            let error = error.to_string();
+            assert!(error.contains("RECTO_DEFAULT_MEDIA"), "{error}");
+            assert!(error.contains("iso_a4_210x297mm"), "{error}");
+        }
+    }
+
+    #[test]
     fn os_integration_settings_are_booleans() {
-        let config = parse(&["--os-integration", "true", "--ipp-allow-plain", "true"]).unwrap();
-        assert!(config.os_integration);
+        let config = parse(&["--os-integration", "false", "--ipp-allow-plain", "true"]).unwrap();
+        assert!(!config.os_integration);
         assert!(config.ipp_allow_plain);
         for (option, variable) in [
             ("--os-integration", "RECTO_OS_INTEGRATION"),

@@ -75,6 +75,12 @@ pub struct NewDevicePassword {
     pub secret: String,
     /// What a password prompt may ask for besides the password; recto ignores it.
     pub username: String,
+    /// The printer's address for devices that send the password when asked:
+    /// `ipps://host:port/ipp/print`.
+    pub print_address: String,
+    /// The personal address, which carries the secret, for devices that cannot answer a
+    /// password prompt.
+    pub personal_address: String,
 }
 
 /// A refused device form: why, and the name typed, which the form shows again.
@@ -298,12 +304,38 @@ fn CreatedPassword(created: NewDevicePassword) -> impl IntoView {
                     </div>
                     <div class="grid gap-1">
                         <dt class="font-semibold">{t!("account.devices.created.username")}</dt>
-                        <dd>
+                        <dd class="grid gap-1">
                             <code class="font-mono">{created.username}</code>
+                            <span class=HINT>{t!("account.devices.created.username_hint")}</span>
+                        </dd>
+                    </div>
+                    <div class="grid gap-1">
+                        <dt class="font-semibold">
+                            {t!("account.devices.created.print_address")}
+                        </dt>
+                        <dd class="grid gap-1">
+                            <code class="font-mono break-all select-all">
+                                {created.print_address}
+                            </code>
+                            <span class=HINT>
+                                {t!("account.devices.created.print_address_hint")}
+                            </span>
+                        </dd>
+                    </div>
+                    <div class="grid gap-1">
+                        <dt class="font-semibold">
+                            {t!("account.devices.created.personal_address")}
+                        </dt>
+                        <dd class="grid gap-1">
+                            <code class="font-mono break-all select-all">
+                                {created.personal_address}
+                            </code>
+                            <span class=HINT>
+                                {t!("account.devices.created.personal_address_hint")}
+                            </span>
                         </dd>
                     </div>
                 </dl>
-                <p class=HINT>{t!("account.devices.created.username_hint")}</p>
             </div>
         </Card>
     }

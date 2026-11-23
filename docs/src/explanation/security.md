@@ -32,7 +32,10 @@ who is not signed in, and other websites trying to act through a signed-in perso
 ## Nothing works without sign-in
 
 Every page, form and server function requires a session, except the sign-in addresses, `/health`
-and the interface's static files (scripts, styles and icons, which hold no data). The check runs
+and the interface's static files (scripts, styles and icons, which hold no data). The printer's
+addresses for computers and phones, under `/ipp/` and `/device/`, take no session either: they
+require a [device password](#device-passwords) instead, checked on every request, and only
+Get-Printer-Attributes, which says what the printer is, answers without one. The check runs
 for every request at the router, and again inside each action that touches a printer, a scanner or
 a result. The administration pages and forms also require an administrator, checked before the
 form is even read; to anyone else, they do not exist.
@@ -70,7 +73,7 @@ on the Account page asks for the current one, and ends your other sessions.
 Computers and phones cannot follow a sign-in page, so they authenticate with
 [device passwords](../reference/accounts.md#device-passwords). A device password grants
 exactly what a printer or a scanner needs: sending print jobs as its owner, seeing and
-cancelling the jobs it sent, and scanning on the scanners its owner may use. It never opens a
+cancelling those still waiting for their document, and scanning on the scanners its owner may use. It never opens a
 session, never reaches a web page and never changes the account: the sign-in form refuses it like
 any wrong password, and the device routes accept nothing else, not even the account's password.
 That keeps the account password out of device keychains, and makes revoking a lost phone a click
@@ -119,6 +122,36 @@ shared address still makes every device behind it wait; with `RECTO_TRUST_FORWAR
 on, the limit counts by the forwarded client address, as the sign-in limit does, and only the
 guesser waits. Whether plain HTTP is accepted always depends on the connection's address, never
 on a forwarded header, which a device could write itself.
+
+## Held documents
+
+Documents sent from computers and phones are kept, which is a deliberate change from the Print
+page, where an upload goes straight to CUPS and recto keeps nothing. They wait under
+`RECTO_DATA_DIR/held`, in files readable by recto alone, until their owner releases or deletes
+them, or until they expire after `RECTO_HELD_JOB_HOURS` (24 by default). Expired documents are
+deleted within 10 minutes, even with OS integration off, and a file no held job names, left by a
+crash, is deleted at the next start.
+
+They are their owner's only. Every query for them names the user, or for a device the device
+password that sent them: an administrator cannot list, read or release another person's
+documents, and a device sees only what it sent itself, so a leaked phone password shows nothing
+of what the person printed from their laptop. Whoever reads the data volume or its backups reads
+the documents waiting there: keep it as private as the database.
+
+Limits keep a device from filling the disk: a document is at most `RECTO_MAX_UPLOAD_SIZE`, and
+each person may have at most 20 waiting and 10 times that size in all, checked before anything
+is written. A body over the limit is refused without being kept. recto authenticates before
+reading a document: a personal address is checked before any byte of the body, and on
+`/ipp/print` only the 8-byte header that names the operation is read first. A device may still
+have sent part of its document by then, and some proxies read whole bodies anyway: recto only
+promises not to read or keep it.
+
+The personal address puts the device password in a URL. recto never logs it and never redirects
+with it, and any unknown address under `/device/` is a bare `404`. Your reverse proxy's access
+log will record it unless told not to (see
+[Run behind a reverse proxy](../how-to/reverse-proxy.md#printing-from-computers-and-phones)), and
+on a shared computer anyone who opens the printer's settings reads it. Revoking the device
+password is the remedy.
 
 ## Administrators
 
@@ -177,8 +210,8 @@ cookies, and they hold nothing private: a name, a color, icons and a few lines o
 
 ## Files
 
-Uploaded files are recognized by their content, not their name, and only PDF, JPEG and PNG are
-accepted. recto never opens or renders them: CUPS's filters do, in the CUPS container.
+Uploaded files, and documents sent from computers and phones, are recognized by their content,
+not their name or declared type, and only PDF, JPEG and PNG are accepted. recto never opens or renders them: CUPS's filters do, in the CUPS container.
 
 recto does not convert Office documents. Converters such as LibreOffice are large, parse complex
 formats, and have a history of vulnerabilities; running one inside recto would expose the web

@@ -123,7 +123,11 @@
         "once": "This password is shown only once. Copy it now: it cannot be shown again.",
         "password": "Password",
         "username": "Username",
-        "username_hint": "If the device also asks for a username, use this one."
+        "username_hint": "If the device also asks for a username, use this one.",
+        "print_address": "Printer address",
+        "print_address_hint": "Add this printer on a computer that asks for a password, and give it the password above.",
+        "personal_address": "Personal printer address",
+        "personal_address_hint": "For devices that cannot ask for a password, such as Windows computers. It holds the password: keep it as private, and revoke the password if it leaks."
       },
       "errors": {
         "name_invalid": "The device name must be 1 to {maximum} characters long.",
@@ -737,5 +741,11 @@
     "with_grant": "{text}, plus {granted} granted",
     "on_printers": "{text}, on {printers}",
     "separator": ", "
+  },
+  "ipp": {
+    "incoming": "Waiting for its document",
+    "held": "Held in {name} until you release it",
+    "releasing": "Being released in {name}",
+    "released": "Released in {name}"
   }
 }

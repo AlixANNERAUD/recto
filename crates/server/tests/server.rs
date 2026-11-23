@@ -4373,3 +4373,6 @@ mod devices;
 
 #[path = "server/held.rs"]
 mod held;
+
+#[path = "server/ipp.rs"]
+mod ipp_printer;

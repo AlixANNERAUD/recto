@@ -9,6 +9,10 @@ recto.example.org {
 		max_size 51MiB
 	}
 
+	# Personal printer addresses hold a device password: keep them out of the access log
+	# (log_skip needs Caddy 2.8 or later; Caddy logs no access without a log directive).
+	log_skip /device/*
+
 	reverse_proxy recto:8080 {
 		# Caddy keeps Host, sets X-Forwarded-Proto and replaces X-Forwarded-For (it only
 		# appends when trusted_proxies is set), as RECTO_TRUST_FORWARDED_HEADERS needs. It

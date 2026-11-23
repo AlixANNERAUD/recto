@@ -17,11 +17,11 @@ pub mod files;
 use std::collections::HashSet;
 
 use chrono::{DateTime, TimeDelta, Utc};
-use recto_entity::{held_jobs, users};
+use recto_entity::{device_passwords, held_jobs, users};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait, DatabaseBackend,
-    DatabaseTransaction, DbErr, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Select,
-    TransactionSession, TransactionTrait, sea_query::Expr,
+    DatabaseTransaction, DbErr, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    Select, TransactionSession, TransactionTrait, sea_query::Expr,
 };
 
 use crate::{
@@ -137,8 +137,12 @@ pub struct Deleted {
 /// What a [`sweep`] did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Swept {
-    /// Rows removed: expired, abandoned or long released.
-    pub removed: u64,
+    /// Held jobs removed because they expired.
+    pub expired: u64,
+    /// Create-Jobs removed because their document never came.
+    pub abandoned: u64,
+    /// Released jobs removed a day after their release.
+    pub released: u64,
     /// The files those rows named, to remove.
     pub files: Vec<String>,
     /// Claims returned to `held`, from releases that never reached the ledger.
@@ -158,6 +162,19 @@ pub async fn room(
     fits(database, user_id, None, incoming_bytes, max_bytes).await
 }
 
+/// Whether the user's `incoming` job `id` has room for its document of `incoming_bytes`: as
+/// [`room`], counting that job once. Checked before the document is written; [`attach`] checks
+/// again.
+pub async fn room_for(
+    database: &impl ConnectionTrait,
+    user_id: i64,
+    id: i64,
+    incoming_bytes: i64,
+    max_bytes: i64,
+) -> Result<bool> {
+    fits(database, user_id, Some(id), incoming_bytes, max_bytes).await
+}
+
 /// Records a job received with its document as `held`, unless the user has no [`room`] for it
 /// ([`Problem::TooManyHeldJobs`]). Returns its id.
 pub async fn receive(
@@ -167,6 +184,9 @@ pub async fn receive(
 ) -> Result<i64> {
     let transaction = begin_write(database).await?;
     lock_user(&transaction, job.user_id).await?;
+    if let Some(device) = job.device_password_id {
+        owns_device(&transaction, job.user_id, device).await?;
+    }
     if !fits(&transaction, job.user_id, None, job.stored.size, max_bytes).await? {
         return Err(too_many());
     }
@@ -210,6 +230,7 @@ pub async fn create_incoming(
 ) -> Result<i64> {
     let transaction = begin_write(database).await?;
     lock_user(&transaction, user_id).await?;
+    owns_device(&transaction, user_id, device_password_id).await?;
     if !fits(&transaction, user_id, None, 0, max_bytes).await? {
         return Err(too_many());
     }
@@ -355,7 +376,7 @@ pub async fn get_for_device(
 }
 
 /// Claims the user's held job for one release: `held` to `releasing` in one conditional update,
-/// so of two releases at once exactly one gets `Some`. The job returned carries the claim the
+/// so of two releases at once exactly one gets `Some`. An expired job is not claimed. The job returned carries the claim the
 /// release must name to [`mark_released`] or [`unclaim`] it.
 pub async fn claim(
     database: &impl ConnectionTrait,
@@ -363,9 +384,11 @@ pub async fn claim(
     id: i64,
     now: DateTime<Utc>,
 ) -> Result<Option<HeldJob>> {
+    // An expired job waits only for the sweep.
     let row = held_jobs::Entity::find_by_id(id)
         .filter(held_jobs::Column::UserId.eq(user_id))
         .filter(held_jobs::Column::State.eq(HeldState::Held.keyword()))
+        .filter(held_jobs::Column::ExpiresAt.gt(now.fixed_offset()))
         .one(database)
         .await?;
     let Some(row) = row else {
@@ -491,8 +514,9 @@ pub async fn delete(
     delete_where(database, condition).await
 }
 
-/// Deletes a job of the device password if it is `held` or still `incoming` (IPP Cancel-Job).
-/// Returns what was deleted, `None` when nothing was.
+/// Deletes a job of the device password still `incoming` (IPP Cancel-Job before its document).
+/// A held job is reported completed to the device, so only its owner deletes it, with
+/// [`delete`]. Returns what was deleted, `None` when nothing was.
 pub async fn delete_for_device(
     database: &(impl ConnectionTrait + TransactionTrait),
     device_password_id: i64,
@@ -501,10 +525,7 @@ pub async fn delete_for_device(
     let condition = Condition::all()
         .add(held_jobs::Column::Id.eq(id))
         .add(held_jobs::Column::DevicePasswordId.eq(device_password_id))
-        .add(
-            held_jobs::Column::State
-                .is_in([HeldState::Held.keyword(), HeldState::Incoming.keyword()]),
-        );
+        .add(held_jobs::Column::State.eq(HeldState::Incoming.keyword()));
     delete_where(database, condition).await
 }
 
@@ -551,12 +572,19 @@ pub async fn sweep(
     let mut swept = Swept::default();
     if !rows.is_empty() {
         let ids: Vec<i64> = rows.iter().map(|row| row.id).collect();
-        swept.removed = held_jobs::Entity::delete_many()
+        // The rows are locked, so these are the rows deleted.
+        held_jobs::Entity::delete_many()
             .filter(held_jobs::Column::Id.is_in(ids))
             .filter(expired)
             .exec(&transaction)
-            .await?
-            .rows_affected;
+            .await?;
+        for row in &rows {
+            match HeldState::from_keyword(&row.state) {
+                Some(HeldState::Incoming) => swept.abandoned += 1,
+                Some(HeldState::Released) => swept.released += 1,
+                _ => swept.expired += 1,
+            }
+        }
         swept.files = rows.into_iter().filter_map(|row| row.file).collect();
     }
     // A row with a ledger entry may have reached CUPS: it never goes back.
@@ -620,6 +648,24 @@ async fn fits(
     let sizes: Vec<i64> = query.into_tuple().all(database).await?;
     let total = sizes.iter().sum::<i64>().saturating_add(incoming_bytes);
     Ok((sizes.len() as u64) < MAX_JOBS_PER_USER && total <= max_bytes)
+}
+
+/// Refuses with [`Error::NotFound`] a device password that is not the user's: its jobs would
+/// show to another person's device.
+async fn owns_device(
+    transaction: &impl ConnectionTrait,
+    user_id: i64,
+    device_password_id: i64,
+) -> Result<()> {
+    let owned = device_passwords::Entity::find_by_id(device_password_id)
+        .filter(device_passwords::Column::UserId.eq(user_id))
+        .count(transaction)
+        .await?;
+    if owned == 1 {
+        Ok(())
+    } else {
+        Err(Error::NotFound)
+    }
 }
 
 /// Locks the user's row on PostgreSQL, so two jobs of one user arriving together are checked

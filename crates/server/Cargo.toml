@@ -52,12 +52,14 @@ reqwest.workspace = true
 url.workspace = true
 rpassword.workspace = true
 data-encoding.workspace = true
+ipp.workspace = true
 
 [dev-dependencies]
 recto-domain = { workspace = true, features = ["testing"] }
 recto-printing = { workspace = true, features = ["testing"] }
 recto-scanning = { workspace = true, features = ["testing"] }
 wiremock.workspace = true
+futures-core.workspace = true
 
 [lints]
 workspace = true

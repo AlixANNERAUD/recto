@@ -33,6 +33,8 @@ use crate::{session, state::AuthState};
 struct DevicesState {
     app: AppState,
     methods: SignInMethods,
+    /// Where devices reach the printer: `ipps://host:port`.
+    printer_address: String,
 }
 
 /// `POST /account/devices` and `POST /account/devices/{id}/revoke`.
@@ -40,6 +42,7 @@ pub fn router(app: AppState, auth: &AuthState) -> Router {
     let state = DevicesState {
         app,
         methods: auth.sign_in_methods(),
+        printer_address: super::ipp::printer_address(&auth.public_url).0,
     };
     Router::new()
         .route("/account/devices", post(create))
@@ -95,6 +98,11 @@ async fn create(
     );
     let shown = NewDevicePassword {
         name,
+        print_address: format!("{}/ipp/print", state.printer_address),
+        personal_address: format!(
+            "{}/device/{}/ipp/print",
+            state.printer_address, created.secret
+        ),
         secret: created.secret,
         username: user.username,
     };

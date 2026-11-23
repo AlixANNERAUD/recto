@@ -17,6 +17,9 @@ services:
       traefik.http.routers.recto.entrypoints: websecure
       traefik.http.routers.recto.tls.certresolver: letsencrypt
       traefik.http.services.recto.loadbalancer.server.port: "8080"
+      # Traefik writes no access log unless --accesslog is set. If you set it, personal printer
+      # addresses (/device/...) hold a device password and Traefik cannot leave out a path:
+      # keep that log as private as the passwords.
 
   traefik:
     image: traefik:v3.6

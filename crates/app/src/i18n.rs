@@ -14,7 +14,7 @@
 //! let pages = tp!("print.pages", page_count);
 //! ```
 
-use embedded_i18n::Locale;
+pub use embedded_i18n::Locale;
 use leptos::prelude::*;
 
 /// Name of the cookie remembering the chosen language.

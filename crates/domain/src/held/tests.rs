@@ -159,7 +159,7 @@ async fn a_row_with_a_ledger_entry_never_returns_to_held() {
         .await
         .unwrap();
     assert_eq!(swept.returned, 1);
-    assert_eq!(swept.removed, 0);
+    assert_eq!((swept.expired, swept.abandoned, swept.released), (0, 0, 0));
     assert_eq!(state(&database, stuck).await, Some(HeldState::Held));
     // Claimed 14 minutes ago: still in progress.
     let swept = sweep(&database, later + TimeDelta::minutes(14))
@@ -300,7 +300,8 @@ async fn the_sweep_follows_the_rules() {
         HashSet::from(["expired", "fresh", "old", "recent"].map(String::from))
     );
     let swept = sweep(&database, now).await.unwrap();
-    assert_eq!(swept.removed, 3);
+    // Counted apart: only the first are documents nobody released in time.
+    assert_eq!((swept.expired, swept.abandoned, swept.released), (1, 1, 1));
     assert_eq!(swept.files, ["expired", "old"]);
     assert_eq!(swept.returned, 0);
     for gone in [expired, abandoned, old] {
@@ -401,6 +402,52 @@ async fn the_cap_is_checked_before_and_at_insert() {
 }
 
 #[tokio::test]
+async fn an_incoming_job_has_room_for_its_document() {
+    let database = crate::testing::database().await;
+    let alice = user(&database, "alice", false).await;
+    let phone = device(&database, alice, "Phone").await;
+    receive(
+        &database,
+        NewHeld {
+            stored: stored("big", 800),
+            ..new_held(alice, None, "big", noon())
+        },
+        MAX_BYTES,
+    )
+    .await
+    .unwrap();
+    for number in 2..MAX_JOBS_PER_USER {
+        hold(&database, alice, &format!("job-{number}"), noon()).await;
+    }
+    let incoming = create_incoming(
+        &database,
+        alice,
+        phone,
+        "late.pdf",
+        "{}",
+        noon(),
+        LIFETIME,
+        MAX_BYTES,
+    )
+    .await
+    .unwrap();
+    // The queue is full, but the incoming job is in it already: only its document is new.
+    assert!(!room(&database, alice, 0, MAX_BYTES).await.unwrap());
+    let used = 800 + 10 * (MAX_JOBS_PER_USER as i64 - 2);
+    let left = MAX_BYTES - used;
+    assert!(
+        room_for(&database, alice, incoming, left, MAX_BYTES)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !room_for(&database, alice, incoming, left + 1, MAX_BYTES)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
 async fn delete_only_takes_held_rows() {
     let database = crate::testing::database().await;
     let alice = user(&database, "alice", false).await;
@@ -430,7 +477,7 @@ async fn delete_only_takes_held_rows() {
     assert_eq!(state(&database, held).await, None);
     assert_eq!(delete(&database, alice, held).await.unwrap(), None);
 
-    // A device cancels its own jobs, incoming ones included.
+    // A device cancels its own jobs still waiting for their document.
     let incoming = create_incoming(
         &database,
         alice,
@@ -453,6 +500,7 @@ async fn delete_only_takes_held_rows() {
         delete_for_device(&database, phone, incoming).await.unwrap(),
         Some(Deleted { file: None })
     );
+    // A held job is completed for the device: only its owner deletes it, on the Jobs page.
     let sent = receive(
         &database,
         new_held(alice, Some(phone), "sent", noon()),
@@ -460,6 +508,11 @@ async fn delete_only_takes_held_rows() {
     )
     .await
     .unwrap();
+    assert_eq!(
+        delete_for_device(&database, phone, sent).await.unwrap(),
+        None
+    );
+    assert_eq!(state(&database, sent).await, Some(HeldState::Held));
     claim(&database, alice, sent, noon())
         .await
         .unwrap()
@@ -469,6 +522,59 @@ async fn delete_only_takes_held_rows() {
         None
     );
     assert_eq!(state(&database, sent).await, Some(HeldState::Releasing));
+}
+
+#[tokio::test]
+async fn an_expired_job_cannot_be_claimed() {
+    let database = crate::testing::database().await;
+    let alice = user(&database, "alice", false).await;
+    let id = hold(&database, alice, "old", noon()).await;
+    let expiry = noon() + LIFETIME;
+    assert_eq!(claim(&database, alice, id, expiry).await.unwrap(), None);
+    assert_eq!(state(&database, id).await, Some(HeldState::Held));
+    assert!(
+        claim(&database, alice, id, expiry - TimeDelta::seconds(1))
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn a_job_names_a_device_of_its_owner_only() {
+    let database = crate::testing::database().await;
+    let alice = user(&database, "alice", false).await;
+    let bob = user(&database, "bob", false).await;
+    let bobs_phone = device(&database, bob, "Phone").await;
+    assert!(matches!(
+        receive(
+            &database,
+            new_held(alice, Some(bobs_phone), "mixed", noon()),
+            MAX_BYTES
+        )
+        .await,
+        Err(Error::NotFound)
+    ));
+    assert!(matches!(
+        create_incoming(
+            &database,
+            alice,
+            bobs_phone,
+            "mixed.pdf",
+            "{}",
+            noon(),
+            LIFETIME,
+            MAX_BYTES,
+        )
+        .await,
+        Err(Error::NotFound)
+    ));
+    assert!(
+        list_for_device(&database, bobs_phone)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]

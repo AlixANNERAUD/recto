@@ -573,7 +573,7 @@ fn options(
 
 /// The job name CUPS shows: the uploaded file's own name, without any folder some browsers
 /// include, cut to what IPP accepts.
-fn job_name(file_name: &str) -> String {
+pub(crate) fn job_name(file_name: &str) -> String {
     let name = file_name
         .rsplit(['/', '\\'])
         .next()

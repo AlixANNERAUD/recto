@@ -76,6 +76,8 @@ tower_governor = { version = "0.8.0", default-features = false, features = ["axu
 getrandom = { version = "0.4.3", default-features = false }
 data-encoding = { version = "2.11.1", default-features = false, features = ["alloc"] }
 sha2 = { version = "0.11.1", default-features = false }
+# Tests of the IPP routes send bodies in chunks they count, as a stream.
+futures-core = { version = "0.3.34", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

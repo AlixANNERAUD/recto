@@ -55,6 +55,34 @@ Tests never touch a real printer, scanner or identity provider: the CUPS client 
 tested against fake servers built with `wiremock`, and scanning against a mock and SANE's `test`
 backend.
 
+### Check the printer with ipptool
+
+recto's IPP printer is checked by hand against CUPS's own conformance tests, which need a running
+server and Docker, so the test suite does not run them. With `mise run dev` running, create a
+device password on the Account page (`http://127.0.0.1:3000/account`), then:
+
+```sh
+SECRET=...   # the device password
+docker run --rm --network host --entrypoint ipptool olbat/cupsd \
+  -t -I -h -T 30 -f /usr/share/cups/data/default-testpage.pdf \
+  "ipp://127.0.0.1:3000/device/$SECRET/ipp/print" ipp-everywhere.test
+# With Basic credentials, which ipptool takes from the address:
+docker run --rm --network host --entrypoint ipptool olbat/cupsd \
+  -t -T 30 -f /usr/share/cups/data/default-testpage.pdf \
+  "ipp://anyone:$SECRET@127.0.0.1:3000/ipp/print" print-job.test
+```
+
+`--network host` makes the container's `127.0.0.1` the host's, from which recto accepts device
+passwords over plain HTTP. `-t` prints a report, `-I` goes on after a failure, `-v` shows every
+attribute.
+
+The **PWG 5100.14 section 5.1/5.2** block of `ipp-everywhere.test` fails, for expected reasons
+only: `image/pwg-raster` and the `pwg-raster-*` attributes (recto does not take rasters yet),
+`printer-supply*` (recto has no ink to report, and does not make levels up), and
+`overrides-supported WITH-VALUE "document-number"`, a typo in CUPS 2.4's test file that fails
+CUPS's own `ippeveprinter` too. Every other test passes. Documents sent this way are held for the
+development user, under `target/dev-data/held`.
+
 ## Where things are
 
 | Crate | Role |

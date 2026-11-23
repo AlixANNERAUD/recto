@@ -7,7 +7,9 @@ into one web page anyone in the house can open, behind a sign-in.
 ```mermaid
 flowchart LR
     browser([Browser]) -- HTTPS --> proxy[Reverse proxy]
+    device([Computer or phone]) -- IPP over HTTPS --> proxy
     proxy -- HTTP --> recto[recto]
+    recto -- held documents --> data[(Data folder)]
     recto -- IPP over HTTP --> cups[CUPS] --> printers([Printers])
     recto -. administration over the local socket, optional .-> cups
     recto -- libsane --> sane[SANE backends] --> scanners([Scanners])
@@ -36,6 +38,26 @@ CUPS's local Unix socket. It sends the administration requests (`CUPS-Add-Modify
 recognizes recto by the uid of the process (`PeerCred`) instead of a password. CUPS refuses those
 requests over the network, so the socket is the only way in. [Security](security.md#cups) explains
 the setup.
+
+## Printing from devices: recto as an IPP printer
+
+recto also speaks IPP the other way round, as a printer. A computer or phone adds
+`ipps://recto.example.org:443/ipp/print` like any driverless network printer, and its print
+dialog sends documents there. The printer is generic: one queue, whatever printers CUPS has,
+because the document does not depend on a printer until someone picks one. The routes live in
+recto's own process, on its usual port behind the reverse proxy, so they reuse its TLS
+certificate and need no new port.
+
+Devices have no session: they authenticate with a device password, sent with HTTP Basic or as
+part of a personal address for devices that cannot answer a password prompt. The IPP protocol
+code, which decodes requests and describes the printer, is a pure module of the printing crate;
+the server authenticates, reads the body and keeps the jobs.
+
+A received document is **held**: written to `RECTO_DATA_DIR/held` with a row in the database,
+and reported complete to the device, which would otherwise keep its queue blocked or a phone
+spinning. It is printed only when its owner releases it, through the same access rules, quotas
+and ledger as the Print page; until then nothing is counted. Holding rather than printing at once
+is what lets a person pick the printer, and keeps a print dialog from going around the quotas.
 
 ## Scanning: libsane in a worker thread
 
@@ -82,6 +104,7 @@ recto keeps little, and only in its database on disk:
 | Quota rules, their grants and resets | the database | until the rule is deleted |
 | The scan log: who scanned how many pages, on which scanner, and when | the database | kept |
 | Scan results | `/tmp/recto-scans` | 1 hour, or until recto restarts |
+| Documents sent from computers and phones, held | `RECTO_DATA_DIR/held`, and a row in the database | until released, deleted or expired (`RECTO_HELD_JOB_HOURS`) |
 | The scanner list | memory | until someone looks again |
 | Password sign-in attempts | memory | a few seconds, or until recto restarts |
 | Configuration | environment | the life of the process |

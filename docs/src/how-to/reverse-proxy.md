@@ -71,6 +71,62 @@ proxy's limit a little above it, 51 MiB for the default (the examples do):
   `respondingTimeouts.readTimeout` to 600 seconds.
 - **Cloudflare:** accepts 100 MB on its free and Pro plans.
 
+## Printing from computers and phones
+
+Computers and phones [print through recto](../reference/printing.md#printing-from-computers-and-phones)
+at `https://recto.example.org/ipp/print` and at personal addresses under `/device/`, over the
+same proxy, with the same certificate and body limit as the web page: nothing to open, and
+documents up to `RECTO_MAX_UPLOAD_SIZE` already get through.
+
+**Keep `/device/` out of the access log.** A personal address holds a device password. recto
+never logs it, but most proxies log every path. The examples turn it off for `/device/`:
+
+- **nginx:** a `location /device/` with `access_log off;` and the same proxy settings.
+- **Caddy:** `log_skip /device/*` (Caddy 2.8 or later).
+- **Apache:** `SetEnvIf Request_URI "^/device/" dontlog` and `env=!dontlog` on `CustomLog`.
+- **HAProxy:** `http-request set-log-level silent if { path_beg /device/ }`.
+- **Traefik:** writes no access log unless `--accesslog` is set, and cannot leave out one path
+  when it is; keep that log private.
+- **Cloudflare Tunnel:** request logs are kept by Cloudflare (Logpush on Enterprise plans); the
+  path is in them.
+
+**Exempt `/ipp/`, `/device/` and `/eSCL/` from forward authentication.** An authenticating
+proxy, such as Authelia, Authentik or Cloudflare Access, in front of recto answers devices with
+a sign-in page they cannot follow, and printing fails. recto authenticates these paths itself,
+with device passwords:
+
+- **Authelia**, an access control rule before the others:
+
+  ```yaml
+  access_control:
+    rules:
+      - domain: recto.example.org
+        resources:
+          - '^/(ipp|device|eSCL)/'
+        policy: bypass
+  ```
+
+- **Authentik**, in the proxy provider of recto, under **Unauthenticated Paths**:
+
+  ```text
+  ^/(ipp|device|eSCL)/
+  ```
+
+- **Cloudflare Access**, a second self-hosted application for `recto.example.org/ipp`,
+  `recto.example.org/device` and `recto.example.org/eSCL`, with one policy whose action is
+  **Bypass** for **Everyone**. Cloudflare applies the most specific path first.
+- **Traefik with a `forwardAuth` middleware**, a second router for the same service without it:
+
+  ```yaml
+  traefik.http.routers.recto-devices.rule: Host(`recto.example.org`) && (PathPrefix(`/ipp/`) || PathPrefix(`/device/`) || PathPrefix(`/eSCL/`))
+  traefik.http.routers.recto-devices.entrypoints: websecure
+  traefik.http.routers.recto-devices.tls.certresolver: letsencrypt
+  traefik.http.routers.recto-devices.service: recto
+  ```
+
+- **nginx with `auth_request`**, `auth_request off;` in the `location /device/` of the example
+  and in a `location /ipp/` and a `location /eSCL/` like it.
+
 ## Count sign-in attempts per person
 
 recto limits password sign-in attempts per client address (see
@@ -122,7 +178,9 @@ location / {
 ```
 
 The file also redirects port 80 to HTTPS. `proxy_buffering off` and `proxy_request_buffering off`
-stream bodies instead of writing them to temporary files. To reach recto on the host, publish its
+stream bodies instead of writing them to temporary files. The `location /device/` block keeps
+personal printer addresses out of the access log (see
+[Printing from computers and phones](#printing-from-computers-and-phones)). To reach recto on the host, publish its
 port to the loopback address only (`127.0.0.1:8080:8080` under `ports`).
 
 ## Caddy
@@ -238,6 +296,14 @@ and Pro plans raises it: scan long batches in smaller stacks. Do not enable cach
 2. Open `RECTO_PUBLIC_URL` and check that your browser shows a valid certificate, then sign in.
    If sign-in loops or fails, see [Troubleshoot](troubleshoot.md#sign-in).
 3. Print a file close to `RECTO_MAX_UPLOAD_SIZE`. A `413` means the proxy's body limit is too low.
+4. Check that devices reach the printer without a sign-in page in the way:
+
+   ```sh
+   curl -s -o /dev/null -w '%{http_code}\n' -X POST https://recto.example.org/ipp/print
+   ```
+
+   It prints `400` (an empty IPP request), not `302` or `401`, and the proxy's access log has no
+   line for `/device/`.
 4. Scan a long batch, or one that takes more than a minute. **The connection to recto was cut
    before the scan finished** means the proxy's timeout is too short.
 5. If you set `RECTO_TRUST_FORWARDED_HEADERS`, enter a wrong password from two devices. Each

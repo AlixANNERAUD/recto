@@ -1,0 +1,665 @@
+//! recto as an IPP printer: documents from computers and phones are held, never printed, until
+//! their owner releases them; devices authenticate before their documents are read, see only
+//! the jobs they sent, and keep their personal address in every URI they are given.
+
+use std::{
+    collections::VecDeque,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    task::{Context, Poll},
+};
+
+use axum::body::Bytes;
+use chrono::{TimeDelta, Utc};
+use ipp::model::Operation as IppOperation;
+use ipp::prelude::{DelimiterTag, IppAttribute, IppRequestResponse, IppValue, IppVersion, Uri};
+use ipp::{parser::IppParser, reader::IppReader};
+use recto_domain::{
+    device_passwords,
+    held::{self, HeldState},
+};
+use recto_printing::testing::sample_pdf;
+
+use super::*;
+
+/// Device requests come from the server itself: the test server is plain HTTP, where only
+/// loopback clients may send device passwords.
+const LOOPBACK: [u8; 4] = [127, 0, 0, 1];
+const PRINTER_URI: &str = "ipp://recto.test:80/ipp/print";
+
+struct Device {
+    id: i64,
+    secret: String,
+}
+
+async fn device(harness: &Harness, user: i64, name: &str) -> Device {
+    let created = device_passwords::create(&harness.database, user, name, Utc::now())
+        .await
+        .unwrap();
+    Device {
+        id: created.id,
+        secret: created.secret,
+    }
+}
+
+fn request(operation: IppOperation) -> IppRequestResponse {
+    let uri: Uri = "ipp://recto.test/ipp/print".parse().unwrap();
+    IppRequestResponse::new(IppVersion::v2_0(), operation, Some(uri)).unwrap()
+}
+
+fn operation_attribute(request: &mut IppRequestResponse, name: &str, value: IppValue) {
+    request.attributes_mut().add(
+        DelimiterTag::OperationAttributes,
+        IppAttribute::with_name(name, value).unwrap(),
+    );
+}
+
+fn job_request(operation: IppOperation, job: i32) -> IppRequestResponse {
+    let mut request = request(operation);
+    operation_attribute(&mut request, "job-id", IppValue::Integer(job));
+    request
+}
+
+fn body(request: &IppRequestResponse, document: &[u8]) -> Vec<u8> {
+    let mut body = request.to_bytes().to_vec();
+    body.extend_from_slice(document);
+    body
+}
+
+fn print_job(name: &str, document: &[u8]) -> Vec<u8> {
+    let mut request = request(IppOperation::PrintJob);
+    operation_attribute(
+        &mut request,
+        "job-name",
+        IppValue::new_name_without_language(name).unwrap(),
+    );
+    body(&request, document)
+}
+
+/// An IPP post to `path` from the server itself, with Basic credentials holding `secret`.
+fn post_ipp(path: &str, secret: Option<&str>, body: Body) -> Request<Body> {
+    let mut request = Request::post(path).header(header::CONTENT_TYPE, "application/ipp");
+    if let Some(secret) = secret {
+        let credentials = data_encoding::BASE64.encode(format!("macbook:{secret}").as_bytes());
+        request = request.header(header::AUTHORIZATION, format!("Basic {credentials}"));
+    }
+    from_address(request.body(body).unwrap(), LOOPBACK)
+}
+
+/// The path of a device's personal address.
+fn personal(device: &Device) -> String {
+    format!("/device/{}/ipp/print", device.secret)
+}
+
+/// Sends an IPP request and parses the answer, which must be a 200 carrying IPP.
+async fn ipp(harness: &Harness, request: Request<Body>) -> IppRequestResponse {
+    let response = harness.send(request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "application/ipp");
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-cache");
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    IppParser::new(IppReader::new(std::io::Cursor::new(bytes.to_vec())))
+        .parse()
+        .unwrap()
+}
+
+fn status(answer: &IppRequestResponse) -> u16 {
+    answer.header().operation_or_status as u16
+}
+
+/// The attribute `name` of the first group tagged `tag`.
+fn attribute(answer: &IppRequestResponse, tag: DelimiterTag, name: &str) -> Option<IppValue> {
+    answer
+        .attributes()
+        .groups_of(tag)
+        .next()?
+        .get(name)
+        .map(|attribute| attribute.value().clone())
+}
+
+fn job_attribute(answer: &IppRequestResponse, name: &str) -> IppValue {
+    attribute(answer, DelimiterTag::JobAttributes, name)
+        .unwrap_or_else(|| panic!("{name} is missing"))
+}
+
+fn printer_attribute(answer: &IppRequestResponse, name: &str) -> IppValue {
+    attribute(answer, DelimiterTag::PrinterAttributes, name)
+        .unwrap_or_else(|| panic!("{name} is missing"))
+}
+
+fn text_of(value: &IppValue) -> String {
+    match value {
+        IppValue::Uri(uri) => uri.as_str().to_owned(),
+        IppValue::TextWithoutLanguage(text) => text.as_ref().to_owned(),
+        IppValue::Keyword(keyword) => keyword.as_str().to_owned(),
+        other => panic!("not a string: {other:?}"),
+    }
+}
+
+fn job_id(answer: &IppRequestResponse) -> i32 {
+    *job_attribute(answer, "job-id").as_integer().unwrap()
+}
+
+/// The ids of every job group of a Get-Jobs answer.
+fn job_ids(answer: &IppRequestResponse) -> Vec<i32> {
+    answer
+        .attributes()
+        .groups_of(DelimiterTag::JobAttributes)
+        .filter_map(|group| group.get("job-id")?.value().as_integer().copied())
+        .collect()
+}
+
+/// The documents held on disk.
+fn held_files(harness: &Harness) -> usize {
+    std::fs::read_dir(harness.held.dir()).unwrap().count()
+}
+
+/// A body sent in the chunks given, counting how many recto pulled.
+struct Chunks {
+    chunks: VecDeque<Bytes>,
+    pulled: Arc<AtomicUsize>,
+}
+
+impl futures_core::Stream for Chunks {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let chunk = self.chunks.pop_front();
+        if chunk.is_some() {
+            self.pulled.fetch_add(1, Ordering::SeqCst);
+        }
+        Poll::Ready(chunk.map(Ok))
+    }
+}
+
+/// `bytes` as a body of an 8-byte chunk then chunks of 1 KiB, and the count of chunks pulled.
+fn chunked(bytes: &[u8]) -> (Body, Arc<AtomicUsize>) {
+    let pulled = Arc::new(AtomicUsize::new(0));
+    let mut chunks = VecDeque::from([Bytes::copy_from_slice(&bytes[..8])]);
+    chunks.extend(bytes[8..].chunks(1024).map(Bytes::copy_from_slice));
+    let body = Body::from_stream(Chunks {
+        chunks,
+        pulled: Arc::clone(&pulled),
+    });
+    (body, pulled)
+}
+
+#[tokio::test]
+async fn a_pdf_from_a_device_is_held_not_printed() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let laptop = device(&harness, alice, "Laptop").await;
+
+    let document = sample_pdf(2);
+    let answer = ipp(
+        &harness,
+        post_ipp(
+            "/ipp/print",
+            Some(&laptop.secret),
+            Body::from(print_job("minutes.pdf", &document)),
+        ),
+    )
+    .await;
+
+    assert_eq!(status(&answer), 0x0000);
+    // Completed for the device: its part is done.
+    assert_eq!(job_attribute(&answer, "job-state"), IppValue::Enum(9));
+    let message = text_of(&job_attribute(&answer, "job-state-message"));
+    assert!(message.contains("recto"), "{message}");
+    let id = job_id(&answer);
+    assert_eq!(
+        text_of(&job_attribute(&answer, "job-uri")),
+        format!("{PRINTER_URI}/{id}")
+    );
+    assert!(harness.print.submitted().is_empty());
+    let rows = print_jobs::Entity::find()
+        .all(&harness.database)
+        .await
+        .unwrap();
+    assert!(rows.is_empty());
+
+    let held = held::list(&harness.database, alice).await.unwrap();
+    assert_eq!(held.len(), 1);
+    let job = &held[0];
+    assert_eq!(job.id, i64::from(id));
+    assert_eq!(job.state, HeldState::Held);
+    assert_eq!(job.name, "minutes.pdf");
+    assert_eq!(job.document_pages, Some(2));
+    assert_eq!(job.device_password_id, Some(laptop.id));
+    assert_eq!(job.stored_format.as_deref(), Some("application/pdf"));
+    assert_eq!(
+        harness.held.read(job.file.as_ref().unwrap()).unwrap(),
+        document
+    );
+}
+
+#[tokio::test]
+async fn create_job_then_send_document_holds_the_job() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let laptop = device(&harness, alice, "Laptop").await;
+    let send = |body: Vec<u8>| post_ipp("/ipp/print", Some(&laptop.secret), Body::from(body));
+
+    let mut create = request(IppOperation::CreateJob);
+    operation_attribute(
+        &mut create,
+        "job-name",
+        IppValue::new_name_without_language("notes.pdf").unwrap(),
+    );
+    create.attributes_mut().add(
+        DelimiterTag::JobAttributes,
+        IppAttribute::with_name("copies", IppValue::Integer(3)).unwrap(),
+    );
+    let answer = ipp(&harness, send(body(&create, b""))).await;
+    assert_eq!(status(&answer), 0x0000);
+    assert_eq!(job_attribute(&answer, "job-state"), IppValue::Enum(3));
+    let id = job_id(&answer);
+
+    // Waiting for its document, it is the one job not completed.
+    let answer = ipp(&harness, send(body(&request(IppOperation::GetJobs), b""))).await;
+    assert_eq!(job_ids(&answer), vec![id]);
+
+    let mut document = job_request(IppOperation::SendDocument, id);
+    operation_attribute(&mut document, "last-document", IppValue::Boolean(true));
+    let answer = ipp(&harness, send(body(&document, &sample_pdf(2)))).await;
+    assert_eq!(status(&answer), 0x0000);
+    assert_eq!(job_attribute(&answer, "job-state"), IppValue::Enum(9));
+    assert_eq!(job_id(&answer), id);
+
+    let job = held::get(&harness.database, alice, i64::from(id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.state, HeldState::Held);
+    assert_eq!(job.name, "notes.pdf");
+    assert_eq!(job.document_pages, Some(2));
+    assert!(job.requested.contains("\"copies\":3"), "{}", job.requested);
+    // A second document is one too many.
+    let answer = ipp(&harness, send(body(&document, &sample_pdf(1)))).await;
+    assert_eq!(status(&answer), 0x0509);
+    assert!(harness.print.submitted().is_empty());
+}
+
+#[tokio::test]
+async fn attributes_are_open_and_jobs_need_credentials() {
+    let harness = Harness::new().await;
+    // From the network, over plain HTTP, without credentials: what the printer is.
+    let response = harness
+        .send(
+            Request::post("/ipp/print")
+                .header(header::CONTENT_TYPE, "application/ipp")
+                .body(Body::from(body(
+                    &request(IppOperation::GetPrinterAttributes),
+                    b"",
+                )))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let answer = IppParser::new(IppReader::new(std::io::Cursor::new(bytes.to_vec())))
+        .parse()
+        .unwrap();
+    assert_eq!(status(&answer), 0x0000);
+    assert_eq!(
+        text_of(&printer_attribute(&answer, "printer-uri-supported")),
+        PRINTER_URI
+    );
+    assert_eq!(
+        text_of(&printer_attribute(&answer, "uri-authentication-supported")),
+        "basic"
+    );
+    assert_eq!(
+        text_of(&printer_attribute(&answer, "printer-more-info")),
+        "http://recto.test/jobs"
+    );
+    // Rasters come with Task 8.
+    let formats = printer_attribute(&answer, "document-format-supported");
+    let formats = format!("{formats:?}");
+    assert!(formats.contains("application/pdf"), "{formats}");
+    assert!(!formats.contains("pwg-raster"), "{formats}");
+
+    // A job without credentials is refused once its header is read, before its document.
+    let (sent, pulled) = chunked(&print_job("secret.pdf", &sample_pdf(30)));
+    let response = harness.send(post_ipp("/ipp/print", None, sent)).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(response.headers().contains_key(header::WWW_AUTHENTICATE));
+    assert_eq!(pulled.load(Ordering::SeqCst), 1);
+    // Wrong credentials alike.
+    let (sent, pulled) = chunked(&print_job("secret.pdf", &sample_pdf(30)));
+    let response = harness
+        .send(post_ipp("/ipp/print", Some(&"a".repeat(32)), sent))
+        .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(pulled.load(Ordering::SeqCst), 1);
+    assert_eq!(held_files(&harness), 0);
+}
+
+#[tokio::test]
+async fn a_personal_address_is_checked_before_the_body() {
+    let harness = Harness::new().await;
+    let (sent, pulled) = chunked(&print_job("secret.pdf", &sample_pdf(30)));
+    let path = format!("/device/{}/ipp/print", "a".repeat(32));
+    let response = harness.send(post_ipp(&path, None, sent)).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(!response.headers().contains_key(header::LOCATION));
+    assert_eq!(pulled.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn answers_on_a_personal_address_keep_it() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let phone = device(&harness, alice, "Phone").await;
+    let address = format!("ipp://recto.test:80{}", personal(&phone));
+
+    let answer = ipp(
+        &harness,
+        post_ipp(
+            &personal(&phone),
+            None,
+            Body::from(body(&request(IppOperation::GetPrinterAttributes), b"")),
+        ),
+    )
+    .await;
+    assert_eq!(
+        text_of(&printer_attribute(&answer, "printer-uri-supported")),
+        address
+    );
+    // Android refuses an address that asks for Basic.
+    assert_eq!(
+        text_of(&printer_attribute(&answer, "uri-authentication-supported")),
+        "none"
+    );
+
+    let answer = ipp(
+        &harness,
+        post_ipp(
+            &personal(&phone),
+            None,
+            Body::from(print_job("photo.pdf", &sample_pdf(1))),
+        ),
+    )
+    .await;
+    let id = job_id(&answer);
+    let job_uri = text_of(&job_attribute(&answer, "job-uri"));
+    assert_eq!(job_uri, format!("{address}/{id}"));
+
+    // The device follows the job URI it was given, naming the job by it.
+    let mut attributes =
+        IppRequestResponse::new(IppVersion::v2_0(), IppOperation::GetJobAttributes, None).unwrap();
+    operation_attribute(
+        &mut attributes,
+        "job-uri",
+        IppValue::new_uri(&job_uri).unwrap(),
+    );
+    let path = format!("{}/{id}", personal(&phone));
+    let answer = ipp(
+        &harness,
+        post_ipp(&path, None, Body::from(body(&attributes, b""))),
+    )
+    .await;
+    assert_eq!(status(&answer), 0x0000);
+    assert_eq!(job_id(&answer), id);
+    assert_eq!(text_of(&job_attribute(&answer, "job-uri")), job_uri);
+    assert_eq!(text_of(&job_attribute(&answer, "job-printer-uri")), address);
+}
+
+#[tokio::test]
+async fn a_device_sees_only_its_own_jobs() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let laptop = device(&harness, alice, "Laptop").await;
+    let phone = device(&harness, alice, "Phone").await;
+    let send = |device: &Device, body: Vec<u8>| {
+        post_ipp("/ipp/print", Some(&device.secret), Body::from(body))
+    };
+    let from_laptop =
+        job_id(&ipp(&harness, send(&laptop, print_job("a.pdf", &sample_pdf(1)))).await);
+    let from_phone = job_id(&ipp(&harness, send(&phone, print_job("b.pdf", &sample_pdf(1)))).await);
+
+    let mut all = request(IppOperation::GetJobs);
+    operation_attribute(
+        &mut all,
+        "which-jobs",
+        IppValue::new_keyword("all").unwrap(),
+    );
+    let answer = ipp(&harness, send(&laptop, body(&all, b""))).await;
+    assert_eq!(job_ids(&answer), vec![from_laptop]);
+    let answer = ipp(&harness, send(&phone, body(&all, b""))).await;
+    assert_eq!(job_ids(&answer), vec![from_phone]);
+
+    for operation in [IppOperation::GetJobAttributes, IppOperation::CancelJob] {
+        let answer = ipp(
+            &harness,
+            send(&laptop, body(&job_request(operation, from_phone), b"")),
+        )
+        .await;
+        assert_eq!(status(&answer), 0x0406, "{operation:?}");
+    }
+    // The Jobs page shows both.
+    assert_eq!(held::list(&harness.database, alice).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_revoked_password_stops_the_next_request() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let laptop = device(&harness, alice, "Laptop").await;
+    let answer = ipp(
+        &harness,
+        post_ipp(
+            "/ipp/print",
+            Some(&laptop.secret),
+            Body::from(print_job("a.pdf", &sample_pdf(1))),
+        ),
+    )
+    .await;
+    assert_eq!(status(&answer), 0x0000);
+
+    device_passwords::revoke(&harness.database, alice, laptop.id)
+        .await
+        .unwrap();
+    let response = harness
+        .send(post_ipp(
+            "/ipp/print",
+            Some(&laptop.secret),
+            Body::from(print_job("b.pdf", &sample_pdf(1))),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let response = harness
+        .send(post_ipp(
+            &personal(&laptop),
+            None,
+            Body::from(print_job("b.pdf", &sample_pdf(1))),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    // The job it sent before stays on the Jobs page.
+    assert_eq!(held::list(&harness.database, alice).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn an_oversized_body_is_refused() {
+    let harness = Harness::with(Setup {
+        max_upload_size: 1024,
+        ..Setup::default()
+    })
+    .await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let laptop = device(&harness, alice, "Laptop").await;
+    let huge = vec![b'%'; 200 * 1024];
+    // With its length announced, and sent in chunks without one.
+    let response = harness
+        .send(post_ipp(
+            "/ipp/print",
+            Some(&laptop.secret),
+            Body::from(print_job("huge.pdf", &huge)),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let (sent, _) = chunked(&print_job("huge.pdf", &huge));
+    let response = harness
+        .send(post_ipp("/ipp/print", Some(&laptop.secret), sent))
+        .await;
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    // A document over the limit within the envelope's slack is refused by IPP.
+    let answer = ipp(
+        &harness,
+        post_ipp(
+            "/ipp/print",
+            Some(&laptop.secret),
+            Body::from(print_job("big.pdf", &sample_pdf(30))),
+        ),
+    )
+    .await;
+    // client-error-request-entity-too-large.
+    assert_eq!(status(&answer), 0x0408);
+    assert!(
+        held::list(&harness.database, alice)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(held_files(&harness), 0);
+}
+
+#[tokio::test]
+async fn the_cap_refuses_before_writing() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let laptop = device(&harness, alice, "Laptop").await;
+    for number in 0..held::MAX_JOBS_PER_USER {
+        held::create_incoming(
+            &harness.database,
+            alice,
+            laptop.id,
+            &format!("job {number}"),
+            "{}",
+            Utc::now(),
+            TimeDelta::hours(24),
+            i64::MAX,
+        )
+        .await
+        .unwrap();
+    }
+    let answer = ipp(
+        &harness,
+        post_ipp(
+            "/ipp/print",
+            Some(&laptop.secret),
+            Body::from(print_job("one more.pdf", &sample_pdf(1))),
+        ),
+    )
+    .await;
+    assert_eq!(status(&answer), 0x050B);
+    assert_eq!(held_files(&harness), 0);
+}
+
+#[tokio::test]
+async fn unknown_device_paths_never_redirect() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let laptop = device(&harness, alice, "Laptop").await;
+    let cookie = harness.sign_in_with_password("alice", ALICE_PASSWORD).await;
+    for uri in [
+        format!("/device/{}/anything", laptop.secret),
+        personal(&laptop),
+        format!("{}/7", personal(&laptop)),
+        "/ipp/print".to_owned(),
+        "/ipp/other".to_owned(),
+        "/eSCL/x".to_owned(),
+        "/eSCL/x/ScannerCapabilities".to_owned(),
+    ] {
+        for cookie in [None, Some(cookie.as_str())] {
+            let response = harness.send(page(&uri, cookie)).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+            assert!(!response.headers().contains_key(header::LOCATION), "{uri}");
+        }
+    }
+    for uri in [
+        format!("/device/{}/ipp/other", laptop.secret),
+        "/ipp/other".to_owned(),
+        "/ipp/print/x/y".to_owned(),
+    ] {
+        let response = harness
+            .send(post_ipp(&uri, Some(&laptop.secret), Body::empty()))
+            .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+        assert!(!response.headers().contains_key(header::LOCATION), "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn the_os_cannot_cancel_a_held_job() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let laptop = device(&harness, alice, "Laptop").await;
+    let send = |body: Vec<u8>| post_ipp("/ipp/print", Some(&laptop.secret), Body::from(body));
+    let held_id = job_id(&ipp(&harness, send(print_job("a.pdf", &sample_pdf(1)))).await);
+
+    // Reported completed, a held job is past cancelling (RFC 8011): the person deletes it on
+    // the Jobs page.
+    let answer = ipp(
+        &harness,
+        send(body(&job_request(IppOperation::CancelJob, held_id), b"")),
+    )
+    .await;
+    assert_eq!(status(&answer), 0x0404);
+    let job = held::get(&harness.database, alice, i64::from(held_id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.state, HeldState::Held);
+    assert_eq!(held_files(&harness), 1);
+
+    // A job still waiting for its document goes.
+    let created = job_id(&ipp(&harness, send(body(&request(IppOperation::CreateJob), b""))).await);
+    let answer = ipp(
+        &harness,
+        send(body(&job_request(IppOperation::CancelJob, created), b"")),
+    )
+    .await;
+    assert_eq!(status(&answer), 0x0000);
+    assert!(
+        held::get(&harness.database, alice, i64::from(created))
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn os_integration_off_removes_the_printer() {
+    let harness = Harness::with(Setup {
+        os_integration: false,
+        ..Setup::default()
+    })
+    .await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let laptop = device(&harness, alice, "Laptop").await;
+    for path in ["/ipp/print".to_owned(), personal(&laptop)] {
+        let response = harness
+            .send(post_ipp(
+                &path,
+                Some(&laptop.secret),
+                Body::from(print_job("a.pdf", &sample_pdf(1))),
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+    }
+    assert!(
+        held::list(&harness.database, alice)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

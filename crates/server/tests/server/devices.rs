@@ -64,6 +64,13 @@ async fn a_single_sign_on_user_creates_and_revokes_a_device_password() {
     assert!(html.contains("Device password for Studio laptop"), "{html}");
     assert!(html.contains("shown only once"), "{html}");
     assert!(html.contains(">carol<"), "{html}");
+    // The addresses to add the printer with: the plain one, and the personal one, which
+    // carries the secret.
+    assert!(html.contains(">ipp://recto.test:80/ipp/print<"), "{html}");
+    assert!(
+        html.contains(&format!(">ipp://recto.test:80/device/{secret}/ipp/print<")),
+        "{html}"
+    );
 
     // Listed by name, the secret never shown again.
     let response = harness.send(page("/account", Some(&cookie))).await;
@@ -301,8 +308,16 @@ async fn a_personal_address_never_leaves_its_secret_in_a_redirect() {
                 page(&uri, Some(&cookie)),
                 form(&uri, None, &[]),
             ] {
+                let posted = request.method() == axum::http::Method::POST;
                 let response = harness.send(request).await;
-                assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+                // The printer's address exists, but not for a device on the network over
+                // plain HTTP, whatever its secret.
+                let expected = if posted && uri.ends_with("/ipp/print") {
+                    StatusCode::FORBIDDEN
+                } else {
+                    StatusCode::NOT_FOUND
+                };
+                assert_eq!(response.status(), expected, "{uri}");
                 assert!(!response.headers().contains_key(header::LOCATION), "{uri}");
                 assert!(text(response).await.is_empty(), "{uri}");
             }
