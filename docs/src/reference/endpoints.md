@@ -139,7 +139,7 @@ scan apps. `{scanner}` is the first 8 hex digits of the SHA-256 of the scanner's
 | `POST {root}/ScanJobs` | Starts a scan from a `ScanSettings` XML body of at most 64 KiB, sent within 30 seconds. Answers `201` with `Location: {root}/ScanJobs/{job}`; `400` for a body recto cannot read, with a `DOCTYPE` or an unknown entity; `408` for a body that took too long; `409` for settings the scanner cannot do, an unsupported format or a page over the limit; `413` for a body over 64 KiB; `503` with `Retry-After: 5` while another eSCL scan runs on the scanner. |
 | `GET {root}/ScanJobs/{job}/NextDocument` | The next document: the PDF, or one PNG or JPEG page. Waits up to 30 seconds for the scan, then answers `503` with `Retry-After: 2`. `404` when every document was fetched, when the feeder was empty, and for a job that does not exist or is not the caller's; `409` for a jam or an open cover; `500` for another failure. |
 | `GET {root}/ScanJobs/{job}/ScanImageInfo` | The size of the last document fetched, as XML; `404` before the first. |
-| `DELETE {root}/ScanJobs/{job}` | Cancels the job, or forgets it once scanned. `404` for a job that does not exist or is not the caller's. |
+| `DELETE {root}/ScanJobs/{job}` | Cancels the job, or forgets it once scanned. The scanner cannot stop mid-page: it stays busy, and new jobs answer `503`, until the page in progress is read. `404` for a job that does not exist or is not the caller's. |
 
 A scanner that does not exist, or that the password's owner may not use, answers `404`, like a
 wrong personal address. `/eSCL/` without credentials answers `401` with `WWW-Authenticate: Basic`,

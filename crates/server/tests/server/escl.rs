@@ -490,6 +490,75 @@ async fn a_busy_scanner_answers_503() {
 }
 
 #[tokio::test]
+async fn a_canceled_scan_keeps_its_scanner_busy() {
+    let harness = Harness::with(Setup {
+        scanner: Some(MockScannerService::default().with_scan_delay(Duration::from_millis(500))),
+        ..Setup::default()
+    })
+    .await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let secret = device_secret(&harness, alice).await;
+
+    // A job deleted as soon as it is created: the scanner is still scanning its page.
+    let first = harness
+        .send(post_job(
+            &root(),
+            Some(&secret),
+            settings("Platen", "image/png"),
+        ))
+        .await;
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let job = first.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let delete = harness
+        .send(from_address(
+            escl_request(Method::DELETE, &job, Some(&secret), Body::empty()),
+            LOOPBACK,
+        ))
+        .await;
+    assert_eq!(delete.status(), StatusCode::OK);
+    let second = harness
+        .send(post_job(
+            &root(),
+            Some(&secret),
+            settings("Platen", "image/png"),
+        ))
+        .await;
+    assert_eq!(second.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let status = harness
+        .send(get_escl(
+            &format!("{}/ScannerStatus", root()),
+            Some(&secret),
+        ))
+        .await;
+    assert!(
+        text(status)
+            .await
+            .contains("<pwg:State>Processing</pwg:State>")
+    );
+
+    // Once the scan is back, the scanner takes the next job.
+    let started = std::time::Instant::now();
+    loop {
+        let next = harness
+            .send(post_job(
+                &root(),
+                Some(&secret),
+                settings("Platen", "image/png"),
+            ))
+            .await;
+        if next.status() == StatusCode::CREATED {
+            break;
+        }
+        assert_eq!(next.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
 async fn settings_are_read_within_bounds() {
     let harness = Harness::new().await;
     let alice = harness.local_user("alice", ALICE_PASSWORD).await;

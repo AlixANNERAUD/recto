@@ -52,6 +52,9 @@ struct Job {
     sequence: u64,
     changed: Instant,
     outcome: Outcome,
+    /// Until SANE gives the scan back, whatever the outcome: a canceled job's scanner is still
+    /// reading its page, and the next scan would only queue behind it.
+    busy: bool,
     fetched: u32,
     last: Option<ImageInfo>,
 }
@@ -65,6 +68,15 @@ impl Job {
             Outcome::Ready(_) | Outcome::Failed(_) => EsclJobState::Aborted,
             Outcome::Canceled => EsclJobState::Canceled,
         }
+    }
+}
+
+impl Jobs {
+    /// Whether SANE is still scanning for one of the scanner's eSCL jobs.
+    fn busy(&self, scanner: &str) -> bool {
+        self.jobs
+            .values()
+            .any(|job| job.scanner == scanner && job.busy)
     }
 }
 
@@ -103,27 +115,22 @@ impl EsclJobs {
     }
 
     /// The jobs, without those past their lifetime. A scan still running is kept whatever its
-    /// age: its pages are on their way, and its scanner stays busy until they arrive.
+    /// age, canceled or not: its scanner stays busy until it returns.
     fn lock(&self) -> MutexGuard<'_, Jobs> {
         // Every update leaves the map whole, so a panic elsewhere cannot have broken it.
         let mut jobs = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let lifetime = self.lifetime;
-        jobs.jobs.retain(|_, job| {
-            matches!(job.outcome, Outcome::Scanning) || job.changed.elapsed() < lifetime
-        });
+        jobs.jobs
+            .retain(|_, job| job.busy || job.changed.elapsed() < lifetime);
         jobs
     }
 
     /// Creates a job for `scanner` (its key), or `None` while an eSCL job of that scanner is
-    /// still scanning (HTTP 503). The caller runs the scan and must call [`finish`](Self::finish)
-    /// whatever happens, or the scanner stays busy.
+    /// still scanning, canceled or not (HTTP 503). The caller runs the scan and must call
+    /// [`finish`](Self::finish) whatever happens, or the scanner stays busy.
     pub fn start(&self, owner: Option<i64>, scanner: &str, format: OutputFormat) -> Option<Uuid> {
         let mut jobs = self.lock();
-        let busy = jobs
-            .jobs
-            .values()
-            .any(|job| job.scanner == scanner && matches!(job.outcome, Outcome::Scanning));
-        if busy {
+        if jobs.busy(scanner) {
             return None;
         }
         let id = Uuid::new_v4();
@@ -139,6 +146,7 @@ impl EsclJobs {
                 sequence,
                 changed: Instant::now(),
                 outcome: Outcome::Scanning,
+                busy: true,
                 fetched: 0,
                 last: None,
             },
@@ -146,12 +154,19 @@ impl EsclJobs {
         Some(id)
     }
 
-    /// Hands the scan's result to the job: a PDF becomes one document, PNG and JPEG pages one
-    /// each. The pages of a canceled or forgotten job are dropped.
+    /// Hands the scan's result to the job, and frees its scanner: a PDF becomes one document,
+    /// PNG and JPEG pages one each. The pages of a canceled or forgotten job are dropped.
     pub fn finish(&self, id: Uuid, result: Result<Vec<ScannedPage>, ScanError>) {
-        let format = match self.lock().jobs.get(&id) {
-            Some(job) if matches!(job.outcome, Outcome::Scanning) => job.format,
-            _ => return,
+        let format = {
+            let mut jobs = self.lock();
+            let Some(job) = jobs.jobs.get_mut(&id) else {
+                return;
+            };
+            if !matches!(job.outcome, Outcome::Scanning) {
+                job.busy = false;
+                return;
+            }
+            job.format
         };
         // Outside the lock: a PDF of a long batch takes a moment to write.
         let result = result.and_then(|pages| documents(pages, format));
@@ -160,6 +175,8 @@ impl EsclJobs {
         let Some(job) = jobs.get_mut(&id) else {
             return;
         };
+        job.busy = false;
+        // Canceled while the PDF was written.
         if !matches!(job.outcome, Outcome::Scanning) {
             return;
         }
@@ -248,14 +265,9 @@ impl EsclJobs {
         true
     }
 
-    /// The scanner's state: processing while one of its eSCL jobs scans.
+    /// The scanner's state: processing while one of its eSCL jobs scans, canceled or not.
     pub fn state(&self, scanner: &str) -> EsclState {
-        let jobs = self.lock();
-        let scanning = jobs
-            .jobs
-            .values()
-            .any(|job| job.scanner == scanner && matches!(job.outcome, Outcome::Scanning));
-        if scanning {
+        if self.lock().busy(scanner) {
             EsclState::Processing
         } else {
             EsclState::Idle
@@ -501,8 +513,13 @@ mod tests {
         let jobs = EsclJobs::default();
         let id = jobs.start(ALICE, KEY, OutputFormat::Png).unwrap();
         assert!(jobs.cancel(ALICE, id));
-        assert_eq!(jobs.state(KEY), EsclState::Idle);
+        // SANE cannot stop mid-page: the scanner stays busy until the scan returns, or deleting
+        // each job at once would queue scan after scan.
+        assert_eq!(jobs.state(KEY), EsclState::Processing);
+        assert_eq!(jobs.start(BOB, KEY, OutputFormat::Png), None);
+        assert_eq!(jobs.jobs(ALICE, KEY)[0].state, EsclJobState::Canceled);
         jobs.finish(id, Ok(vec![page(8, OutputFormat::Png)]));
+        assert_eq!(jobs.state(KEY), EsclState::Idle);
         assert_eq!(
             jobs.next_document(ALICE, id, LONG).await,
             NextDocument::NotFound
@@ -553,8 +570,15 @@ mod tests {
             jobs.next_document(ALICE, finished, LONG).await,
             NextDocument::NotFound
         );
-        // A scan still running is never forgotten: its pages are on their way.
+        // A scan still running is never forgotten: its pages are on their way. Nor is a
+        // canceled one SANE has not given back: its scanner is still busy.
         assert_eq!(jobs.jobs(ALICE, "other")[0].id, scanning);
+        let canceled = jobs.start(ALICE, KEY, OutputFormat::Png).unwrap();
+        assert!(jobs.cancel(ALICE, canceled));
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(jobs.state(KEY), EsclState::Processing);
+        jobs.finish(canceled, Err(ScanError::Interrupted));
+        assert!(jobs.start(ALICE, KEY, OutputFormat::Png).is_some());
         jobs.finish(scanning, Ok(vec![page(8, OutputFormat::Png)]));
         assert!(matches!(
             jobs.next_document(ALICE, scanning, LONG).await,
