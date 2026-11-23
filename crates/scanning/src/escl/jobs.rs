@@ -1,6 +1,7 @@
 //! eSCL jobs: what a client created with `POST ScanJobs`, from the scan to its last document.
 
 use std::collections::{HashMap, VecDeque};
+use std::net::IpAddr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -12,6 +13,16 @@ use crate::{OutputFormat, ScanError, ScannedPage, assemble};
 
 /// How long a finished job stays, for `NextDocument`, `ScannerStatus` and `ScanImageInfo`.
 const LIFETIME: Duration = Duration::from_secs(10 * 60);
+
+/// Whose a job is: only they list it, fetch its pages or cancel it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Owner {
+    /// A device password's user.
+    User(i64),
+    /// A client of an open network, without credentials, by its address: two people scanning
+    /// anonymously must not see or take each other's pages.
+    Anonymous(IpAddr),
+}
 
 /// One document of a job: the PDF, or one PNG or JPEG page.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,7 +56,7 @@ enum Outcome {
 }
 
 struct Job {
-    owner: Option<i64>,
+    owner: Owner,
     scanner: String,
     format: OutputFormat,
     /// Orders the jobs newest first.
@@ -128,7 +139,7 @@ impl EsclJobs {
     /// Creates a job for `scanner` (its key), or `None` while an eSCL job of that scanner is
     /// still scanning, canceled or not (HTTP 503). The caller runs the scan and must call
     /// [`finish`](Self::finish) whatever happens, or the scanner stays busy.
-    pub fn start(&self, owner: Option<i64>, scanner: &str, format: OutputFormat) -> Option<Uuid> {
+    pub fn start(&self, owner: Owner, scanner: &str, format: OutputFormat) -> Option<Uuid> {
         let mut jobs = self.lock();
         if jobs.busy(scanner) {
             return None;
@@ -198,12 +209,7 @@ impl EsclJobs {
     }
 
     /// The job's next document, waiting up to `wait` for the scan to finish.
-    pub async fn next_document(
-        &self,
-        owner: Option<i64>,
-        id: Uuid,
-        wait: Duration,
-    ) -> NextDocument {
+    pub async fn next_document(&self, owner: Owner, id: Uuid, wait: Duration) -> NextDocument {
         let deadline = tokio::time::Instant::now() + wait;
         loop {
             // Registered before looking, so a `finish` in between is not missed.
@@ -219,7 +225,7 @@ impl EsclJobs {
     }
 
     /// The next document, or `None` while the job is scanning.
-    fn take_next(&self, owner: Option<i64>, id: Uuid) -> Option<NextDocument> {
+    fn take_next(&self, owner: Owner, id: Uuid) -> Option<NextDocument> {
         let mut jobs = self.lock();
         let Some(job) = jobs.jobs.get_mut(&id).filter(|job| job.owner == owner) else {
             return Some(NextDocument::NotFound);
@@ -246,7 +252,7 @@ impl EsclJobs {
     /// `DELETE` of a job: a running scan is marked canceled and its pages dropped when they
     /// arrive (SANE cannot stop mid-page); a finished job is forgotten. False when the caller
     /// has no such job.
-    pub fn cancel(&self, owner: Option<i64>, id: Uuid) -> bool {
+    pub fn cancel(&self, owner: Owner, id: Uuid) -> bool {
         let mut jobs = self.lock();
         let Some(job) = jobs.jobs.get_mut(&id).filter(|job| job.owner == owner) else {
             return false;
@@ -284,7 +290,7 @@ impl EsclJobs {
     }
 
     /// The caller's jobs on `scanner`, newest first, for `ScannerStatus`.
-    pub fn jobs(&self, owner: Option<i64>, scanner: &str) -> Vec<JobStatusView> {
+    pub fn jobs(&self, owner: Owner, scanner: &str) -> Vec<JobStatusView> {
         let jobs = self.lock();
         let mut mine: Vec<(&Uuid, &Job)> = jobs
             .jobs
@@ -307,7 +313,7 @@ impl EsclJobs {
     }
 
     /// The size of the last document the caller fetched from the job, for `ScanImageInfo`.
-    pub fn image_info(&self, owner: Option<i64>, id: Uuid) -> Option<ImageInfo> {
+    pub fn image_info(&self, owner: Owner, id: Uuid) -> Option<ImageInfo> {
         self.lock()
             .jobs
             .get(&id)
@@ -353,8 +359,10 @@ mod tests {
     use super::*;
     use crate::escl::EsclJobState;
 
-    const ALICE: Option<i64> = Some(1);
-    const BOB: Option<i64> = Some(2);
+    const ALICE: Owner = Owner::User(1);
+    const BOB: Owner = Owner::User(2);
+    const PHONE: Owner = Owner::Anonymous(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 20)));
+    const TABLET: Owner = Owner::Anonymous(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 21)));
     const KEY: &str = "1a2b3c4d";
     const LONG: Duration = Duration::from_secs(5);
 
@@ -398,7 +406,7 @@ mod tests {
             NextDocument::NotFound
         );
         assert_eq!(
-            jobs.next_document(None, id, LONG).await,
+            jobs.next_document(PHONE, id, LONG).await,
             NextDocument::NotFound
         );
         assert_eq!(jobs.image_info(BOB, id), None);
@@ -425,7 +433,7 @@ mod tests {
     #[tokio::test]
     async fn a_pdf_is_one_document() {
         let jobs = EsclJobs::default();
-        let id = jobs.start(None, KEY, OutputFormat::Pdf).unwrap();
+        let id = jobs.start(PHONE, KEY, OutputFormat::Pdf).unwrap();
         jobs.finish(
             id,
             Ok(vec![
@@ -433,10 +441,13 @@ mod tests {
                 page(30, OutputFormat::Pdf),
             ]),
         );
-        let pdf = document(jobs.next_document(None, id, LONG).await);
+        let pdf = document(jobs.next_document(PHONE, id, LONG).await);
         assert_eq!(pdf.mime, "application/pdf");
         assert!(pdf.bytes.starts_with(b"%PDF-"));
-        assert_eq!(jobs.next_document(None, id, LONG).await, NextDocument::Done);
+        assert_eq!(
+            jobs.next_document(PHONE, id, LONG).await,
+            NextDocument::Done
+        );
     }
 
     #[tokio::test]
@@ -540,7 +551,7 @@ mod tests {
         let jobs = EsclJobs::default();
         let alice = jobs.start(ALICE, KEY, OutputFormat::Png).unwrap();
         jobs.finish(alice, Ok(vec![page(8, OutputFormat::Png)]));
-        let anonymous = jobs.start(None, KEY, OutputFormat::Png).unwrap();
+        let anonymous = jobs.start(PHONE, KEY, OutputFormat::Png).unwrap();
         assert_eq!(
             jobs.jobs(ALICE, KEY)
                 .iter()
@@ -549,13 +560,15 @@ mod tests {
             [alice]
         );
         assert_eq!(
-            jobs.jobs(None, KEY)
+            jobs.jobs(PHONE, KEY)
                 .iter()
                 .map(|j| j.id)
                 .collect::<Vec<_>>(),
             [anonymous]
         );
         assert!(jobs.jobs(BOB, KEY).is_empty());
+        assert!(jobs.jobs(TABLET, KEY).is_empty());
+        assert!(!jobs.cancel(TABLET, anonymous));
         assert!(jobs.jobs(ALICE, "other").is_empty());
     }
 

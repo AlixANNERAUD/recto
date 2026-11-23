@@ -21,6 +21,7 @@
 use std::{
     collections::HashMap,
     future::poll_fn,
+    net::IpAddr,
     pin::Pin,
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
@@ -42,7 +43,7 @@ use recto_domain::{
 };
 use recto_scanning::{
     OutputFormat, ScanError, ScannedPage, ScannerCapabilities, ScannerInfo,
-    escl::{self, AdfState, EsclJobs, EsclRequest, NextDocument, SettingsError},
+    escl::{self, AdfState, EsclJobs, EsclRequest, NextDocument, Owner, SettingsError},
 };
 use uuid::Uuid;
 
@@ -181,16 +182,24 @@ impl Resource {
 /// Who is scanning.
 enum Caller {
     Device(DeviceUser),
-    /// A client of an open network, without credentials.
-    Anonymous,
+    /// A client of an open network, without credentials, and its address.
+    Anonymous(IpAddr),
 }
 
 impl Caller {
     /// The owner of the caller's jobs.
-    fn owner(&self) -> Option<i64> {
+    fn owner(&self) -> Owner {
+        match self {
+            Self::Device(user) => Owner::User(user.user_id),
+            Self::Anonymous(address) => Owner::Anonymous(*address),
+        }
+    }
+
+    /// The user the scan log names, none for an anonymous client.
+    fn user_id(&self) -> Option<i64> {
         match self {
             Self::Device(user) => Some(user.user_id),
-            Self::Anonymous => None,
+            Self::Anonymous(_) => None,
         }
     }
 
@@ -198,14 +207,14 @@ impl Caller {
     fn name(&self) -> &str {
         match self {
             Self::Device(user) => &user.username,
-            Self::Anonymous => "anonymous",
+            Self::Anonymous(_) => "anonymous",
         }
     }
 
     fn device_password_id(&self) -> Option<i64> {
         match self {
             Self::Device(user) => Some(user.device_password_id),
-            Self::Anonymous => None,
+            Self::Anonymous(_) => None,
         }
     }
 }
@@ -267,11 +276,12 @@ async fn caller(
     parts: &Parts,
     secret: Option<&str>,
 ) -> Result<Caller, device_auth::Refusal> {
+    let peer = device_auth::peer(parts);
     let anonymous = secret.is_none()
         && !parts.headers.contains_key(header::AUTHORIZATION)
-        && state.open_networks.contains(device_auth::peer(parts));
+        && state.open_networks.contains(peer);
     if anonymous {
-        return Ok(Caller::Anonymous);
+        return Ok(Caller::Anonymous(peer));
     }
     device_auth::authenticate(&state.devices, parts, secret)
         .await
@@ -305,7 +315,7 @@ async fn scanner(
         )
         .await
         .map(|usable| usable.allows(&scanner.id)),
-        Caller::Anonymous => access::rules(database, DeviceKind::Scanner)
+        Caller::Anonymous(_) => access::rules(database, DeviceKind::Scanner)
             .await
             .map(|rules| access::allows(rules.get(&scanner.id), false, &[])),
     };
@@ -423,10 +433,10 @@ impl Scan<'_> {
             self.state.clone(),
             Running::new(Arc::clone(&self.state.jobs), id),
             ScanLog {
-                user_id: self.caller.owner(),
+                user_id: self.caller.user_id(),
                 username: match self.caller {
                     Caller::Device(user) => user.username.clone(),
-                    Caller::Anonymous => String::new(),
+                    Caller::Anonymous(_) => String::new(),
                 },
                 scanner: self.scanner.id.clone(),
                 key: self.key.to_owned(),

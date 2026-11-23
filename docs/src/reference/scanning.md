@@ -97,6 +97,7 @@ says so until its next scan.
 macOS Image Capture and Windows find scanners on the network and cannot carry a password. For
 them, `RECTO_ESCL_OPEN_NETWORKS` lists networks whose devices scan without one, on the LAN
 listener only, and only on the scanners open to everyone. Their scans are logged without a user.
+Each device sees, fetches and cancels only the scan jobs started from its own address.
 The address checked is the connection's, so a device cannot claim to be inside by sending a
 forwarded header, and the main listener, behind the reverse proxy, never scans without a
 password.

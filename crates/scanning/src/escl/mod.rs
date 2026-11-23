@@ -19,7 +19,7 @@ use crate::{
 mod jobs;
 mod settings;
 
-pub use jobs::{Document, EsclJobs, NextDocument};
+pub use jobs::{Document, EsclJobs, NextDocument, Owner};
 pub use settings::{EsclRequest, Intent, MAX_SETTINGS_BYTES, SettingsError, parse_settings};
 
 /// The start of recto's eSCL `MakeAndModel` and DNS-SD `ty`. SANE lists a scanner sane-airscan
