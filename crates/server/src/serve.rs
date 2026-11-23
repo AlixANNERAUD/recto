@@ -245,12 +245,7 @@ pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     // Before serving, while nothing is being written: a crash between writing a document and
     // recording it left a file no row names.
     remove_orphan_held_files(&state.database, &state.held, SystemTime::now()).await;
-    // Whether or not OS integration is on: documents held before it was turned off must go.
-    sweep_held(state.database.clone(), Arc::clone(&state.held));
-    purge_expired_results(Arc::clone(&state.results));
-    delete_expired_sessions(auth.sessions.clone());
-    poll_jobs(Arc::clone(&state.print), state.database.clone());
-    find_scanners(Arc::clone(&state.scan));
+    start_maintenance(&state, &auth);
     // Before serving: a certificate, an address or an interface that is wrong stops recto here.
     let lan = match config.lan_listen_address {
         Some(lan_address) => Some(prepare_lan(&config, lan_address, &state.branding.name).await?),
@@ -507,6 +502,17 @@ pub async fn poll_once(print: &dyn PrintService, database: &DatabaseConnection) 
 }
 
 /// Sweeps the held jobs in the background, every [`HELD_SWEEP_INTERVAL`].
+/// Starts the background tasks: the held jobs' sweep, the purge of scan results and sessions,
+/// the ledger's job polling and the first scanner listing. None depends on OS integration:
+/// documents held before it was turned off must still go.
+pub fn start_maintenance(state: &AppState, auth: &AuthState) {
+    sweep_held(state.database.clone(), Arc::clone(&state.held));
+    purge_expired_results(Arc::clone(&state.results));
+    delete_expired_sessions(auth.sessions.clone());
+    poll_jobs(Arc::clone(&state.print), state.database.clone());
+    find_scanners(Arc::clone(&state.scan));
+}
+
 fn sweep_held(database: DatabaseConnection, files: Arc<HeldFiles>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(HELD_SWEEP_INTERVAL);

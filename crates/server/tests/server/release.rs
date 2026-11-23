@@ -115,7 +115,7 @@ async fn releasing_prints_through_quotas_and_the_ledger() {
 }
 
 #[tokio::test]
-async fn released_and_counted_in_one_transaction() {
+async fn an_unconfirmed_release_stays_counted_and_released() {
     let harness = Harness::new().await;
     let (alice, cookie) = alice(&harness).await;
     let (id, file) = hold(&harness, alice).await;

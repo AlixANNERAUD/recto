@@ -423,6 +423,88 @@ async fn the_cap_is_checked_before_and_at_insert() {
     hold(&database, bob, "bob", noon()).await;
 }
 
+/// Of two results, one succeeded and the other was refused for the cap, not for another error.
+fn assert_one_too_many(first: Result<()>, second: Result<()>) {
+    let refused = |result: &Result<()>| {
+        matches!(result, Err(Error::Invalid(Problem::TooManyHeldJobs { .. })))
+    };
+    assert!(
+        (first.is_ok() && refused(&second)) || (refused(&first) && second.is_ok()),
+        "{first:?} {second:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_jobs_cannot_pass_the_cap_together() {
+    // On PostgreSQL each insert runs on its own connection: without the user's row locked, two
+    // jobs at 19 would both see room for one more.
+    let database = crate::testing::database().await;
+    let alice = user(&database, "alice", false).await;
+    let phone = device(&database, alice, "Phone").await;
+    for number in 1..MAX_JOBS_PER_USER {
+        hold(&database, alice, &format!("job-{number}"), noon()).await;
+    }
+    for _ in 0..3 {
+        let (first, second) = tokio::join!(
+            receive(&database, new_held(alice, None, "a", noon()), MAX_BYTES),
+            receive(&database, new_held(alice, None, "b", noon()), MAX_BYTES),
+        );
+        assert_one_too_many(first.map(|_| ()), second.map(|_| ()));
+        let waiting = held_jobs::Entity::find()
+            .filter(held_jobs::Column::UserId.eq(alice))
+            .count(&database)
+            .await
+            .unwrap();
+        assert_eq!(waiting, MAX_JOBS_PER_USER);
+        // Back to 19 for the next round, and the same race with Create-Job.
+        let newest = held_jobs::Entity::find()
+            .filter(held_jobs::Column::UserId.eq(alice))
+            .order_by_desc(held_jobs::Column::Id)
+            .one(&database)
+            .await
+            .unwrap()
+            .unwrap();
+        held_jobs::Entity::delete_by_id(newest.id)
+            .exec(&database)
+            .await
+            .unwrap();
+        let (first, second) = tokio::join!(
+            create_incoming(
+                &database,
+                alice,
+                phone,
+                "c.pdf",
+                "{}",
+                noon(),
+                LIFETIME,
+                MAX_BYTES
+            ),
+            create_incoming(
+                &database,
+                alice,
+                phone,
+                "d.pdf",
+                "{}",
+                noon(),
+                LIFETIME,
+                MAX_BYTES
+            ),
+        );
+        assert_one_too_many(first.map(|_| ()), second.map(|_| ()));
+        let newest = held_jobs::Entity::find()
+            .filter(held_jobs::Column::UserId.eq(alice))
+            .order_by_desc(held_jobs::Column::Id)
+            .one(&database)
+            .await
+            .unwrap()
+            .unwrap();
+        held_jobs::Entity::delete_by_id(newest.id)
+            .exec(&database)
+            .await
+            .unwrap();
+    }
+}
+
 #[tokio::test]
 async fn an_incoming_job_has_room_for_its_document() {
     let database = crate::testing::database().await;

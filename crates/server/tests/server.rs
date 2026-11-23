@@ -139,6 +139,8 @@ struct Harness {
     lan: Router,
     /// What the router was built with, for the device routes' authentication.
     auth: AuthState,
+    /// The services the router was built with, for the background tasks.
+    app: AppState,
     print: Arc<MockPrintService>,
     admin: Arc<MockPrinterAdmin>,
     scan: Arc<MockScannerService>,
@@ -245,7 +247,8 @@ impl Harness {
         let sessions = auth.sessions.clone();
         Self {
             router: router(state.clone(), auth.clone()),
-            lan: lan_router(state, auth.clone()),
+            lan: lan_router(state.clone(), auth.clone()),
+            app: state,
             auth,
             print,
             admin,

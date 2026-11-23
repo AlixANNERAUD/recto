@@ -161,8 +161,34 @@ async fn lan_uris_are_built_on_the_host_the_device_used() {
         format!("ipps://192.168.1.10:8631{personal}")
     );
 
+    // An IPv6 address, as Android connects by address, keeps its brackets.
+    let answer_ = answer(
+        &harness,
+        lan_ipp(
+            "/ipp/print",
+            Some("[fd00::10]:8631"),
+            None,
+            attributes.clone(),
+        ),
+    )
+    .await;
+    assert_eq!(
+        uri_of(
+            &answer_,
+            DelimiterTag::PrinterAttributes,
+            "printer-uri-supported"
+        ),
+        "ipps://[fd00::10]:8631/ipp/print"
+    );
+
     // Without a usable Host, there is no address to answer with.
-    for host in [None, Some("user@evil:8631"), Some("a b")] {
+    for host in [
+        None,
+        Some("user@evil:8631"),
+        Some("a b"),
+        Some("nas/../x"),
+        Some("[fd00::10"),
+    ] {
         let response = harness
             .send_lan(lan_ipp("/ipp/print", host, None, attributes.clone()))
             .await;

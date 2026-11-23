@@ -38,6 +38,8 @@ async fn hold(harness: &Harness, alice: i64, received_at: chrono::DateTime<Utc>)
 
 #[tokio::test]
 async fn the_sweep_runs_with_os_integration_off() {
+    // The background tasks recto starts know nothing of OS integration: documents held before
+    // it was turned off must still go.
     let harness = Harness::with(Setup {
         os_integration: false,
         ..Setup::default()
@@ -48,14 +50,19 @@ async fn the_sweep_runs_with_os_integration_off() {
     let (expired, expired_file) = hold(&harness, alice, now - TimeDelta::hours(25)).await;
     let (kept, kept_file) = hold(&harness, alice, now - TimeDelta::hours(1)).await;
 
-    sweep_held_once(&harness.database, &harness.held, now).await;
-
-    assert!(
-        held::get(&harness.database, alice, expired)
-            .await
-            .unwrap()
-            .is_none()
-    );
+    recto::serve::start_maintenance(&harness.app, &harness.auth);
+    let started = std::time::Instant::now();
+    while held::get(&harness.database, alice, expired)
+        .await
+        .unwrap()
+        .is_some()
+    {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the first sweep runs at once"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
     assert!(harness.held.read(&expired_file).is_err());
     assert!(
         held::get(&harness.database, alice, kept)
