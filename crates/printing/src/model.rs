@@ -24,6 +24,9 @@ pub struct Printer {
     pub accepting_jobs: bool,
     pub supplies: Vec<Supply>,
     pub capabilities: Capabilities,
+    /// The maintenance commands the queue's driver runs, as CUPS lists them.
+    #[serde(default)]
+    pub maintenance: Vec<Maintenance>,
 }
 
 impl Printer {
@@ -33,6 +36,63 @@ impl Printer {
         let failed = self.state == PrinterState::Stopped
             && self.reasons.iter().any(|r| r.severity == Severity::Error);
         !offline && !failed
+    }
+}
+
+/// A maintenance command of the CUPS command file specification, run by the driver of a queue
+/// that lists it in `printer-commands`. Other commands are vendor ones recto does not offer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Maintenance {
+    /// Cleans the print heads.
+    Clean,
+    PrintSelfTestPage,
+    /// Asks the printer for its supply levels.
+    ReportLevels,
+    /// Asks the printer for its installed options and settings.
+    AutoConfigure,
+}
+
+impl Maintenance {
+    pub const ALL: [Maintenance; 4] = [
+        Maintenance::Clean,
+        Maintenance::PrintSelfTestPage,
+        Maintenance::ReportLevels,
+        Maintenance::AutoConfigure,
+    ];
+
+    /// The name CUPS lists the command under, which the forms post too.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Maintenance::Clean => "Clean",
+            Maintenance::PrintSelfTestPage => "PrintSelfTestPage",
+            Maintenance::ReportLevels => "ReportLevels",
+            Maintenance::AutoConfigure => "AutoConfigure",
+        }
+    }
+
+    /// Drivers differ in the case they list a command in.
+    pub fn from_keyword(keyword: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|command| command.keyword().eq_ignore_ascii_case(keyword))
+    }
+
+    /// The line of the command file: `Clean` takes the heads to clean, and recto cleans them all.
+    pub fn command_line(self) -> &'static str {
+        match self {
+            Maintenance::Clean => "Clean all",
+            command => command.keyword(),
+        }
+    }
+
+    /// The name of the job that runs the command, as CUPS lists it.
+    pub fn job_name(self) -> &'static str {
+        match self {
+            Maintenance::Clean => "Clean print heads",
+            Maintenance::PrintSelfTestPage => "Print self-test page",
+            Maintenance::ReportLevels => "Report supply levels",
+            Maintenance::AutoConfigure => "Configure automatically",
+        }
     }
 }
 
@@ -138,6 +198,7 @@ mod tests {
                 sides: vec![Sides::OneSided],
                 color_modes: vec![ColorMode::Color],
             },
+            maintenance: vec![],
         }
     }
 
@@ -153,6 +214,23 @@ mod tests {
         // CUPS sets this briefly at the start of most jobs on a healthy printer.
         assert!(printer(PrinterState::Processing, &["connecting-to-device"]).is_online());
         assert!(printer(PrinterState::Stopped, &["connecting-to-device"]).is_online());
+    }
+
+    #[test]
+    fn maintenance_commands_are_read_whatever_their_case() {
+        assert_eq!(Maintenance::from_keyword("Clean"), Some(Maintenance::Clean));
+        assert_eq!(
+            Maintenance::from_keyword("printselftestpage"),
+            Some(Maintenance::PrintSelfTestPage)
+        );
+        assert_eq!(
+            Maintenance::from_keyword("REPORTLEVELS"),
+            Some(Maintenance::ReportLevels)
+        );
+        assert_eq!(Maintenance::from_keyword("none"), None);
+        assert_eq!(Maintenance::from_keyword("Align"), None);
+        assert_eq!(Maintenance::Clean.command_line(), "Clean all");
+        assert_eq!(Maintenance::AutoConfigure.command_line(), "AutoConfigure");
     }
 
     #[test]

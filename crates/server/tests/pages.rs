@@ -58,6 +58,7 @@ fn printer(name: &str, is_default: bool) -> Printer {
             sides: vec![Sides::OneSided],
             color_modes: vec![ColorMode::Monochrome],
         },
+        maintenance: vec![],
     }
 }
 

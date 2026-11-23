@@ -17,8 +17,8 @@ use axum::{
 use recto_app::state::{AppState, User};
 use recto_domain::users::{self, Identity};
 use recto_printing::{
-    Capabilities, ColorMode, DriverInfo, Job, JobState, Printer, PrinterState, Sides, StateReason,
-    Supply,
+    Capabilities, ColorMode, DriverInfo, Job, JobState, Maintenance, Printer, PrinterState, Sides,
+    StateReason, Supply,
     testing::{MockPrintService, MockPrinterAdmin},
 };
 use recto_scanning::MockScannerService;
@@ -139,6 +139,7 @@ fn printers() -> Vec<Printer> {
                 ],
                 color_modes: vec![ColorMode::Monochrome],
             },
+            maintenance: vec![],
         },
         Printer {
             name: "photo".into(),
@@ -160,6 +161,11 @@ fn printers() -> Vec<Printer> {
                 sides: vec![Sides::OneSided],
                 color_modes: vec![ColorMode::Color, ColorMode::Monochrome],
             },
+            maintenance: vec![
+                Maintenance::Clean,
+                Maintenance::PrintSelfTestPage,
+                Maintenance::ReportLevels,
+            ],
         },
         Printer {
             name: "garage".into(),
@@ -176,6 +182,7 @@ fn printers() -> Vec<Printer> {
                 sides: vec![Sides::OneSided],
                 color_modes: vec![ColorMode::Monochrome],
             },
+            maintenance: vec![],
         },
     ]
 }

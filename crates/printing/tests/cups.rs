@@ -11,8 +11,8 @@ use ipp::request::IppRequestResponse;
 use ipp::value::IppValue;
 use recto_printing::testing::{attribute, ipp_response};
 use recto_printing::{
-    ColorMode, Cups, DocumentFormat, JobState, JobStatus, PageRanges, PrintError, PrintOptions,
-    PrintRequest, PrintService, PrinterState, Sides,
+    ColorMode, Cups, DocumentFormat, JobState, JobStatus, Maintenance, PageRanges, PrintError,
+    PrintOptions, PrintRequest, PrintService, PrinterState, Sides,
 };
 use url::Url;
 use wiremock::matchers::{method, path};
@@ -196,6 +196,47 @@ async fn lists_printers_with_status_and_default() {
     );
     assert_eq!(printers[1].state, PrinterState::Processing);
     assert!(printers[1].is_default);
+}
+
+#[tokio::test]
+async fn reads_the_maintenance_commands_cups_lists() {
+    let server = MockServer::start().await;
+    let mut inkjet = printer_group("inkjet", 3);
+    // Any case, vendor commands among them, in the driver's order.
+    inkjet.1.push(attribute(
+        "printer-commands",
+        IppValue::Array(vec![
+            keyword("ReportLevels"),
+            keyword("Align"),
+            keyword("clean"),
+            keyword("PRINTSELFTESTPAGE"),
+        ]),
+    ));
+    let mut laser = printer_group("laser", 3);
+    laser.1.push(attribute("printer-commands", keyword("none")));
+    // A queue without the attribute at all, as some driverless ones are.
+    let bare = printer_group("bare", 3);
+    Mock::given(method("POST"))
+        .and(Ipp(Operation::CupsGetPrinters, None))
+        .respond_with(ipp(StatusCode::SuccessfulOk, vec![inkjet, laser, bare]))
+        .mount(&server)
+        .await;
+
+    let printers = cups(&server).printers().await.unwrap();
+
+    assert_eq!(
+        printers[0].maintenance,
+        [
+            Maintenance::Clean,
+            Maintenance::PrintSelfTestPage,
+            Maintenance::ReportLevels
+        ]
+    );
+    assert!(printers[1].maintenance.is_empty());
+    assert!(printers[2].maintenance.is_empty());
+    let request = parse(&server.received_requests().await.unwrap()[0].body);
+    let requested = attr(&request, "requested-attributes").unwrap();
+    assert!(requested.contains("printer-commands"), "{requested}");
 }
 
 #[tokio::test]

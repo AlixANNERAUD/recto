@@ -1,4 +1,5 @@
-//! Administering CUPS: adding, editing and removing printers over IPP.
+//! Administering CUPS: adding, editing and removing printers, and running their maintenance
+//! commands, over IPP.
 //!
 //! Every request names recto to CUPS with `Authorization: PeerCred recto`, which CUPS accepts
 //! only on its local socket, from a process whose uid is the one of the `recto` account and
@@ -15,7 +16,7 @@ use url::Url;
 
 use crate::cups::{printer_groups, string};
 use crate::transport::{self, Failure, REQUEST_TIMEOUT, error_chain, status_message};
-use crate::{AdminError, Driver, DriverInfo, NewPrinter};
+use crate::{AdminError, Driver, DriverInfo, Maintenance, NewPrinter};
 
 /// Adding a printer with the `everywhere` driver makes CUPS query it, and CUPS waits about 31
 /// seconds for an address that does not answer before it gives up.
@@ -40,6 +41,9 @@ pub trait PrinterAdmin: Send + Sync + 'static {
     /// Makes the queue turn new jobs away.
     async fn reject(&self, name: &str) -> Result<(), AdminError>;
     async fn delete(&self, name: &str) -> Result<(), AdminError>;
+    /// Has the queue's driver run `command`, through a job in `by`'s name that CUPS hands to the
+    /// driver instead of printing it.
+    async fn maintain(&self, name: &str, command: Maintenance, by: &str) -> Result<(), AdminError>;
     /// The drivers whose make and model contain every word of `search`, at most `limit`.
     async fn drivers(&self, search: &str, limit: u32) -> Result<Vec<DriverInfo>, AdminError>;
 }
@@ -85,6 +89,16 @@ impl CupsAdmin {
         let mut url = self.base.clone();
         url.set_path("/admin/");
         url.set_query(None);
+        self.post(url, request.to_bytes().to_vec(), timeout).await
+    }
+
+    /// Posts `body`, an IPP request and the document that may follow it, to `url`.
+    async fn post(
+        &self,
+        url: Url,
+        body: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<IppRequestResponse, AdminError> {
         let post = self
             .client
             .post(url)
@@ -92,7 +106,7 @@ impl CupsAdmin {
             .header("host", "localhost")
             .header("authorization", format!("PeerCred {USER}"))
             .timeout(timeout)
-            .body(request.to_bytes());
+            .body(body);
         transport::exchange(post)
             .await
             .map_err(|failure| match failure {
@@ -237,6 +251,41 @@ impl PrinterAdmin for CupsAdmin {
         self.on_printer(Operation::CupsDeletePrinter, name).await
     }
 
+    async fn maintain(&self, name: &str, command: Maintenance, by: &str) -> Result<(), AdminError> {
+        // As the CUPS web interface does: a job of the command file type, which the driver's
+        // command filter runs, sent to the queue rather than to `/admin/`.
+        let mut request = printer_request(Operation::PrintJob, name)?;
+        let group = DelimiterTag::OperationAttributes;
+        add(
+            &mut request,
+            group,
+            "requesting-user-name",
+            IppValue::new_name_without_language(by).map_err(invalid)?,
+        )?;
+        add(
+            &mut request,
+            group,
+            "job-name",
+            IppValue::new_name_without_language(command.job_name()).map_err(invalid)?,
+        )?;
+        add(
+            &mut request,
+            group,
+            "document-format",
+            IppValue::new_mime_media_type(COMMAND_FORMAT).map_err(invalid)?,
+        )?;
+        let mut url = self.base.clone();
+        url.set_query(None);
+        url.set_path("/printers/");
+        url.path_segments_mut()
+            .map_err(|()| AdminError::Rejected("the printer address cannot hold a name".into()))?
+            .pop_if_empty()
+            .push(name);
+        let mut body = request.to_bytes().to_vec();
+        body.extend_from_slice(format!("#CUPS-COMMAND\n{}\n", command.command_line()).as_bytes());
+        check(&self.post(url, body, REQUEST_TIMEOUT).await?)
+    }
+
     async fn drivers(&self, search: &str, limit: u32) -> Result<Vec<DriverInfo>, AdminError> {
         let words: Vec<String> = search.split_whitespace().map(str::to_lowercase).collect();
         let matching = |drivers: Vec<DriverInfo>| -> Vec<DriverInfo> {
@@ -262,6 +311,9 @@ impl PrinterAdmin for CupsAdmin {
         Ok(matching(self.ppds(None, None).await?))
     }
 }
+
+/// The document format of a CUPS command file.
+const COMMAND_FORMAT: &str = "application/vnd.cups-command";
 
 /// The account CUPS knows recto as (`/etc/passwd` of the CUPS container).
 const USER: &str = "recto";
@@ -645,6 +697,65 @@ mod tests {
             panic!("a rejection");
         };
         assert_eq!(text, "Not possible");
+    }
+
+    #[tokio::test]
+    async fn maintenance_is_a_command_job_sent_to_the_queue() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/printers/my%20printer"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(ok()))
+            .mount(&server)
+            .await;
+        let admin = CupsAdmin::over_tcp(Url::parse(&server.uri()).unwrap());
+        admin
+            .maintain("my printer", Maintenance::Clean, "alice")
+            .await
+            .unwrap();
+
+        let (request, ipp) = the_request(&server).await;
+        assert_eq!(request.headers["authorization"], "PeerCred recto");
+        assert_eq!(operation(&ipp), Operation::PrintJob as i16);
+        let operation_attributes = DelimiterTag::OperationAttributes;
+        assert_eq!(
+            text(&ipp, operation_attributes, "printer-uri").as_deref(),
+            Some("ipp://localhost/printers/my%20printer")
+        );
+        assert_eq!(
+            find(&ipp, operation_attributes, "document-format"),
+            Some(&IppValue::new_mime_media_type("application/vnd.cups-command").unwrap())
+        );
+        assert_eq!(
+            text(&ipp, operation_attributes, "requesting-user-name").as_deref(),
+            Some("alice")
+        );
+        assert_eq!(
+            text(&ipp, operation_attributes, "job-name").as_deref(),
+            Some("Clean print heads")
+        );
+        let mut document = Vec::new();
+        std::io::Read::read_to_end(&mut ipp.into_payload(), &mut document).unwrap();
+        assert_eq!(document, b"#CUPS-COMMAND\nClean all\n");
+    }
+
+    #[tokio::test]
+    async fn a_refused_maintenance_job_is_told() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/printers/office"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(ipp_response(
+                StatusCode::ServerErrorNotAcceptingJobs,
+                vec![],
+            )))
+            .mount(&server)
+            .await;
+        let admin = CupsAdmin::over_tcp(Url::parse(&server.uri()).unwrap());
+        assert!(matches!(
+            admin
+                .maintain("office", Maintenance::PrintSelfTestPage, "alice")
+                .await,
+            Err(AdminError::Rejected(_))
+        ));
     }
 
     fn ppd(name: &str, make_and_model: &str) -> (DelimiterTag, Vec<IppAttribute>) {

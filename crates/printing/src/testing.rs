@@ -8,8 +8,8 @@ use ipp::request::IppRequestResponse;
 use ipp::value::IppValue;
 
 use crate::{
-    AdminError, DriverInfo, Job, JobState, JobStatus, NewPrinter, PrintError, PrintRequest,
-    PrintService, Printer, PrinterAdmin,
+    AdminError, DriverInfo, Job, JobState, JobStatus, Maintenance, NewPrinter, PrintError,
+    PrintRequest, PrintService, Printer, PrinterAdmin,
 };
 
 /// A valid PDF of `pages` empty pages, for tests that count them.
@@ -235,6 +235,11 @@ pub enum AdminCall {
     Accept(String),
     Reject(String),
     Delete(String),
+    Maintain {
+        name: String,
+        command: Maintenance,
+        by: String,
+    },
     Drivers {
         search: String,
         limit: u32,
@@ -323,6 +328,14 @@ impl PrinterAdmin for MockPrinterAdmin {
 
     async fn delete(&self, name: &str) -> Result<(), AdminError> {
         self.record(AdminCall::Delete(name.to_owned()))
+    }
+
+    async fn maintain(&self, name: &str, command: Maintenance, by: &str) -> Result<(), AdminError> {
+        self.record(AdminCall::Maintain {
+            name: name.to_owned(),
+            command,
+            by: by.to_owned(),
+        })
     }
 
     async fn drivers(&self, search: &str, limit: u32) -> Result<Vec<DriverInfo>, AdminError> {

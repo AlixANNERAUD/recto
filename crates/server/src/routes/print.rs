@@ -751,6 +751,7 @@ mod tests {
             accepting_jobs: true,
             supplies: vec![],
             capabilities: capabilities(),
+            maintenance: vec![],
         }]));
         let state = AppState {
             print: print.clone(),

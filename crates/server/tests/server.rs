@@ -70,6 +70,7 @@ fn office() -> Printer {
             sides: vec![Sides::OneSided, Sides::TwoSidedLongEdge],
             color_modes: vec![ColorMode::Color, ColorMode::Monochrome],
         },
+        maintenance: vec![],
     }
 }
 

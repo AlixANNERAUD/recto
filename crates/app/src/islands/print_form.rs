@@ -215,6 +215,7 @@ mod tests {
                 sides: vec![],
                 color_modes: vec![],
             },
+            maintenance: vec![],
         }
     }
 

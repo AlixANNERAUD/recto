@@ -22,8 +22,8 @@ use url::Url;
 use crate::ipp_values::{each, set, text};
 use crate::transport::{self, REQUEST_TIMEOUT, error_chain, status_message};
 use crate::{
-    Capabilities, ColorMode, Job, JobState, JobStatus, PrintError, PrintRequest, PrintService,
-    Printer, PrinterState, Sides, StateReason, supplies,
+    Capabilities, ColorMode, Job, JobState, JobStatus, Maintenance, PrintError, PrintRequest,
+    PrintService, Printer, PrinterState, Sides, StateReason, supplies,
 };
 
 /// A print request carries the document: up to the upload limit (50 MiB by default) to a CUPS
@@ -34,7 +34,7 @@ const SUBMIT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// How many finished jobs the job list shows next to the unfinished ones.
 const COMPLETED_JOBS: i32 = 20;
 
-const PRINTER_ATTRIBUTES: [&str; 15] = [
+const PRINTER_ATTRIBUTES: [&str; 16] = [
     "printer-name",
     "printer-info",
     "printer-location",
@@ -51,6 +51,7 @@ const PRINTER_ATTRIBUTES: [&str; 15] = [
     "print-color-mode-supported",
     // Tells the default printer, saving a CUPS-Get-Default.
     "printer-type",
+    "printer-commands",
 ];
 
 /// `CUPS_PRINTER_DEFAULT`: the bit of `printer-type` CUPS sets on its default printer.
@@ -516,6 +517,15 @@ fn parse_printer(group: &IppAttributeGroup) -> Option<Printer> {
         .and_then(|max| u32::try_from(max).ok())
         .filter(|max| *max >= 1)
         .unwrap_or(1);
+    // `none` and vendor commands match no command; the order is recto's, whatever the driver's.
+    let commands: Vec<Maintenance> = strings(group, "printer-commands")
+        .iter()
+        .filter_map(|keyword| Maintenance::from_keyword(keyword))
+        .collect();
+    let maintenance = Maintenance::ALL
+        .into_iter()
+        .filter(|command| commands.contains(command))
+        .collect();
 
     Some(Printer {
         is_default: integer(group, "printer-type").is_some_and(|kind| kind & DEFAULT_PRINTER != 0),
@@ -555,6 +565,7 @@ fn parse_printer(group: &IppAttributeGroup) -> Option<Printer> {
                 color_modes
             },
         },
+        maintenance,
         name,
     })
 }
