@@ -2886,6 +2886,96 @@ async fn an_unknown_theme_is_refused() {
     assert!(set_cookies(&response).is_empty());
 }
 
+/// A message of the French locale, so the tests follow its wording.
+fn french(path: &[&str]) -> String {
+    let locale: serde_json::Value =
+        serde_json::from_str(include_str!("../../app/locales/fr.json")).unwrap();
+    let mut value = &locale;
+    for key in path {
+        value = &value[*key];
+    }
+    value.as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn the_language_form_sets_a_cookie_and_returns() {
+    let harness = Harness::new().await;
+    let response = harness
+        .send(form(
+            "/language",
+            None,
+            &[("locale", "fr"), ("next", "/jobs")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&response), "/jobs");
+    let cookies = set_cookies(&response);
+    let cookie = cookies
+        .iter()
+        .find(|value| value.starts_with("recto_locale=fr;"))
+        .unwrap_or_else(|| panic!("a locale cookie in {cookies:?}"));
+    for attribute in ["Path=/", "Max-Age=31536000", "SameSite=Lax", "HttpOnly"] {
+        assert!(
+            cookie.contains(attribute),
+            "{attribute} missing in {cookie}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_unknown_language_is_refused() {
+    let harness = Harness::new().await;
+    let response = harness
+        .send(form("/language", None, &[("locale", "de")]))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(set_cookies(&response).is_empty());
+    let response = harness
+        .send(form(
+            "/language",
+            None,
+            &[("locale", "en"), ("next", "//evil.example")],
+        ))
+        .await;
+    assert_eq!(location(&response), "/");
+}
+
+#[tokio::test]
+async fn pages_follow_the_chosen_language_then_the_browser() {
+    let harness = Harness::new().await;
+    // With a local account, the sign-in page is shown rather than sent on to the provider.
+    harness.local_user("alice", ALICE_PASSWORD).await;
+    let sign_in = french(&["auth", "sign_in"]);
+
+    let response = harness
+        .send(page("/sign-in", Some("recto_locale=fr")))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    assert!(body.contains("<html lang=\"fr\""), "{body}");
+    assert!(body.contains(&sign_in), "{body}");
+    // The switch offers both languages, each named in its own.
+    assert!(body.contains("action=\"/language\""));
+    assert!(body.contains("lang=\"en\""));
+
+    let mut request = page("/sign-in", None);
+    request.headers_mut().insert(
+        header::ACCEPT_LANGUAGE,
+        "fr-CA,fr;q=0.9,en;q=0.8".parse().unwrap(),
+    );
+    let body = text(harness.send(request).await).await;
+    assert!(body.contains("<html lang=\"fr\""), "{body}");
+
+    // The chosen language wins over the browser's.
+    let mut request = page("/sign-in", Some("recto_locale=en"));
+    request
+        .headers_mut()
+        .insert(header::ACCEPT_LANGUAGE, "fr".parse().unwrap());
+    let body = text(harness.send(request).await).await;
+    assert!(body.contains("<html lang=\"en\""), "{body}");
+    assert!(!body.contains(&sign_in), "{body}");
+}
+
 #[tokio::test]
 async fn the_theme_form_refuses_cross_site_posts() {
     let harness = Harness::new().await;

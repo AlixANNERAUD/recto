@@ -7,7 +7,7 @@
 //! features are never enabled in the same build.
 //!
 //! Every string goes through [`t!`], [`tf!`] or [`tp!`] ([`i18n`]), with keys in
-//! `locales/en.json`.
+//! `locales/en.json` and `locales/fr.json`.
 
 // Leptos views are deeply nested types; the print form's goes past the default limit.
 #![recursion_limit = "256"]
@@ -18,7 +18,7 @@
 embedded_i18n::i18n!(
     "locales",
     default_locale = "en",
-    available_locales = ["en"],
+    available_locales = ["en", "fr"],
     strict = true
 );
 
@@ -29,6 +29,7 @@ pub mod display;
 pub mod functions;
 pub mod i18n;
 pub mod islands;
+pub mod language;
 pub mod layout;
 pub mod messages;
 pub mod pages;

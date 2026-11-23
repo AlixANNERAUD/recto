@@ -1,7 +1,7 @@
 //! The language of the interface. Every message is compiled in for each embedded locale (the
 //! `available_locales` of the crate's `i18n!`); each request picks one: the language in the
-//! locale cookie, else the browser's preferences (`Accept-Language`), else English. Only English
-//! exists for now, but the plumbing is kept so adding a locale is a JSON file.
+//! locale cookie, set by the language switch, else the browser's preferences (`Accept-Language`),
+//! else English. English and French exist; adding a locale is a JSON file.
 //!
 //! [`t!`](crate::t) translates a message into the request's language, [`tf!`](crate::tf)
 //! formats one with arguments into a `String`, and [`tp!`](crate::tp) picks the plural form for
@@ -19,6 +19,18 @@ use leptos::prelude::*;
 
 /// Name of the cookie remembering the chosen language.
 pub const COOKIE: &str = "recto_locale";
+
+/// The locales offered by the language switch: locale, tag and name in its own language.
+pub fn languages() -> impl Iterator<Item = (Locale, &'static str, &'static str)> {
+    embedded_i18n::available_locales!().iter().map(|&tag| {
+        let locale = Locale::new(tag);
+        (
+            locale,
+            tag,
+            embedded_i18n::t!("language.name", locale = locale),
+        )
+    })
+}
 
 /// The request's locale, decided once by [`provide_locale`] for pages and on demand elsewhere
 /// (server functions, islands in the browser). It is always one of the embedded locales.
@@ -179,8 +191,11 @@ mod tests {
     #[test]
     fn negotiates_the_preferred_embedded_language() {
         let english = Some(Locale::new("en"));
-        assert_eq!(negotiate("de-DE, en;q=0.5, fr;q=0.7"), english);
+        let french = Some(Locale::new("fr"));
+        assert_eq!(negotiate("fr-CA,fr;q=0.9,en;q=0.8"), french);
+        assert_eq!(negotiate("de-DE, en;q=0.5, fr;q=0.7"), french);
         assert_eq!(negotiate("en-GB"), english);
+        assert_eq!(negotiate("fr;q=0, en;q=0.1"), english);
         assert_eq!(negotiate("en;q=0.1, de;q=0.9"), english);
         assert_eq!(negotiate("de, *"), None);
         assert_eq!(negotiate("en;q=0"), None);
@@ -190,9 +205,12 @@ mod tests {
     #[test]
     fn finds_the_embedded_locale_of_a_tag() {
         assert_eq!(find("EN_gb"), Some(Locale::new("en")));
+        assert_eq!(find("fr"), Some(Locale::new("fr")));
+        assert_eq!(find("FR_ca"), Some(Locale::new("fr")));
         assert_eq!(find(" en-GB "), Some(Locale::new("en")));
         assert_eq!(find("de"), None);
         assert_eq!(find(""), None);
         assert_eq!(find("-en"), None);
+        assert_eq!(find("-fr"), None);
     }
 }

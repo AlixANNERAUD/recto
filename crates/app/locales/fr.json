@@ -1,0 +1,794 @@
+{
+  "app": {
+    "page_title": "{page} · {name}"
+  },
+  "theme": {
+    "label": "Thème",
+    "system": "Suivre l’appareil",
+    "light": "Clair",
+    "dark": "Sombre",
+    "unknown": "Thème inconnu."
+  },
+  "language": {
+    "label": "Langue",
+    "name": "Français",
+    "unknown": "Langue inconnue."
+  },
+  "nav": {
+    "label": "Principale",
+    "skip": "Aller au contenu",
+    "print": "Imprimer",
+    "printers": "Imprimantes",
+    "jobs": "Impressions",
+    "scan": "Numériser",
+    "administration": "Administration",
+    "administration_short": "Admin",
+    "signed_in_as": "Connecté en tant que {name}",
+    "sign_out_as": "Déconnecter {name}",
+    "account_of": "Compte de {name}"
+  },
+  "common": {
+    "network_error": "Impossible de joindre {name}. Vérifiez votre connexion et réessayez.",
+    "try_again": "Une erreur est survenue. Réessayez dans un instant."
+  },
+  "time": {
+    "just_now": "à l’instant",
+    "minutes_ago": {
+      "one": "il y a {count} minute",
+      "other": "il y a {count} minutes"
+    },
+    "hours_ago": {
+      "one": "il y a {count} heure",
+      "other": "il y a {count} heures"
+    },
+    "utc": "{time} UTC"
+  },
+  "size": {
+    "megabytes": "{value} Mo",
+    "kilobytes": "{value} Ko"
+  },
+  "not_found": {
+    "heading": "Page introuvable",
+    "home": "Aller à la page d’impression"
+  },
+  "offline": {
+    "heading": "Vous êtes hors ligne",
+    "body": "{name} a besoin d’une connexion à votre serveur pour imprimer et numériser. Vérifiez votre connexion, puis réessayez.",
+    "retry": "Réessayer"
+  },
+  "auth": {
+    "sign_in_required": "Connectez-vous pour continuer.",
+    "session_ended": "Vous avez été déconnecté : cette liste n’est donc plus mise à jour.",
+    "signed_out_notice": "Vous avez été déconnecté. Rechargez la page pour vous reconnecter.",
+    "sign_in_again": "Se reconnecter",
+    "cross_site_refused": "Cette requête ne provient pas des pages de {name} : elle a donc été refusée. Ouvrez {name} à l’adresse {origin} et réessayez.",
+    "sign_in": "Se connecter",
+    "sign_out": "Se déconnecter",
+    "errors": {
+      "heading": "Échec de la connexion",
+      "unavailable": "Fournisseur d’identité indisponible. Réessayez dans un instant.",
+      "state": "Cette connexion a expiré ou a été lancée dans une autre fenêtre.",
+      "rejected": "Le fournisseur d’identité ne vous a pas connecté.",
+      "retry": "Réessayer"
+    },
+    "no_access": {
+      "heading": "Pas d’accès à {name}",
+      "body": "Vous êtes connecté, mais votre compte n’a pas le rôle nécessaire pour utiliser {name}. Demandez l’accès à la personne qui le gère, ou déconnectez-vous et utilisez un autre compte."
+    },
+    "signed_out": {
+      "heading": "Vous êtes déconnecté",
+      "sign_in": "Se reconnecter"
+    },
+    "single_sign_on": "Se connecter avec l’authentification unique",
+    "or": "ou",
+    "password": {
+      "login": "Nom d’utilisateur ou adresse e-mail",
+      "password": "Mot de passe",
+      "invalid": "Le nom d’utilisateur ou le mot de passe est incorrect.",
+      "too_many": "Trop de tentatives. Attendez quelques secondes, puis réessayez.",
+      "unavailable": "La connexion a échoué. Réessayez dans un instant."
+    }
+  },
+  "account": {
+    "title": "Compte",
+    "signed_in_as": "Connecté en tant que {name} ({username}).",
+    "changed": "Votre mot de passe a été modifié. Vos autres sessions ont été déconnectées.",
+    "password": {
+      "title": "Changer le mot de passe",
+      "current": "Mot de passe actuel",
+      "new": "Nouveau mot de passe",
+      "hint": "Au moins {minimum} caractères.",
+      "confirm": "Répétez le nouveau mot de passe",
+      "others_signed_out": "Le changer vous déconnecte partout ailleurs.",
+      "submit": "Changer le mot de passe"
+    },
+    "errors": {
+      "wrong_current": "Le mot de passe actuel est incorrect.",
+      "mismatch": "Les nouveaux mots de passe ne correspondent pas.",
+      "too_short": "Le nouveau mot de passe doit contenir au moins {minimum} caractères.",
+      "too_long": "Le nouveau mot de passe doit contenir au plus {maximum} caractères.",
+      "too_many": "Trop de tentatives. Attendez quelques secondes, puis réessayez.",
+      "unavailable": "Le mot de passe n’a pas pu être modifié. Réessayez dans un instant."
+    },
+    "devices": {
+      "title": "Appareils",
+      "intro": "Les ordinateurs et téléphones impriment et numérisent avec un mot de passe d’appareil, jamais avec celui de votre compte. Donnez à chaque appareil le sien, et révoquez-le quand vous n’utilisez plus l’appareil.",
+      "none": "Vous n’avez pas encore de mot de passe d’appareil.",
+      "created_at": "Créé {time}",
+      "last_used": "dernière utilisation {time}",
+      "never_used": "jamais utilisé",
+      "revoke": "Révoquer",
+      "revoke_label": "Révoquer le mot de passe d’appareil {name}",
+      "revoked": "Le mot de passe d’appareil a été révoqué. L’appareil qui l’utilise ne peut plus imprimer ni numériser.",
+      "name": "Nom de l’appareil",
+      "name_hint": "Par exemple Portable du bureau ou Téléphone d’Alice.",
+      "create": "Créer un mot de passe d’appareil",
+      "created": {
+        "title": "Mot de passe d’appareil pour {name}",
+        "once": "Ce mot de passe n’est affiché qu’une fois. Copiez-le maintenant : il ne pourra plus être affiché.",
+        "password": "Mot de passe",
+        "username": "Nom d’utilisateur",
+        "username_hint": "Si l’appareil demande aussi un nom d’utilisateur, utilisez celui-ci.",
+        "print_address": "Adresse de l’imprimante",
+        "print_address_hint": "Ajoutez cette imprimante sur un ordinateur qui demande un mot de passe, et donnez-lui le mot de passe ci-dessus.",
+        "personal_address": "Adresse personnelle de l’imprimante",
+        "personal_address_hint": "Pour les appareils qui ne peuvent pas demander de mot de passe, comme les ordinateurs Windows. Elle contient le mot de passe : gardez-la tout aussi privée, et révoquez le mot de passe en cas de fuite.",
+        "scan_addresses": "Adresses personnelles de numérisation",
+        "scan_addresses_hint": "Une par scanner que vous pouvez utiliser, pour les applications de numérisation qui acceptent une adresse, comme sane-airscan sous Linux. Elles contiennent aussi le mot de passe. Pour une application qui demande un mot de passe, retirez device/ et le mot de passe."
+      },
+      "profile": {
+        "download": "Télécharger pour iPhone, iPad et Mac",
+        "hint": "Un profil qui ajoute l’imprimante avec l’adresse personnelle. Installez-le dans Réglages sur un iPhone ou un iPad, ou dans Réglages Système sur un Mac. Il n’est pas signé : l’appareil l’affiche donc comme non signé.",
+        "name": "Imprimante {brand} ({name})",
+        "description": "Ajoute l’imprimante {brand} avec le mot de passe d’appareil {name}. Supprimez le profil pour supprimer l’imprimante."
+      },
+      "errors": {
+        "name_invalid": "Le nom de l’appareil doit contenir de 1 à {maximum} caractères.",
+        "name_control": "Le nom de l’appareil ne peut pas contenir de retours à la ligne, de tabulations ni d’autres caractères de contrôle.",
+        "too_many": "Vous avez déjà {maximum} mots de passe d’appareil. Révoquez d’abord un mot de passe que vous n’utilisez plus.",
+        "unavailable": "Les mots de passe d’appareil n’ont pas pu être modifiés. Réessayez dans un instant."
+      },
+      "direct": {
+        "title": "Documents de vos appareils",
+        "label": "Quand un appareil envoie un document",
+        "hold": "Le retenir jusqu’à ce que je l’imprime",
+        "print_on": "L’imprimer tout de suite sur {printer}",
+        "hint": "Les documents retenus attendent sur la page Impressions, où vous choisissez une imprimante. Imprimés tout de suite, ils comptent quand même dans vos quotas, et un document qui ne peut pas être imprimé y attend avec la raison.",
+        "save": "Enregistrer",
+        "saved": "Enregistré. Les documents de vos appareils suivent le nouveau choix.",
+        "refused": "Cette imprimante ne vous est pas accessible.",
+        "unavailable": "Le choix n’a pas pu être enregistré. Réessayez dans un instant."
+      }
+    }
+  },
+  "administration": {
+    "title": "Administration",
+    "sections": "Sections de l’administration",
+    "users": {
+      "tab": "Utilisateurs",
+      "document_title": "Utilisateurs · Administration",
+      "list": "Utilisateurs",
+      "load_failed": "Les utilisateurs n’ont pas pu être chargés. Réessayez dans un instant.",
+      "columns": {
+        "user": "Utilisateur",
+        "groups": "Groupes",
+        "sign_in": "Connexion",
+        "status": "Statut",
+        "last_sign_in": "Dernière connexion",
+        "actions": "Actions",
+        "quotas": "Quotas"
+      },
+      "no_groups": "Aucun",
+      "groups_separator": ", ",
+      "quota_usage": "{rule} : {used}",
+      "single_sign_on": "Authentification unique",
+      "password": "Mot de passe",
+      "no_method": "Aucune",
+      "administrator": "Administrateur",
+      "from_claim": "Depuis le fournisseur d’identité",
+      "active": "Actif",
+      "disabled": "Désactivé",
+      "never": "Jamais",
+      "you": "Vous",
+      "grant": "Nommer administrateur",
+      "grant_label": "Nommer {username} administrateur",
+      "remove": "Retirer l’administration",
+      "remove_label": "Retirer l’administration à {username}",
+      "disable": "Désactiver",
+      "disable_label": "Désactiver {username}",
+      "enable": "Activer",
+      "enable_label": "Activer {username}",
+      "set_password": "Définir le mot de passe",
+      "new_password_for": "Nouveau mot de passe pour {username}",
+      "set_password_submit": "Définir",
+      "set_password_note": "Déconnecte {username} partout et révoque ses mots de passe d’appareil.",
+      "device_passwords": {
+        "one": "{count} mot de passe d’appareil",
+        "other": "{count} mots de passe d’appareil"
+      },
+      "revoke_devices": "Révoquer les appareils",
+      "revoke_devices_label": "Révoquer tous les mots de passe d’appareil de {username}"
+    },
+    "new_user": {
+      "title": "Nouvel utilisateur local",
+      "username": "Nom d’utilisateur",
+      "username_hint": "Lettres minuscules, chiffres, points, tirets bas et tirets.",
+      "display_name": "Nom affiché",
+      "display_name_hint": "Affiché dans l’en-tête. Le nom d’utilisateur s’il est vide.",
+      "email": "Adresse e-mail (facultatif)",
+      "password": "Mot de passe",
+      "password_hint": "Au moins {minimum} caractères. Transmettez-le de façon sûre.",
+      "administrator": "Administrateur",
+      "submit": "Créer l’utilisateur"
+    },
+    "done": {
+      "created": "Le compte {username} a été créé.",
+      "granted": "{username} est maintenant administrateur.",
+      "removed": "{username} n’est plus administrateur.",
+      "disabled": "{username} est désactivé et a été déconnecté.",
+      "enabled": "{username} peut de nouveau se connecter.",
+      "password_set": "Le mot de passe de {username} a été défini, {username} a été déconnecté partout, et ses mots de passe d’appareil ont été révoqués.",
+      "quota_granted": "Un supplément a été accordé à {username}.",
+      "quota_reset": "L’utilisation de {username} a été remise à zéro.",
+      "devices_revoked": "Les mots de passe d’appareil de {username} ont été révoqués. Ses appareils ne peuvent plus imprimer ni numériser."
+    },
+    "errors": {
+      "about": "{username} : {message}",
+      "username_invalid": "Le nom d’utilisateur doit contenir de 1 à 64 caractères parmi les lettres minuscules, chiffres, points, tirets bas et tirets, et commencer par une lettre ou un chiffre.",
+      "username_taken": "Ce nom d’utilisateur est déjà pris.",
+      "email_taken": "Cette adresse e-mail appartient à un autre utilisateur.",
+      "too_short": "Le mot de passe doit contenir au moins {minimum} caractères.",
+      "too_long": "Le mot de passe doit contenir au plus {maximum} caractères.",
+      "own_account": "Vous ne pouvez pas modifier cela sur votre propre compte.",
+      "from_claim": "Le rôle d’administrateur de cet utilisateur vient du fournisseur d’identité. Modifiez-le là-bas, ou sur le serveur avec recto administrator --remove.",
+      "not_found": "Cet utilisateur n’existe plus.",
+      "unavailable": "La modification n’a pas pu être enregistrée. Réessayez dans un instant."
+    },
+    "groups": {
+      "tab": "Groupes",
+      "document_title": "Groupes · Administration",
+      "intro": "Les groupes et leurs membres viennent du fournisseur d’identité à chaque connexion : ils sont donc en lecture seule ici.",
+      "load_failed": "Les groupes n’ont pas pu être chargés. Réessayez dans un instant.",
+      "empty": "Aucun groupe pour l’instant",
+      "empty_body": "Les groupes apparaissent dès que des personnes se connectent avec l’authentification unique et que le fournisseur envoie une revendication de groupes.",
+      "members": {
+        "one": "{count} membre",
+        "other": "{count} membres"
+      },
+      "no_members": "Aucun membre",
+      "disabled": "Désactivé"
+    },
+    "printers": {
+      "tab": "Imprimantes",
+      "document_title": "Imprimantes · Administration",
+      "intro": "Choisissez qui peut imprimer sur chaque imprimante. Une imprimante sans règle est ouverte à tous.",
+      "empty": "Aucune imprimante",
+      "empty_body": "CUPS ne liste aucune imprimante, et aucune imprimante n’a de règle.",
+      "listing_failed": "CUPS n’a pas répondu : seules les imprimantes qui ont une règle sont listées. Leurs règles peuvent toujours être modifiées.",
+      "add": {
+        "title": "Ajouter une imprimante",
+        "intro": "Indiquez l’adresse de l’imprimante. recto demande à CUPS de l’ajouter.",
+        "search": "Trouver un pilote",
+        "search_hint": "Uniquement pour une imprimante qui n’est pas IPP Everywhere. Des mots de la marque et du modèle, comme laserjet 1020. La recherche recharge la page : cherchez avant de remplir le reste.",
+        "search_submit": "Rechercher",
+        "search_failed": "CUPS n’a pas répondu à la recherche de pilote. L’imprimante peut quand même être ajoutée avec IPP Everywhere.",
+        "name": "Nom",
+        "name_hint": "Lettres, chiffres, points, tirets bas et tirets, jusqu’à 127 caractères.",
+        "address": "Adresse",
+        "address_hint": "Commence par ipp://, ipps://, http://, https://, socket://, lpd://, dnssd:// ou usb://.",
+        "driver": "Pilote",
+        "driver_hint": "IPP Everywhere demande ses capacités à l’imprimante, qui doit répondre.",
+        "everywhere": "IPP Everywhere (sans pilote)",
+        "description": "Description (facultatif)",
+        "location": "Emplacement (facultatif)",
+        "submit": "Ajouter l’imprimante"
+      },
+      "manage": {
+        "summary": "Gérer",
+        "title": "Gérer {printer}",
+        "description": "Description",
+        "location": "Emplacement",
+        "save_texts": "Enregistrer la description et l’emplacement",
+        "is_default": "Imprimante par défaut",
+        "make_default": "Définir par défaut",
+        "pause": "Suspendre",
+        "resume": "Reprendre",
+        "accept": "Accepter les impressions",
+        "reject": "Refuser les impressions",
+        "confirm": "Retirer {printer} de CUPS. Ses impressions en attente sont annulées et sa règle d’accès est oubliée.",
+        "remove": "Supprimer l’imprimante"
+      },
+      "done": {
+        "added": "L’imprimante a été ajoutée.",
+        "described": "La description et l’emplacement ont été enregistrés.",
+        "default": "L’imprimante par défaut a été changée.",
+        "paused": "L’imprimante est suspendue : elle retient ses impressions.",
+        "resumed": "L’imprimante fonctionne de nouveau.",
+        "accepting": "L’imprimante accepte de nouveau les impressions.",
+        "rejecting": "L’imprimante refuse les nouvelles impressions.",
+        "removed": "L’imprimante a été supprimée.",
+        "prices": "Les tarifs ont été enregistrés."
+      },
+      "errors": {
+        "invalid_name": "Le nom doit contenir de 1 à 127 caractères parmi les lettres, chiffres, points, tirets bas et tirets.",
+        "invalid_queue_name": "Le nom doit faire au plus 127 octets, sans espaces, caractères de contrôle ni aucun de / \\ ? ' \" #.",
+        "invalid_text": "La description et l’emplacement doivent faire au plus 1023 caractères, sur une seule ligne, sans caractères de contrôle.",
+        "invalid_address": "L’adresse doit commencer par ipp://, ipps://, http://, https://, socket://, lpd://, dnssd:// ou usb:// et nommer un hôte, sans nom d’utilisateur ni mot de passe.",
+        "name_taken": "Une imprimante porte déjà ce nom.",
+        "needs_confirmation": "Cochez la confirmation pour supprimer l’imprimante.",
+        "refused": "CUPS a refusé la modification : vérifiez que le service cups permet à recto de l’administrer.",
+        "refused_guide": "Comment le configurer",
+        "unreachable": "L’imprimante n’a pas pu être jointe : {message}",
+        "rejected": "CUPS a rejeté la modification : {message}",
+        "cups_unavailable": "CUPS n’a pas répondu. Réessayez dans un instant.",
+        "invalid_prices": "Les tarifs sont des montants en {currency} avec au plus {decimals} décimales.",
+        "invalid_whole_prices": "Les tarifs sont des montants entiers en {currency}."
+      },
+      "change": "Modifier l’accès et les tarifs",
+      "prices": {
+        "title": "Tarifs de {printer}",
+        "mono_page": "Page noir et blanc",
+        "color_page": "Page couleur",
+        "sheet": "Feuille",
+        "hint": "Montants en {currency}, comme {example}. Vide vaut 0. Un nouveau tarif ne s’applique qu’aux impressions suivantes.",
+        "save": "Enregistrer les tarifs",
+        "free": "Gratuit",
+        "summary": "Tarifs : {prices}",
+        "per_mono_page": "{amount} la page noir et blanc",
+        "per_color_page": "{amount} la page couleur",
+        "per_sheet": "{amount} la feuille"
+      }
+    },
+    "scanners": {
+      "tab": "Scanners",
+      "document_title": "Scanners · Administration",
+      "intro": "Choisissez qui peut numériser sur chaque scanner. Un scanner sans règle est ouvert à tous.",
+      "empty": "Aucun scanner",
+      "empty_body": "SANE ne liste aucun scanner, et aucun scanner n’a de règle.",
+      "listing_failed": "SANE n’a pas répondu : seuls les scanners qui ont une règle sont listés. Leurs règles peuvent toujours être modifiées."
+    },
+    "devices": {
+      "load_failed": "Les règles n’ont pas pu être chargées. Réessayez dans un instant.",
+      "everyone": "Tout le monde",
+      "administrators_only": "Administrateurs uniquement",
+      "groups": "Groupes : {groups}",
+      "separator": ", ",
+      "not_found": "Introuvable",
+      "change": "Modifier qui peut l’utiliser",
+      "access_of": "Qui peut utiliser {device}",
+      "choose_everyone": "Tout le monde",
+      "choose_groups": "Ces groupes",
+      "no_groups": "Aucun groupe pour l’instant. Sans groupe, seuls les administrateurs peuvent l’utiliser.",
+      "administrators_note": "Les administrateurs peuvent toujours utiliser tous les appareils. Si aucun groupe n’est coché, eux seuls le peuvent.",
+      "save": "Enregistrer",
+      "forget": "Oublier",
+      "forget_hint": "Supprime la règle d’un appareil qui a disparu. S’il revient, il est ouvert à tous.",
+      "done": {
+        "access": "L’accès a été enregistré.",
+        "forgotten": "La règle a été oubliée."
+      },
+      "errors": {
+        "no_device": "Le formulaire n’indiquait aucun appareil.",
+        "no_access": "Le formulaire n’indiquait pas qui peut utiliser l’appareil.",
+        "unknown_group": "Un groupe choisi n’existe plus. Rien n’a été enregistré.",
+        "unavailable": "La modification n’a pas pu être enregistrée. Réessayez dans un instant."
+      }
+    },
+    "quotas": {
+      "tab": "Quotas",
+      "document_title": "Quotas · Administration",
+      "intro": "Les règles limitent ce que les gens impriment. Une règle pour tout le monde, un groupe ou un utilisateur donne à chacun son propre crédit ; une règle commune est un budget que partage un groupe. Les règles s’appliquent aussi aux administrateurs.",
+      "load_failed": "Les règles n’ont pas pu être chargées. Réessayez dans un instant.",
+      "empty": "Aucune règle",
+      "empty_body": "Sans règle, chacun imprime autant qu’il le souhaite.",
+      "new": "Nouvelle règle",
+      "create": "Créer la règle",
+      "save": "Enregistrer la règle",
+      "change": "Modifier {rule}",
+      "disabled": "Désactivée",
+      "enable": "Activer",
+      "disable": "Désactiver",
+      "confirm_delete": "Supprimer cette règle, ses suppléments et ses remises à zéro",
+      "delete": "Supprimer la règle",
+      "limit": "{amount} {period}",
+      "all_printers": "{text}, sur toutes les imprimantes",
+      "summary": "{text}, {enforcement}",
+      "hard": "stricte",
+      "soft": "souple",
+      "subject": {
+        "everyone": "Tout le monde",
+        "group": "Chaque membre de {group}",
+        "user": "{user}",
+        "pool": "{group} en commun"
+      },
+      "fields": {
+        "name": "Nom",
+        "subject": "S’applique à",
+        "groups": "Chaque membre d’un groupe",
+        "pools": "Un groupe en commun",
+        "users": "Un utilisateur",
+        "metric": "Décompte",
+        "limit": "Limite",
+        "limit_hint": "Un nombre entier, ou un montant en {currency} pour le coût.",
+        "period": "Période",
+        "rolling_days": "Jours de la période glissante",
+        "rolling_days_hint": "Uniquement pour une période glissante : de 1 à 366.",
+        "printers": "Imprimantes",
+        "printers_hint": "Si aucune n’est cochée, toutes les imprimantes.",
+        "enforcement": "Au-delà de la limite",
+        "hard": "Stricte : refuser l’impression",
+        "soft": "Souple : imprimer et avertir",
+        "enabled": "Activée"
+      },
+      "adjust": {
+        "summary": "Accorder un supplément ou remettre à zéro",
+        "amount": "Crédit supplémentaire",
+        "amount_count": "Un nombre entier, jusqu’à la fin de la période.",
+        "amount_cost": "Un montant en {currency}, jusqu’à la fin de la période.",
+        "reason": "Motif",
+        "reset_hint": "L’utilisation passée cesse d’être comptée.",
+        "grant": "Accorder",
+        "reset": "Remettre à zéro"
+      },
+      "done": {
+        "created": "La règle a été créée.",
+        "saved": "La règle a été enregistrée.",
+        "enabled": "La règle est activée.",
+        "disabled": "La règle est désactivée : elle ne limite plus personne.",
+        "deleted": "La règle a été supprimée.",
+        "granted": "Le crédit supplémentaire a été accordé.",
+        "reset": "L’utilisation a été remise à zéro."
+      },
+      "errors": {
+        "name_empty": "La règle doit avoir un nom.",
+        "limit_invalid": "La limite doit être un nombre entier, ou pour le coût un montant en {currency}.",
+        "limit_negative": "La limite ne peut pas être négative.",
+        "limit_too_large": "La limite ne peut pas dépasser {maximum}.",
+        "rule_adjusted": "Cette règle a des suppléments ou des remises à zéro : son décompte et sa période ne peuvent donc pas changer. Créez plutôt une nouvelle règle.",
+        "rolling_days": "Une période glissante dure de 1 à {maximum} jours.",
+        "subject_not_found": "Ce groupe ou cet utilisateur n’existe pas.",
+        "invalid_form": "Le formulaire était incomplet. Réessayez.",
+        "not_found": "Cette règle n’existe plus.",
+        "confirm_missing": "Cochez la case pour confirmer la suppression.",
+        "amount_invalid": "Le crédit supplémentaire doit être un nombre entier supérieur à 0, ou pour le coût un montant en {currency} supérieur à 0.",
+        "amount_too_large": "Le crédit supplémentaire ne peut pas dépasser {maximum}.",
+        "reason_invalid": "Indiquez un motif de 1 à 200 caractères.",
+        "unavailable": "La modification n’a pas pu être enregistrée. Réessayez dans un instant."
+      }
+    },
+    "usage": {
+      "tab": "Utilisation",
+      "document_title": "Utilisation · Administration",
+      "intro": "Ce que les gens ont imprimé et numérisé sur une période, d’après le registre des impressions et le journal des numérisations. Les impressions remboursées sont exclues ; celles encore en cours comptent.",
+      "range": "Période",
+      "this_month": "Ce mois-ci",
+      "last_month": "Le mois dernier",
+      "from": "Du",
+      "to": "Au",
+      "show": "Afficher",
+      "tables": "Tableaux",
+      "by": {
+        "user": "Par utilisateur",
+        "group": "Par groupe",
+        "printer": "Par imprimante",
+        "scanner": "Par scanner"
+      },
+      "total": "Total",
+      "columns": {
+        "user": "Utilisateur",
+        "group": "Groupe",
+        "printer": "Imprimante",
+        "scanner": "Scanner",
+        "uncounted": "Impressions non comptées",
+        "scans": "Numérisations",
+        "scanned_pages": "Pages numérisées",
+        "saved": "Enregistrées"
+      },
+      "anonymous": "Anonyme (réseau)",
+      "empty": "Rien n’a été imprimé ni numérisé sur cette période.",
+      "empty_body": "Choisissez une autre période ci-dessus.",
+      "invalid_dates": "Saisissez deux dates entre 2000 et 2999, la seconde égale ou postérieure à la première.",
+      "load_failed": "L’utilisation n’a pas pu être chargée. Réessayez dans un instant.",
+      "download": {
+        "title": "Télécharger",
+        "print_jobs": "Travaux d’impression (CSV)",
+        "scans": "Numérisations (CSV)",
+        "totals": "Ce tableau (CSV)"
+      }
+    }
+  },
+  "print": {
+    "title": "Imprimer",
+    "file": "Fichier",
+    "file_hint": "PDF, JPEG ou PNG, jusqu’à {size}.",
+    "printer": "Imprimante",
+    "markers": {
+      "label": "{name} ({details})",
+      "default": "par défaut",
+      "offline": "hors ligne",
+      "not_accepting": "n’accepte pas les impressions"
+    },
+    "copies": "Copies",
+    "sides": {
+      "label": "Recto verso",
+      "one_sided": "Recto seul",
+      "long_edge": "Recto verso, bord long",
+      "short_edge": "Recto verso, bord court"
+    },
+    "color": {
+      "label": "Couleur",
+      "color": "Couleur",
+      "monochrome": "Noir et blanc"
+    },
+    "pages": {
+      "label": "Pages (PDF uniquement)",
+      "hint": "p. ex. 1-3, 5",
+      "placeholder": "Toutes les pages"
+    },
+    "submit": "Imprimer",
+    "status": "État de l’imprimante",
+    "unavailable_banner": "Service d’impression indisponible : {reason}",
+    "errors": {
+      "too_large": "Le fichier est trop volumineux pour être imprimé.",
+      "no_file": "Choisissez un fichier à imprimer.",
+      "empty_file": "Le fichier est vide.",
+      "unsupported_format": "Seuls les fichiers PDF, JPEG et PNG peuvent être imprimés. Enregistrez ou exportez d’abord le document en PDF.",
+      "printer_not_found": "Cette imprimante n’existe plus. Choisissez-en une autre.",
+      "not_accepting": "Cette imprimante n’accepte pas d’impressions pour le moment.",
+      "invalid_copies": "Cette imprimante n’accepte pas ce nombre de copies.",
+      "unsupported_sides": "Cette imprimante ne prend pas en charge ce réglage recto verso.",
+      "unsupported_color": "Cette imprimante ne prend pas en charge ce mode couleur.",
+      "invalid_page_ranges": "La plage de pages n’est pas valide. Écrivez-la sous la forme 1-3, 5.",
+      "invalid_form": "Le formulaire d’impression était incomplet. Réessayez.",
+      "job_not_found": "Cette impression n’existe plus.",
+      "unavailable": "Le service d’impression est indisponible. Réessayez plus tard.",
+      "refused": "Le service d’impression a refusé la demande.",
+      "unconfirmed": "Le service d’impression n’a pas confirmé l’impression. Elle peut encore sortir : vérifiez la page Impressions avant de la renvoyer.",
+      "quota": "Cette impression dépasse un quota d’impression.",
+      "quota_rule": "Cette impression demande plus qu’il ne vous reste de « {rule} » : {left}.",
+      "uncountable": "recto n’a pas pu compter les pages de ce PDF, et vos quotas comptent les pages. Enregistrez-le de nouveau en PDF et réessayez.",
+      "counting_busy": "recto est occupé à compter les pages d’autres documents, et vos quotas comptent les pages. Réessayez dans un instant.",
+      "held_gone": "Ce document n’attend plus : il a été imprimé, supprimé, ou il a expiré."
+    },
+    "left": {
+      "title": "Ce qu’il vous reste"
+    }
+  },
+  "printers": {
+    "title": "Imprimantes",
+    "empty": "Aucune imprimante pour l’instant",
+    "empty_body": "Ajoutez une imprimante à CUPS, puis rechargez cette page.",
+    "default": "Par défaut",
+    "offline": "Hors ligne",
+    "not_accepting": "N’accepte pas les impressions",
+    "state": {
+      "idle": "Prête",
+      "processing": "Impression en cours",
+      "stopped": "Arrêtée"
+    },
+    "reasons": {
+      "offline": "L’imprimante est injoignable.",
+      "connecting": "Connexion à l’imprimante",
+      "media_empty": "Plus de papier",
+      "media_low": "Papier presque épuisé",
+      "media_jam": "Bourrage papier",
+      "toner_empty": "Plus de toner",
+      "toner_low": "Toner presque épuisé",
+      "marker_supply_empty": "Plus d’encre",
+      "marker_supply_low": "Encre presque épuisée",
+      "door_open": "Une porte est ouverte",
+      "cover_open": "Le capot est ouvert",
+      "paused": "Suspendue dans CUPS",
+      "other": "L’imprimante signale : {keyword}"
+    },
+    "supplies": "Consommables",
+    "level": "{level} %",
+    "unknown_level": "Niveau inconnu"
+  },
+  "jobs": {
+    "title": "Impressions",
+    "list": "Travaux d’impression",
+    "submitted": "Envoyé à l’imprimante sous le numéro {id}.",
+    "number": "Impression {id}",
+    "untitled": "Document sans titre",
+    "another_user": "un autre utilisateur",
+    "pages": {
+      "one": "{count} page",
+      "other": "{count} pages"
+    },
+    "cancel": "Annuler",
+    "cancel_label": "Annuler {name}",
+    "empty": "Aucune impression",
+    "empty_body": "Les documents que vous imprimez apparaissent ici.",
+    "state": {
+      "pending": "En file d’attente",
+      "held": "Retenue",
+      "processing": "Impression en cours",
+      "stopped": "Arrêtée",
+      "canceled": "Annulée",
+      "aborted": "Échouée",
+      "completed": "Imprimée"
+    },
+    "over": "Cette impression a dépassé « {rule} » : {left}.",
+    "over_unknown": "Cette impression a dépassé un quota d’impression.",
+    "held": {
+      "title": "À imprimer",
+      "intro": "Envoyés depuis vos ordinateurs et téléphones. Choisissez une imprimante pour les imprimer, ou supprimez-les. Rien n’est compté avant l’impression.",
+      "received": "Reçu {time}",
+      "from": "depuis {device}",
+      "preview": "Aperçu",
+      "preview_label": "Aperçu de {name}",
+      "release": "Imprimer",
+      "release_label": "Imprimer {name}",
+      "delete": "Supprimer",
+      "delete_label": "Supprimer {name}",
+      "releasing": "Impression en cours",
+      "last_refusal": "Dernière tentative : {reason}",
+      "no_printers": "Aucune imprimante ne vous est accessible pour le moment.",
+      "deleted": "Le document a été supprimé.",
+      "printer_default": "Valeur par défaut de l’imprimante"
+    }
+  },
+  "scan": {
+    "title": "Numériser",
+    "needs_javascript": "La numérisation nécessite JavaScript. Activez-le dans votre navigateur pour prévisualiser et numériser.",
+    "scanner": "Scanner",
+    "refresh": "Rechercher de nouveau les scanners",
+    "no_scanners": "Aucun scanner trouvé. Vérifiez que le scanner est allumé, puis relancez la recherche.",
+    "resolution": "Résolution",
+    "dpi": "{value} dpi",
+    "mode": "Couleurs",
+    "modes": {
+      "color": "Couleur",
+      "gray": "Niveaux de gris",
+      "lineart": "Noir et blanc"
+    },
+    "source": "Source",
+    "format": "Format",
+    "formats": {
+      "pdf": "PDF",
+      "png": "Image PNG",
+      "jpeg": "Image JPEG"
+    },
+    "first_page_only": "PNG et JPEG ne gardent que la première page du chargeur.",
+    "preview": "Aperçu",
+    "preview_needs_flatbed": "L’aperçu ne fonctionne qu’à partir de la vitre : depuis le chargeur, il entraînerait la première feuille. Les pages du chargeur sont numérisées en entier.",
+    "scan": "Numériser",
+    "activity": {
+      "refreshing": "Recherche des scanners…",
+      "loading": "Lecture des réglages du scanner…",
+      "previewing": "Aperçu en cours…",
+      "scanning": "Numérisation… Si le scanner est occupé, votre numérisation attend son tour.",
+      "saving": "Enregistrement…"
+    },
+    "preview_title": "Aperçu",
+    "preview_alt": "Aperçu de la vitre du scanner",
+    "select_hint": "Faites glisser sur l’aperçu pour n’en numériser qu’une partie.",
+    "selected": "Seule la partie sélectionnée sera numérisée.",
+    "no_area": "Ce scanner numérise toujours toute sa surface.",
+    "clear_selection": "Effacer la sélection",
+    "result": "Numérisation prête",
+    "pages": {
+      "one": "{count} page",
+      "other": "{count} pages"
+    },
+    "download": "Télécharger",
+    "save": "Enregistrer dans le dossier",
+    "saved": "Enregistré sous {path}",
+    "errors": {
+      "busy": "Le scanner est occupé. Réessayez dans un instant.",
+      "not_found": "Scanner introuvable. Il est peut-être éteint ou débranché ; actualisez la liste.",
+      "jammed": "Bourrage papier dans le scanner.",
+      "no_documents": "Aucun document dans le chargeur.",
+      "cover_open": "Le capot du scanner est ouvert.",
+      "unsupported": "Le scanner ne prend pas en charge ceci : {what}",
+      "device": "Erreur du scanner : {reason}",
+      "too_large": "Cette numérisation serait trop volumineuse pour {name}. Baissez la résolution ou sélectionnez une zone plus petite.",
+      "interrupted": "La numérisation s’est arrêtée de façon inattendue. Réessayez.",
+      "connection_lost": "La connexion à {name} a été coupée avant la fin de la numérisation. La numérisation se termine peut-être encore, mais son résultat est perdu : relancez-la dans un instant. Si {name} est derrière un proxy inverse, augmentez le délai de lecture du proxy.",
+      "encoding": "La numérisation n’a pas pu être encodée : {reason}",
+      "result_not_found": "Cette numérisation n’existe pas ou a expiré.",
+      "save_disabled": "L’enregistrement dans un dossier n’est pas configuré.",
+      "storage": "Impossible d’écrire dans {path} : {reason}"
+    }
+  },
+  "quotas": {
+    "metric": {
+      "pages": "Pages",
+      "sheets": "Feuilles",
+      "color_pages": "Pages couleur",
+      "mono_pages": "Pages noir et blanc",
+      "jobs": "Impressions",
+      "cost": "Coût"
+    },
+    "amount": {
+      "pages": {
+        "one": "{count} page",
+        "other": "{count} pages"
+      },
+      "sheets": {
+        "one": "{count} feuille",
+        "other": "{count} feuilles"
+      },
+      "color_pages": {
+        "one": "{count} page couleur",
+        "other": "{count} pages couleur"
+      },
+      "mono_pages": {
+        "one": "{count} page noir et blanc",
+        "other": "{count} pages noir et blanc"
+      },
+      "jobs": {
+        "one": "{count} impression",
+        "other": "{count} impressions"
+      }
+    },
+    "period": {
+      "day": "Jour",
+      "week": "Semaine, à partir du lundi",
+      "month": "Mois",
+      "quarter": "Trimestre",
+      "year": "Année",
+      "rolling": "Nombre de jours glissants",
+      "total": "Total, jamais renouvelé"
+    },
+    "current": {
+      "day": "aujourd’hui",
+      "week": "cette semaine",
+      "month": "ce mois-ci",
+      "quarter": "ce trimestre",
+      "year": "cette année",
+      "rolling": {
+        "one": "sur le dernier jour",
+        "other": "sur les {count} derniers jours"
+      },
+      "total": "au total"
+    },
+    "each": {
+      "day": "par jour",
+      "week": "par semaine",
+      "month": "par mois",
+      "quarter": "par trimestre",
+      "year": "par an",
+      "rolling": {
+        "one": "sur un jour glissant",
+        "other": "sur {count} jours glissants"
+      },
+      "total": "au total"
+    },
+    "left": {
+      "pages": {
+        "one": "Reste {left} sur {count} page {period}",
+        "other": "Reste {left} sur {count} pages {period}"
+      },
+      "sheets": {
+        "one": "Reste {left} sur {count} feuille {period}",
+        "other": "Reste {left} sur {count} feuilles {period}"
+      },
+      "color_pages": {
+        "one": "Reste {left} sur {count} page couleur {period}",
+        "other": "Reste {left} sur {count} pages couleur {period}"
+      },
+      "mono_pages": {
+        "one": "Reste {left} sur {count} page noir et blanc {period}",
+        "other": "Reste {left} sur {count} pages noir et blanc {period}"
+      },
+      "jobs": {
+        "one": "Reste {left} sur {count} impression {period}",
+        "other": "Reste {left} sur {count} impressions {period}"
+      },
+      "cost": "Reste {left} sur {limit} {period}"
+    },
+    "used": "Utilisé {period} : {used} sur {limit}",
+    "with_grant": "{text}, avec un supplément de {granted}",
+    "on_printers": "{text}, sur {printers}",
+    "separator": ", "
+  },
+  "ipp": {
+    "incoming": "En attente de son document",
+    "held": "Retenu dans {name} jusqu’à ce que vous le libériez",
+    "releasing": "En cours de libération dans {name}",
+    "released": "Libéré dans {name}",
+    "direct_refused": "Non imprimé : {reason} Retenu dans {name} jusqu’à ce que vous le libériez."
+  }
+}

@@ -60,6 +60,10 @@ pub fn unknown_theme(locale: Locale) -> &'static str {
     t!("theme.unknown", locale = locale)
 }
 
+pub fn unknown_language(locale: Locale) -> &'static str {
+    t!("language.unknown", locale = locale)
+}
+
 pub fn scan_result_not_found(locale: Locale) -> &'static str {
     t!("scan.errors.result_not_found", locale = locale)
 }

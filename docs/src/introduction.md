@@ -42,6 +42,8 @@ with no drivers to install on each device.
   role or group. Administrators create the local accounts, reset passwords and disable users from
   the **Administration** page.
 - **Brands** itself: the operator sets the name, accent color, logo and icon.
+- **Speaks English and French**: each person's browser language, or the one they pick with the
+  switch in every page.
 - **Follows your theme**: light, dark or the device's setting, with a switch in every page.
 - **Installs as an app** on phones and computers, with an offline page.
 

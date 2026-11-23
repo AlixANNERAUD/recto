@@ -84,10 +84,9 @@ pub fn current() -> Theme {
     Theme::System
 }
 
-/// Three buttons posting to `/theme`, which stores the choice and returns to this page. A plain
-/// form, so it works without JavaScript.
-#[component]
-pub fn ThemeSwitch() -> impl IntoView {
+/// The current page's path and query, for the `next` field of the theme and language switches,
+/// which return to it.
+pub(crate) fn return_path() -> String {
     let location = use_location();
     // The router's search has no leading `?` when the server renders the page.
     let search = location.search.get_untracked();
@@ -96,7 +95,14 @@ pub fn ThemeSwitch() -> impl IntoView {
     } else {
         "?"
     };
-    let next = format!("{}{separator}{search}", location.pathname.get_untracked());
+    format!("{}{separator}{search}", location.pathname.get_untracked())
+}
+
+/// Three buttons posting to `/theme`, which stores the choice and returns to this page. A plain
+/// form, so it works without JavaScript.
+#[component]
+pub fn ThemeSwitch() -> impl IntoView {
+    let next = return_path();
     let current = current();
     let button = |theme: Theme, icon: IconKind, label: &'static str| {
         let pressed = current == theme;

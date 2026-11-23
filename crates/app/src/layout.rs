@@ -10,6 +10,7 @@ use leptos_router::hooks::use_location;
 use crate::{
     branding::{app_name, has_logo},
     components::icons::{Icon, IconKind},
+    language::LanguageSwitch,
     t, tf,
     theme::ThemeSwitch,
 };
@@ -209,6 +210,7 @@ pub fn Layout(
                     <span class="truncate">{app_name()}</span>
                 </a>
                 <div class="ml-auto flex items-center gap-2">
+                    <LanguageSwitch />
                     <ThemeSwitch />
                     {user}
                 </div>
@@ -242,7 +244,8 @@ pub fn Layout(
 #[component]
 pub fn Bare(
     #[prop(into)] title: String,
-    /// Whether to show the theme switch; the offline page has none, since it cannot work there.
+    /// Whether to show the language and theme switches; the offline page has none, since they
+    /// cannot work there.
     #[prop(default = true)]
     switch: bool,
     children: Children,
@@ -256,7 +259,15 @@ pub fn Bare(
                     <Mark />
                     <span class="truncate">{app_name()}</span>
                 </p>
-                {switch.then(|| view! { <ThemeSwitch /> })}
+                {switch
+                    .then(|| {
+                        view! {
+                            <div class="flex items-center gap-2">
+                                <LanguageSwitch />
+                                <ThemeSwitch />
+                            </div>
+                        }
+                    })}
             </div>
             <section class="bg-card grid gap-4 rounded-lg border p-6 shadow-[0_1px_2px_rgba(0,0,0,0.08)]">
                 <h1 class="text-xl font-semibold">{title}</h1>

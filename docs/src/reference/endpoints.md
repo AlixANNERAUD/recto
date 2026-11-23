@@ -1,7 +1,7 @@
 # Pages and endpoints
 
 Every address requires a signed-in user except `/health`, the sign-in addresses (`/sign-in`,
-`/auth/*`, `/no-access`), `POST /theme`, `/brand/*`, `/manifest.webmanifest`, `/sw.js`,
+`/auth/*`, `/no-access`), `POST /theme`, `POST /language`, `/brand/*`, `/manifest.webmanifest`, `/sw.js`,
 `/pwa.js`, `/offline`, `/ipp/*`, `/eSCL/*`, `/device/*` and the interface's static files. A page requested without a session redirects to `/sign-in?next=<path>`, which
 brings the person back after signing in; forms, downloads and server functions answer `401`
 instead. A single sign-on user without the required claim, or disabled, is sent to `/no-access`.
@@ -154,10 +154,11 @@ sign-in redirect, which would copy a password into a `Location` header and the b
 The Scan page and the live parts of the other pages call server functions under `/api/`. They
 are internal to the interface and may change between versions.
 
-## Theme
+## Theme and language
 
 | Method and path | Does |
 | --- | --- |
+| `POST /language` | Public. Takes the form fields `locale` (`en` or `fr`; `fr-CA` and other tags of the same language are taken as `fr`) and `next` (a path on recto, else `/`). Stores the choice in the `recto_locale` cookie (one year, `HttpOnly`, `SameSite=Lax`, and `Secure` when the public URL is HTTPS), then redirects to `next`. Answers `400` for a language recto does not have. Without the cookie, pages follow the browser's `Accept-Language`, else English. |
 | `POST /theme` | Public. Takes the form fields `theme` (`system`, `light` or `dark`) and `next` (a path on recto, else `/`). Stores the choice in the `recto_theme` cookie (one year, `HttpOnly`, `SameSite=Lax`, and `Secure` when the public URL is HTTPS), then redirects to `next`. `system` removes the cookie. Answers `400` for another value. |
 
 ## Brand

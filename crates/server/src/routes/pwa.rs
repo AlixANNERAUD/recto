@@ -1,6 +1,6 @@
-//! Routes that belong to the browser rather than to a page: the theme switch, the brand's icons
-//! and logo, the web app manifest and the service worker. They are open to anyone, so the
-//! sign-in page can offer the switch and show the brand too, and browsers can fetch the manifest
+//! Routes that belong to the browser rather than to a page: the language and theme switches, the
+//! brand's icons and logo, the web app manifest and the service worker. They are open to anyone, so the
+//! sign-in page can offer the switches and show the brand too, and browsers can fetch the manifest
 //! and worker without cookies; the cross-site check still applies.
 
 use std::{
@@ -26,8 +26,8 @@ use serde::Deserialize;
 
 use crate::session::local_path;
 
-/// A year, in seconds: the choice is remembered until the person changes it.
-const THEME_MAX_AGE: u32 = 31_536_000;
+/// A year, in seconds: a theme or language choice is remembered until the person changes it.
+const CHOICE_MAX_AGE: u32 = 31_536_000;
 
 /// The brand files change only with a restart, which an hour of caching lets browsers see soon
 /// enough.
@@ -48,7 +48,7 @@ struct PwaState {
     branding: Arc<Branding>,
 }
 
-/// `POST /theme`, `GET /brand/*`, `/manifest.webmanifest` and `/sw.js`. `secure_cookies` is
+/// `POST /theme`, `POST /language`, `GET /brand/*`, `/manifest.webmanifest` and `/sw.js`. `secure_cookies` is
 /// whether recto is served over HTTPS.
 pub fn router(branding: Arc<Branding>, secure_cookies: bool) -> Router {
     let icon = |pick: fn(&Branding) -> &Bytes| {
@@ -58,6 +58,7 @@ pub fn router(branding: Arc<Branding>, secure_cookies: bool) -> Router {
     };
     Router::new()
         .route("/theme", post(choose_theme))
+        .route("/language", post(choose_language))
         .route(
             "/brand/icon-192.png",
             icon(|branding| &branding.icons.any_192),
@@ -206,16 +207,11 @@ async fn choose_theme(
         let message = messages::unknown_theme(i18n::from_headers(&headers));
         return (StatusCode::BAD_REQUEST, message).into_response();
     };
-    // Readable by the server only: the page never needs it in the browser.
-    let flags = if state.secure_cookies {
-        "; Path=/; SameSite=Lax; HttpOnly; Secure"
-    } else {
-        "; Path=/; SameSite=Lax; HttpOnly"
-    };
+    let flags = cookie_flags(state.secure_cookies);
     let cookie = match chosen {
         Theme::System => format!("{}=; Max-Age=0{flags}", theme::COOKIE),
         _ => format!(
-            "{}={}; Max-Age={THEME_MAX_AGE}{flags}",
+            "{}={}; Max-Age={CHOICE_MAX_AGE}{flags}",
             theme::COOKIE,
             chosen.as_str()
         ),
@@ -225,6 +221,46 @@ async fn choose_theme(
         response.headers_mut().insert(header::SET_COOKIE, value);
     }
     response
+}
+
+#[derive(Deserialize)]
+struct LanguageForm {
+    locale: String,
+    next: Option<String>,
+}
+
+/// Stores the chosen language in the locale cookie, then goes back to the page, which the
+/// server renders in that language.
+async fn choose_language(
+    State(state): State<PwaState>,
+    headers: HeaderMap,
+    Form(form): Form<LanguageForm>,
+) -> Response {
+    let Some(chosen) = i18n::find(&form.locale) else {
+        let message = messages::unknown_language(i18n::from_headers(&headers));
+        return (StatusCode::BAD_REQUEST, message).into_response();
+    };
+    let cookie = format!(
+        "{}={}; Max-Age={CHOICE_MAX_AGE}{}",
+        i18n::COOKIE,
+        i18n::tag(chosen),
+        cookie_flags(state.secure_cookies),
+    );
+    let mut response = Redirect::to(local_path(form.next.as_deref())).into_response();
+    if let Ok(value) = cookie.parse() {
+        response.headers_mut().insert(header::SET_COOKIE, value);
+    }
+    response
+}
+
+/// The attributes of the theme and language cookies: readable by the server only, since the
+/// page never needs them in the browser.
+fn cookie_flags(secure: bool) -> &'static str {
+    if secure {
+        "; Path=/; SameSite=Lax; HttpOnly; Secure"
+    } else {
+        "; Path=/; SameSite=Lax; HttpOnly"
+    }
 }
 
 #[cfg(test)]

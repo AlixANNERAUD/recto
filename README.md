@@ -100,6 +100,7 @@ management for a handful of printers.
   sign-on with any OpenID Connect provider, with administrators and groups read from its claims.
 - Ready for your reverse proxy, with example files for nginx, Caddy, Traefik, Apache, HAProxy
   and Cloudflare Tunnel.
+- In English and French, following each person's browser or their choice.
 - Your brand (name, accent color, logo, icon), light and dark themes, made for phones, and
   installable as an app.
 
