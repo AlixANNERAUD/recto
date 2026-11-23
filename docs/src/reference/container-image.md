@@ -69,7 +69,10 @@ libsane reads its configuration from `/etc/sane.d`. Mount files over it to confi
 | `/etc/sane.d/airscan.conf` | eSCL and WSD scanners for sane-airscan. |
 | `/etc/sane.d/net.conf` | Hosts running `saned`. |
 
-The repository has examples of all three in `examples/sane/`.
+The repository has examples of all three in `examples/sane/`. The image also ships
+`/etc/sane.d/airscan.d/recto.conf`, which keeps recto's own eSCL scanners out of sane-airscan's
+discovery; sane-airscan reads it after `airscan.conf`, so mounting your own `airscan.conf` keeps
+it.
 
 ## Labels
 

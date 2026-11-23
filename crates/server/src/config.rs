@@ -1,8 +1,12 @@
 //! Command line and environment configuration.
 
-use std::{net::SocketAddr, path::PathBuf};
+use std::{
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+};
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
+use ipnet::{IpNet, Ipv4Net};
 use recto_app::state::JobVisibility;
 use recto_domain::passwords;
 use recto_printing::printer::Media;
@@ -124,6 +128,15 @@ pub struct Config {
         value_parser = parse_default_media
     )]
     pub default_media: Media,
+    /// The networks whose devices may scan without credentials on the LAN listener, on the
+    /// scanners open to everyone: CIDRs, comma separated. Empty by default.
+    #[arg(
+        long,
+        env = "RECTO_ESCL_OPEN_NETWORKS",
+        default_value = "",
+        value_parser = parse_open_networks
+    )]
+    pub escl_open_networks: OpenNetworks,
     #[arg(long, env = "RECTO_CUPS_URL", default_value = "http://localhost:631", value_parser = parse_cups_url)]
     pub cups_url: Url,
     /// CUPS's Unix socket, which lets administrators manage printers; unset or blank turns
@@ -316,6 +329,56 @@ fn parse_default_media(value: &str) -> Result<Media, String> {
         .trim()
         .parse()
         .map_err(|error| format!("RECTO_DEFAULT_MEDIA is an {error}"))
+}
+
+/// Networks, by the addresses of their devices (`RECTO_ESCL_OPEN_NETWORKS`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OpenNetworks(Vec<IpNet>);
+
+impl OpenNetworks {
+    /// Whether `address` is in one of the networks. An IPv4 address seen as IPv6
+    /// (`::ffff:a.b.c.d`) is the IPv4 address.
+    pub fn contains(&self, address: IpAddr) -> bool {
+        let address = address.to_canonical();
+        self.0.iter().any(|network| network.contains(&address))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// CIDRs separated by commas, such as `192.168.1.0/24, fd00::/8`; an address alone is a network
+/// of that one address, and blank means none. IPv4-mapped IPv6 networks are read as IPv4, like
+/// the addresses they are compared with.
+pub fn parse_open_networks(value: &str) -> Result<OpenNetworks, String> {
+    let network = |item: &str| -> Option<IpNet> {
+        let network = item
+            .parse::<IpNet>()
+            .ok()
+            .or_else(|| item.parse::<IpAddr>().ok().map(IpNet::from))?;
+        let IpNet::V6(v6) = network else {
+            return Some(network);
+        };
+        match (v6.addr().to_ipv4_mapped(), v6.prefix_len().checked_sub(96)) {
+            (Some(v4), Some(prefix)) => Ipv4Net::new(v4, prefix).ok().map(IpNet::V4),
+            _ => Some(network),
+        }
+    };
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(|item| {
+            network(item).map(|network| network.trunc()).ok_or_else(|| {
+                format!(
+                    "RECTO_ESCL_OPEN_NETWORKS must be networks such as 192.168.1.0/24, comma \
+                     separated, not {item}"
+                )
+            })
+        })
+        .collect::<Result<_, _>>()
+        .map(OpenNetworks)
 }
 
 fn parse_currency(value: &str) -> Result<String, String> {
@@ -595,6 +658,43 @@ mod tests {
         ] {
             let error = parse(&[option, "maybe"]).unwrap_err();
             assert!(error.to_string().contains(variable), "{error}");
+        }
+    }
+
+    #[test]
+    fn open_networks_are_cidrs() {
+        assert!(parse(&[]).unwrap().escl_open_networks.is_empty());
+        assert!(
+            parse(&["--escl-open-networks", " "])
+                .unwrap()
+                .escl_open_networks
+                .is_empty()
+        );
+        let config = parse(&[
+            "--escl-open-networks",
+            "192.168.1.0/24, fd00::/8,10.0.0.7,::ffff:172.16.0.0/112",
+        ])
+        .unwrap();
+        let networks = config.escl_open_networks;
+        let address = |text: &str| text.parse::<IpAddr>().unwrap();
+        for inside in [
+            "192.168.1.20",
+            "::ffff:192.168.1.20",
+            "fd00::1",
+            "10.0.0.7",
+            "172.16.3.4",
+        ] {
+            assert!(networks.contains(address(inside)), "{inside}");
+        }
+        for outside in ["192.168.2.1", "10.0.0.8", "fe80::1", "172.17.0.1"] {
+            assert!(!networks.contains(address(outside)), "{outside}");
+        }
+        for wrong in ["192.168.1.0/33", "lan", "192.168.1.0/24;10.0.0.0/8"] {
+            let error = parse(&["--escl-open-networks", wrong]).unwrap_err();
+            assert!(
+                error.to_string().contains("RECTO_ESCL_OPEN_NETWORKS"),
+                "{error}"
+            );
         }
     }
 

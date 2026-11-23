@@ -17,12 +17,16 @@ use recto_printing::{Cups, CupsAdmin, PrinterAdmin, printer::Media};
 use recto_printing::{count::PageCounter, raster::RasterConverter};
 use recto_scanning::{
     ResultStore, SaneScanners, ScanError, ScanRequest, ScannedPage, ScannerCapabilities,
-    ScannerInfo, ScannerService,
+    ScannerInfo, ScannerService, escl::EsclJobs,
 };
 use sea_orm::DatabaseConnection;
 use url::Url;
 
-use crate::{config::Config, device_auth::DeviceLimits, session_store::DatabaseSessionStore};
+use crate::{
+    config::{Config, OpenNetworks},
+    device_auth::DeviceLimits,
+    session_store::DatabaseSessionStore,
+};
 
 /// How long a finished scan waits to be downloaded or saved.
 pub const SCAN_RESULT_TTL: Duration = Duration::from_secs(60 * 60);
@@ -59,12 +63,17 @@ pub struct AuthState {
     /// its body: a device that stalls is answered `408` rather than holding a task and its
     /// buffer forever.
     pub device_read_timeout: Duration,
+    /// The eSCL jobs of every listener, so one scanner runs one eSCL job at a time.
+    pub escl_jobs: Arc<EsclJobs>,
+    /// Where devices may scan without credentials on the LAN listener
+    /// (`RECTO_ESCL_OPEN_NETWORKS`).
+    pub escl_open_networks: OpenNetworks,
 }
 
 impl AuthState {
     /// The sign-in state with the defaults of the configuration: local accounts on, passwords of
     /// at least [`passwords::DEFAULT_MINIMUM_LENGTH`] characters, forwarded headers ignored,
-    /// device passwords refused over plain HTTP, A4 paper.
+    /// device passwords refused over plain HTTP, A4 paper, no anonymous scanning.
     pub fn new(openid: Option<Arc<OpenId>>, public_url: Url, database: DatabaseConnection) -> Self {
         let secure_cookies = public_url.scheme() == "https";
         Self {
@@ -82,6 +91,8 @@ impl AuthState {
             default_media: Media::A4,
             device_limits: DeviceLimits::default(),
             device_read_timeout: Duration::from_secs(30),
+            escl_jobs: Arc::new(EsclJobs::default()),
+            escl_open_networks: OpenNetworks::default(),
         }
     }
 
@@ -210,7 +221,7 @@ pub async fn build(
     let state = AppState {
         print: Arc::new(Cups::new(config.cups_url.clone())),
         printer_admin: printer_admin(config),
-        scan: scanners().await,
+        scan: scanners(advertised_scanners(&branding)).await,
         results: Arc::new(results),
         output_dir: config.scan_output_dir.clone(),
         max_upload_size: config.max_upload_size,
@@ -251,17 +262,28 @@ pub async fn build(
         trust_forwarded_headers: config.trust_forwarded_headers,
         ipp_allow_plain: config.ipp_allow_plain,
         default_media: config.default_media,
+        escl_open_networks: config.escl_open_networks.clone(),
         ..AuthState::new(openid, config.public_url.clone(), database)
     };
     (state, auth)
 }
 
-/// The SANE scanners, or a stand-in reporting why SANE could not start: printing must keep
-/// working on a machine without scanners or SANE configuration.
-async fn scanners() -> Arc<dyn ScannerService> {
+/// The names recto's own scanners would be found under through SANE, which leaves them out: the
+/// brand name, the DNS-SD instance name until DNS-SD names each scanner.
+fn advertised_scanners(branding: &Branding) -> Vec<String> {
+    vec![branding.name.clone()]
+}
+
+/// The SANE scanners, without recto's own scanners found again under the `advertised` names,
+/// or a stand-in reporting why SANE could not start: printing must keep working on a machine
+/// without scanners or SANE configuration.
+async fn scanners(advertised: Vec<String>) -> Arc<dyn ScannerService> {
     // `sane_init` blocks while backends load.
     match tokio::task::spawn_blocking(SaneScanners::start).await {
-        Ok(Ok(scanners)) => Arc::new(scanners),
+        Ok(Ok(scanners)) => {
+            scanners.hide_advertised(advertised);
+            Arc::new(scanners)
+        }
         Ok(Err(error)) => {
             tracing::warn!(%error, "SANE could not start; scanning is off");
             Arc::new(NoScanners(error.to_string()))

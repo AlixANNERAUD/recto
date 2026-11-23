@@ -92,6 +92,9 @@ rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "
 mdns-sd = { version = "0.22.0", default-features = false, features = ["logging"] }
 # Interface names and flags for RECTO_DNSSD_INTERFACES; mdns-sd already depends on it.
 if-addrs = { version = "0.15.0", default-features = false }
+# The networks of RECTO_ESCL_OPEN_NETWORKS, which may scan without credentials; reqwest already
+# depends on it.
+ipnet = { version = "2.12.2", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

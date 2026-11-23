@@ -5,6 +5,7 @@ target
 .superpowers
 docs
 examples
+!examples/sane/airscan.d/recto.conf
 .env
 mise.local.toml
 Dockerfile

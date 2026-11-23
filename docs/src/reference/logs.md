@@ -45,6 +45,9 @@ only.
 | info | `printer described`, `default printer set`, `printer paused`, `printer resumed`, `printer accepting jobs`, `printer rejecting jobs`, `printer removed` | `by`, `printer` |
 | info | `the CUPS socket does not exist yet`: harmless while CUPS is still starting, since recto connects at each request | `socket` |
 | info | `scan saved` | `user`, `path` |
+| info | `escl scan started`: a computer or phone started a scan over eSCL | `user` (`anonymous` without a device password), `device_password_id`, `peer`, `scanner` (the scanner's 8-digit key), `format` |
+| info | `escl scan finished` | `user`, `scanner`, `pages`, `format` |
+| info | `eSCL scan settings refused`: the app answered `400` or `409` | `error`, `user` |
 | info | `usage exported` | `by` (who downloaded it), `export` (the file name), `from`, `to` |
 | info | `job held`: a computer or phone sent a document, kept until its owner releases it | `user`, `device_password_id`, `job`, `pages` (absent when the PDF could not be counted), `format` |
 | info | `held job canceled by its device`: before its document arrived | `user`, `device_password_id`, `job` |
@@ -58,6 +61,9 @@ only.
 | warn | `listing the scanners failed` | `error` |
 | warn | `the printing service failed`, `the printing service refused` | `error` |
 | warn | `scanning failed` | `error`, `user` |
+| warn | `eSCL scanning failed`, `escl scan failed` | `error`, `user`, `scanner` |
+| warn | `listing the scanners for eSCL failed`: the app is answered `503` | `error` |
+| warn | `recording the eSCL scan timed out` | `scanner` |
 | warn | `saving a scan failed` | `error` |
 | warn | `marking the scan saved failed` | `error` |
 | warn | `sign-in refused`, `starting a sign-in failed` | `error` |
@@ -90,6 +96,7 @@ only.
 | error | `password sign-in failed`, `changing a password failed`, `changing a user failed` | `error` |
 | error | `writing the ledger entry failed` | `error` |
 | error | `recording the scan failed` | `error`, `user` |
+| error | `recording the eSCL scan failed` | `error`, `scanner` |
 | error | `reading the quota rules failed`, `reading the groups of the user failed`, `checking the print quotas failed`: the job is refused | `error` |
 | error | `reading the print quotas failed`: the Print page hides what the user has left | `error` |
 | error | `loading the quota rules failed`, `creating a quota rule failed`, `changing a quota rule failed`, `deleting a quota rule failed` | `error` |

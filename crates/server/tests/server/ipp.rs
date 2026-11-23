@@ -584,7 +584,6 @@ async fn unknown_device_paths_never_redirect() {
         "/ipp/print".to_owned(),
         "/ipp/other".to_owned(),
         "/eSCL/x".to_owned(),
-        "/eSCL/x/ScannerCapabilities".to_owned(),
     ] {
         for cookie in [None, Some(cookie.as_str())] {
             let response = harness.send(page(&uri, cookie)).await;

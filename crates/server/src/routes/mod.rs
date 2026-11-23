@@ -3,6 +3,7 @@
 pub mod administration;
 pub mod auth;
 pub mod devices;
+pub mod escl;
 pub mod held;
 pub mod ipp;
 pub mod password;

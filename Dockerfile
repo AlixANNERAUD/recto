@@ -74,6 +74,9 @@ RUN apt-get update \
 
 COPY --from=base / /base
 COPY --from=builder /out/recto /app/recto
+# Keeps recto's own eSCL scanners out of SANE when they are advertised on the same network. Read
+# after /etc/sane.d/airscan.conf, so a mounted airscan.conf leaves it in place.
+COPY examples/sane/airscan.d/recto.conf /etc/sane.d/airscan.d/recto.conf
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 RUN <<'EOF'

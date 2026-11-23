@@ -44,7 +44,9 @@ use crate::{
     branding,
     config::Config,
     device_auth,
-    routes::{administration, auth, devices, held as held_routes, ipp, password, print, pwa, scan},
+    routes::{
+        administration, auth, devices, escl, held as held_routes, ipp, password, print, pwa, scan,
+    },
     session, state,
 };
 
@@ -78,8 +80,9 @@ pub fn leptos_options(config: &Config) -> LeptosOptions {
 /// `/health` (it touches neither CUPS nor the identity provider, so a container stays healthy
 /// while they are down), the sign-in addresses (`/sign-in`, the `/auth/*` routes and pages,
 /// `/no-access`), `POST /theme`, `/brand/*`, `/manifest.webmanifest`, `/sw.js`, `/pwa.js`,
-/// `/offline`, the printer's addresses for devices under `/ipp/` and `/device/` (which
-/// authenticate devices themselves, see [`ipp`]), and the static files the fallback serves
+/// `/offline`, the printer's and scanners' addresses for devices under `/ipp/`, `/eSCL/` and
+/// `/device/` (which authenticate devices themselves, see [`ipp`] and [`escl`]), and the static
+/// files the fallback serves
 /// (see `fallback`). The
 /// `/administration` pages and forms need an administrator.
 ///
@@ -112,7 +115,7 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
     let devices = devices::router(state.clone(), &auth);
     let held_jobs = held_routes::router(state.clone(), &auth);
     let administration = administration::router(state.clone(), &auth);
-    let devices_ipp = ipp::router(state.clone(), &auth);
+    let devices_ipp = device_routes(&state, &auth, escl::Listener::Main);
     let interface = Router::new()
         .route(
             "/print",
@@ -155,6 +158,21 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         .merge(devices_ipp)
         .merge(web)
         .layer(middleware::from_fn(security_headers))
+}
+
+/// The routes of the LAN listener: the device addresses only, never a page or a session.
+pub fn lan_router(state: AppState, auth: AuthState) -> Router {
+    device_routes(&state, &auth, escl::Listener::Lan).layer(middleware::from_fn(security_headers))
+}
+
+/// The printer's and the scanners' addresses, and the bare 404 of any other device address.
+fn device_routes(state: &AppState, auth: &AuthState, listener: escl::Listener) -> Router {
+    escl::routes(
+        ipp::router(state.clone(), auth),
+        state.clone(),
+        auth,
+        listener,
+    )
 }
 
 /// Headers for every response. Pages bring their own Content Security Policy, with the nonce

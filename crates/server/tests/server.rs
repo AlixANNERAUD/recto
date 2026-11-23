@@ -16,7 +16,7 @@ use recto::session::SignInMethod;
 use recto::session_store::DatabaseSessionStore;
 use recto::{
     branding::{BrandFile, Branding, default_branding},
-    serve::{AuthState, router},
+    serve::{AuthState, lan_router, router},
 };
 use recto_app::state::{AppState, Currency, JobVisibility};
 use recto_authentication::{OpenId, OpenIdSettings};
@@ -99,6 +99,10 @@ struct Setup {
     /// Whether the held documents' directory can be used; when not, the server starts anyway
     /// and its printer accepts no jobs.
     held_usable: bool,
+    /// `RECTO_ESCL_OPEN_NETWORKS`, none by default.
+    escl_open_networks: &'static str,
+    /// The scanner stack; the default mock by default.
+    scanner: Option<MockScannerService>,
 }
 
 impl Default for Setup {
@@ -120,12 +124,16 @@ impl Default for Setup {
             os_integration: true,
             device_read_timeout: Duration::from_secs(30),
             held_usable: true,
+            escl_open_networks: "",
+            scanner: None,
         }
     }
 }
 
 struct Harness {
     router: Router,
+    /// The LAN listener's router, over the same services.
+    lan: Router,
     /// What the router was built with, for the device routes' authentication.
     auth: AuthState,
     print: Arc<MockPrintService>,
@@ -167,7 +175,7 @@ impl Harness {
                     }]
                 })),
         );
-        let scan = Arc::new(MockScannerService::default());
+        let scan = Arc::new(setup.scanner.unwrap_or_default());
         let results = Arc::new(ResultStore::new(
             dir.path().join("results"),
             setup.result_ttl,
@@ -226,11 +234,14 @@ impl Harness {
             local_accounts: setup.local_accounts,
             trust_forwarded_headers: setup.trust_forwarded_headers,
             device_read_timeout: setup.device_read_timeout,
+            escl_open_networks: recto::config::parse_open_networks(setup.escl_open_networks)
+                .unwrap(),
             ..AuthState::new(openid, public_url, database.clone())
         };
         let sessions = auth.sessions.clone();
         Self {
-            router: router(state, auth.clone()),
+            router: router(state.clone(), auth.clone()),
+            lan: lan_router(state, auth.clone()),
             auth,
             print,
             admin,
@@ -249,6 +260,11 @@ impl Harness {
             .oneshot(from_peer(request))
             .await
             .unwrap()
+    }
+
+    /// Sends a request to the LAN listener.
+    async fn send_lan(&self, request: Request<Body>) -> Response<Body> {
+        self.lan.clone().oneshot(from_peer(request)).await.unwrap()
     }
 
     /// Drops a table, to make what reads it fail. On PostgreSQL, the foreign keys that name it go
@@ -4393,3 +4409,6 @@ mod ipp_printer;
 
 #[path = "server/release.rs"]
 mod release;
+
+#[path = "server/escl.rs"]
+mod escl;

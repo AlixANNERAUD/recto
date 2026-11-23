@@ -59,6 +59,7 @@ tokio-rustls.workspace = true
 rcgen.workspace = true
 mdns-sd.workspace = true
 if-addrs.workspace = true
+ipnet.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

@@ -48,6 +48,10 @@ listens on the host's port 8080 directly (remove `ports`), and reaches CUPS only
 published on the host, which `cupsd.conf` must then allow. Listing the scanner by address is
 simpler and keeps the isolation.
 
+recto's own scanners, once advertised on the same network, are never listed back: the image's
+`/etc/sane.d/airscan.d/recto.conf` blacklists them, and recto leaves out any device named like
+them, so a scan never goes from recto to recto.
+
 ## A scanner shared by another machine (saned)
 
 When a USB scanner hangs off another computer that runs `saned`:

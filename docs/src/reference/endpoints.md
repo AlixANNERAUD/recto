@@ -2,7 +2,7 @@
 
 Every address requires a signed-in user except `/health`, the sign-in addresses (`/sign-in`,
 `/auth/*`, `/no-access`), `POST /theme`, `/brand/*`, `/manifest.webmanifest`, `/sw.js`,
-`/pwa.js`, `/offline`, `/device/*` and the interface's static files. A page requested without a session redirects to `/sign-in?next=<path>`, which
+`/pwa.js`, `/offline`, `/ipp/*`, `/eSCL/*`, `/device/*` and the interface's static files. A page requested without a session redirects to `/sign-in?next=<path>`, which
 brings the person back after signing in; forms, downloads and server functions answer `401`
 instead. A single sign-on user without the required claim, or disabled, is sent to `/no-access`.
 
@@ -100,7 +100,7 @@ off.
 
 ## Devices
 
-recto's printer, for computers and phones. These addresses take no session and no cross-site
+recto's printer and scanners, for computers and phones. These addresses take no session and no cross-site
 check: devices authenticate with a [device password](accounts.md#device-passwords). Bodies are
 IPP requests (`Content-Type: application/ipp`) of at most `RECTO_MAX_UPLOAD_SIZE` plus 64 KiB,
 and answers carry `Cache-Control: no-cache`. See
@@ -116,6 +116,30 @@ Other answers: `403` for device credentials over plain HTTP (see `RECTO_IPP_ALLO
 for a body over the limit, `429` with `Retry-After: 1` after too many wrong passwords from one
 address (see [Device password limit](accounts.md#device-password-limit)), `503` when the
 database cannot check the password.
+
+### Scanners
+
+Each scanner a device password's owner may use, over eSCL, the protocol of AirScan and Mopria
+scan apps. `{scanner}` is the first 8 hex digits of the SHA-256 of the scanner's SANE id, and
+`{root}` is either `/eSCL/{scanner}`, with the device password as the password of HTTP Basic, or
+`/device/{password}/eSCL/{scanner}`, the personal address. Answers carry
+`Cache-Control: no-cache`, documents `Cache-Control: no-store`. See
+[Scanning from computers and phones](scanning.md#scanning-from-computers-and-phones).
+
+| Method and path | Does |
+| --- | --- |
+| `GET {root}/ScannerCapabilities` | What the scanner offers, as eSCL `ScannerCapabilities` XML (`text/xml`). |
+| `GET {root}/ScannerStatus` | `Idle`, or `Processing` while an eSCL scan runs on it, the feeder's state, and the caller's jobs of the last 10 minutes, each under the caller's own `{root}`. |
+| `POST {root}/ScanJobs` | Starts a scan from a `ScanSettings` XML body of at most 64 KiB, sent within 30 seconds. Answers `201` with `Location: {root}/ScanJobs/{job}`; `400` for a body recto cannot read, with a `DOCTYPE` or an unknown entity; `408` for a body that took too long; `409` for settings the scanner cannot do, an unsupported format or a page over the limit; `413` for a body over 64 KiB; `503` with `Retry-After: 5` while another eSCL scan runs on the scanner. |
+| `GET {root}/ScanJobs/{job}/NextDocument` | The next document: the PDF, or one PNG or JPEG page. Waits up to 30 seconds for the scan, then answers `503` with `Retry-After: 2`. `404` when every document was fetched, when the feeder was empty, and for a job that does not exist or is not the caller's; `409` for a jam or an open cover; `500` for another failure. |
+| `GET {root}/ScanJobs/{job}/ScanImageInfo` | The size of the last document fetched, as XML; `404` before the first. |
+| `DELETE {root}/ScanJobs/{job}` | Cancels the job, or forgets it once scanned. `404` for a job that does not exist or is not the caller's. |
+
+A scanner that does not exist, or that the password's owner may not use, answers `404`, like a
+wrong personal address. `/eSCL/` without credentials answers `401` with `WWW-Authenticate: Basic`,
+except for clients of `RECTO_ESCL_OPEN_NETWORKS` on the LAN listener, which scan without them on
+the scanners open to everyone. `503` also answers when the scanners cannot be listed or the
+access rules cannot be read.
 
 Any other method or path under `/ipp/`, `/device/` and `/eSCL/` answers a bare `404` with no
 body, signed in or not, and so do all of them while `RECTO_OS_INTEGRATION` is off: never the

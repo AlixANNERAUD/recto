@@ -33,9 +33,10 @@ who is not signed in, and other websites trying to act through a signed-in perso
 
 Every page, form and server function requires a session, except the sign-in addresses, `/health`
 and the interface's static files (scripts, styles and icons, which hold no data). The printer's
-addresses for computers and phones, under `/ipp/` and `/device/`, take no session either: they
-require a [device password](#device-passwords) instead, checked on every request, and only
-Get-Printer-Attributes, which says what the printer is, answers without one. The check runs
+addresses for computers and phones, under `/ipp/`, `/eSCL/` and `/device/`, take no session
+either: they require a [device password](#device-passwords) instead, checked on every request,
+and only Get-Printer-Attributes, which says what the printer is, answers without one, besides
+[scanning from open networks](#scanning-without-a-password). The check runs
 for every request at the router, and again inside each action that touches a printer, a scanner or
 a result. The administration pages and forms also require an administrator, checked before the
 form is even read; to anyone else, they do not exist.
@@ -122,6 +123,22 @@ shared address still makes every device behind it wait; with `RECTO_TRUST_FORWAR
 on, the limit counts by the forwarded client address, as the sign-in limit does, and only the
 guesser waits. Whether plain HTTP is accepted always depends on the connection's address, never
 on a forwarded header, which a device could write itself.
+
+## Scanning without a password
+
+macOS, Windows and Mopria scan apps find scanners over DNS-SD and cannot carry a secret in the
+address they find. `RECTO_ESCL_OPEN_NETWORKS`, empty by default, lets the devices of the networks
+it lists scan without a device password. That is what a network scanner's own eSCL already
+allows anyone on its network, and the limits keep it there:
+
+- it holds on the LAN listener only, where devices connect to recto directly; behind the reverse
+  proxy every client would come from the proxy's address;
+- the address checked is the TCP connection's, never a forwarded header, which a device writes
+  itself, and an IPv4 address seen as IPv6 is compared as IPv4;
+- only scanners open to everyone are reachable: one limited to groups does not exist for them;
+- such scans are logged without a user, and every device of those networks counts as the same
+  anonymous client: while a scan waits for its app, for at most 10 minutes, another anonymous
+  device can see it in the scanner's status and fetch it.
 
 ## Held documents
 
