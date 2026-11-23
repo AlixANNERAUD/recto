@@ -493,8 +493,9 @@ impl Job<'_> {
             Operation::GetJobs {
                 which,
                 limit,
+                job_ids,
                 requested,
-            } => self.jobs(device, which, limit, &requested).await,
+            } => self.jobs(device, which, limit, &job_ids, &requested).await,
             Operation::IdentifyPrinter => Ok(status(OK)),
             Operation::Unsupported(_) => Ok(status(OPERATION_NOT_SUPPORTED)),
             Operation::Refused(refused) => Ok(status(refused as u16)),
@@ -960,6 +961,7 @@ impl Job<'_> {
         device: &DeviceUser,
         which: WhichJobs,
         limit: Option<u32>,
+        job_ids: &[i32],
         requested: &[String],
     ) -> recto_domain::Result<(u16, Groups)> {
         if which == WhichJobs::Unsupported {
@@ -975,6 +977,9 @@ impl Job<'_> {
         for job in jobs
             .iter()
             .filter(|job| {
+                if !job_ids.is_empty() {
+                    return job_ids.iter().any(|id| i64::from(*id) == job.id);
+                }
                 let pending = job.state == HeldState::Incoming;
                 match which {
                     WhichJobs::NotCompleted => pending,

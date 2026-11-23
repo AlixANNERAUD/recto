@@ -691,6 +691,7 @@ fn get_jobs_reads_which_jobs_and_limit() {
     let Operation::GetJobs {
         which,
         limit,
+        job_ids,
         requested,
     } = decode(request(IppOperation::GetJobs).to_bytes())
         .unwrap()
@@ -699,6 +700,7 @@ fn get_jobs_reads_which_jobs_and_limit() {
         panic!("not a Get-Jobs");
     };
     assert_eq!((which, limit), (WhichJobs::NotCompleted, None));
+    assert!(job_ids.is_empty());
     assert_eq!(requested, strings(&["job-id", "job-uri"]));
 
     let mut completed = request(IppOperation::GetJobs);
@@ -716,15 +718,18 @@ fn get_jobs_reads_which_jobs_and_limit() {
         "requested-attributes",
         IppValue::Array(vec![keyword("job-name"), keyword("job-state")]),
     );
+    add(&mut completed, operation, "job-ids", IppValue::Integer(7));
     let Operation::GetJobs {
         which,
         limit,
+        job_ids,
         requested,
     } = decode(completed.to_bytes()).unwrap().operation
     else {
         panic!("not a Get-Jobs");
     };
     assert_eq!((which, limit), (WhichJobs::Completed, Some(5)));
+    assert_eq!(job_ids, [7]);
     assert_eq!(requested, strings(&["job-name", "job-state"]));
 
     let mut mine = request(IppOperation::CancelMyJobs);

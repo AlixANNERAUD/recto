@@ -271,6 +271,15 @@ async fn create_job_then_send_document_holds_the_job() {
     assert_eq!(job_attribute(&answer, "job-state"), IppValue::Enum(9));
     assert_eq!(job_id(&answer), id);
 
+    // Held, it is completed, so the default Get-Jobs no longer lists it; asked for by id
+    // (PWG 5100.11 `job-ids`), it is listed whatever `which-jobs` says.
+    let answer = ipp(&harness, send(body(&request(IppOperation::GetJobs), b""))).await;
+    assert!(job_ids(&answer).is_empty());
+    let mut by_id = request(IppOperation::GetJobs);
+    operation_attribute(&mut by_id, "job-ids", IppValue::Integer(id));
+    let answer = ipp(&harness, send(body(&by_id, b""))).await;
+    assert_eq!(job_ids(&answer), vec![id]);
+
     let job = held::get(&harness.database, alice, i64::from(id))
         .await
         .unwrap()

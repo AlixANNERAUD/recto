@@ -100,6 +100,8 @@ pub enum Operation {
     GetJobs {
         which: WhichJobs,
         limit: Option<u32>,
+        /// PWG 5100.11 `job-ids`: when not empty, only these jobs, whatever `which` says.
+        job_ids: Vec<i32>,
         requested: Vec<String>,
     },
     IdentifyPrinter,
@@ -235,21 +237,14 @@ pub fn decode(body: Bytes) -> Result<Incoming, StatusCode> {
                 .and_then(IppValue::as_integer)
                 .and_then(|&limit| u32::try_from(limit).ok())
                 .filter(|&limit| limit > 0),
+            job_ids: request.job_ids()?,
             requested: request.requested_attributes(&["job-id", "job-uri"]),
         },
         GET_PRINTER_ATTRIBUTES => Operation::GetPrinterAttributes {
             requested: request.requested_attributes(&["all"]),
         },
         0x39 => Operation::CancelMyJobs {
-            job_ids: request
-                .operation("job-ids")
-                .map(|value| {
-                    each(value)
-                        .map(|id| id.as_integer().copied().filter(|&id| id > 0).ok_or(Bad))
-                        .collect::<Result<_, _>>()
-                })
-                .transpose()?
-                .unwrap_or_default(),
+            job_ids: request.job_ids()?,
         },
         0x3B => Operation::CloseJob {
             job_id: request.job_id()?,
@@ -560,6 +555,23 @@ impl Request<'_> {
     }
 
     /// `job-id` with `printer-uri`, or the last segment of `job-uri`.
+    /// `job-ids`, empty when absent; a value that is not a positive integer is a bad request.
+    fn job_ids(&self) -> Result<Vec<i32>, StatusCode> {
+        self.operation("job-ids")
+            .map(|value| {
+                each(value)
+                    .map(|id| {
+                        id.as_integer()
+                            .copied()
+                            .filter(|&id| id > 0)
+                            .ok_or(StatusCode::ClientErrorBadRequest)
+                    })
+                    .collect()
+            })
+            .transpose()
+            .map(Option::unwrap_or_default)
+    }
+
     fn job_id(&self) -> Result<i32, StatusCode> {
         let from_id = self
             .operation("job-id")
