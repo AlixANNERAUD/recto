@@ -4,23 +4,18 @@
 //! only on its local socket, from a process whose uid is the one of the `recto` account and
 //! whose group is a `SystemGroup`. Over TCP, CUPS refuses every administration request.
 
-use std::io::Cursor;
 use std::path::Path;
 use std::time::Duration;
 
 use ipp::attribute::IppAttribute;
 use ipp::model::{DelimiterTag, IppVersion, Operation, StatusCode};
-use ipp::parser::IppParser;
-use ipp::reader::IppReader;
 use ipp::request::IppRequestResponse;
 use ipp::value::IppValue;
 use url::Url;
 
-use crate::cups::{error_chain, printer_groups, string};
+use crate::cups::{printer_groups, string};
+use crate::transport::{self, Failure, REQUEST_TIMEOUT, error_chain, status_message};
 use crate::{AdminError, Driver, DriverInfo, NewPrinter};
-
-/// Long enough for a busy CUPS, short enough that a page never hangs on a dead one.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Adding a printer with the `everywhere` driver makes CUPS query it, and CUPS waits about 31
 /// seconds for an address that does not answer before it gives up.
@@ -79,11 +74,7 @@ impl CupsAdmin {
     }
 
     fn builder() -> reqwest::ClientBuilder {
-        // The workspace reqwest (rustls with ring) does the HTTP instead of the client bundled
-        // with `ipp`, as in `Cups`.
-        reqwest::Client::builder()
-            .timeout(REQUEST_TIMEOUT)
-            .connect_timeout(REQUEST_TIMEOUT)
+        transport::client(REQUEST_TIMEOUT)
     }
 
     async fn send(
@@ -94,35 +85,26 @@ impl CupsAdmin {
         let mut url = self.base.clone();
         url.set_path("/admin/");
         url.set_query(None);
-        let response = self
+        let post = self
             .client
             .post(url)
             // CUPS answers any other Host with a 400, and the socket has no host of its own.
             .header("host", "localhost")
-            .header("content-type", "application/ipp")
             .header("authorization", format!("PeerCred {USER}"))
             .timeout(timeout)
-            .body(request.to_bytes())
-            .send()
+            .body(request.to_bytes());
+        transport::exchange(post)
             .await
-            .map_err(|error| AdminError::Unavailable(error_chain(&error)))?;
-        let status = response.status();
-        match status.as_u16() {
-            401 | 403 | 426 => return Err(AdminError::Refused),
-            _ if !status.is_success() => {
-                return Err(AdminError::Unavailable(format!(
-                    "CUPS answered with HTTP status {status}"
-                )));
-            }
-            _ => {}
-        }
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|error| AdminError::Unavailable(error_chain(&error)))?;
-        IppParser::new(IppReader::new(Cursor::new(bytes)))
-            .parse()
-            .map_err(|error| AdminError::Unavailable(format!("unreadable CUPS answer: {error}")))
+            .map_err(|failure| match failure {
+                Failure::Unsent(error) => AdminError::Unavailable(error_chain(&error)),
+                Failure::Status(status) if matches!(status.as_u16(), 401 | 403 | 426) => {
+                    AdminError::Refused
+                }
+                Failure::Status(status) => {
+                    AdminError::Unavailable(format!("CUPS answered with HTTP status {status}"))
+                }
+                Failure::Unanswered(reason) => AdminError::Unavailable(reason),
+            })
     }
 
     /// Sends an operation that answers with nothing but its status.
@@ -356,13 +338,9 @@ fn check(response: &IppRequestResponse) -> Result<(), AdminError> {
     if status.is_success() {
         return Ok(());
     }
-    let message = response
-        .attributes()
-        .groups_of(DelimiterTag::OperationAttributes)
-        .find_map(|group| string(group, "status-message"))
-        // CUPS sends no message for some errors: the standard text of the status reads better
-        // than its name.
-        .unwrap_or_else(|| status.to_string());
+    // CUPS sends no message for some errors: the standard text of the status reads better than
+    // its name.
+    let message = status_message(response).unwrap_or_else(|| status.to_string());
     Err(match status {
         // What CUPS answers when it cannot talk to the printer at the address.
         StatusCode::ServerErrorDeviceError => AdminError::Unreachable(message),

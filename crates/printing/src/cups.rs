@@ -2,7 +2,6 @@
 
 use std::collections::VecDeque;
 use std::convert::Infallible;
-use std::io::Cursor;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -13,22 +12,18 @@ use http_body::{Frame, SizeHint};
 use ipp::attribute::{IppAttribute, IppAttributeGroup};
 use ipp::model::{DelimiterTag, IppVersion, Operation, StatusCode};
 use ipp::operation::builder::IppOperationBuilder;
-use ipp::parser::IppParser;
 use ipp::payload::IppPayload;
 use ipp::prelude::Uri;
-use ipp::reader::IppReader;
 use ipp::request::IppRequestResponse;
 use ipp::value::IppValue;
 use percent_encoding::percent_decode_str;
 use url::Url;
 
+use crate::transport::{self, REQUEST_TIMEOUT, error_chain, status_message};
 use crate::{
     Capabilities, ColorMode, Job, JobState, JobStatus, PrintError, PrintRequest, PrintService,
     Printer, PrinterState, Sides, StateReason, supplies,
 };
-
-/// Long enough for a busy CUPS, short enough that a page never hangs on a dead one.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A print request carries the document: up to the upload limit (50 MiB by default) to a CUPS
 /// that may sit across a slow Wi-Fi link. Reporting a slow upload as "unavailable" could also
@@ -85,11 +80,7 @@ impl Cups {
     /// `timeout` bounds connecting and every request but a print request, which gets five
     /// minutes.
     pub fn with_timeout(base: Url, timeout: Duration) -> Self {
-        // The workspace reqwest (rustls with ring) does the HTTP instead of the client bundled
-        // with `ipp`, which would pull in a second TLS stack built on aws-lc.
-        let client = reqwest::Client::builder()
-            .timeout(timeout)
-            .connect_timeout(timeout)
+        let client = transport::client(timeout)
             .build()
             .expect("the TLS backend initializes");
         Cups { base, client }
@@ -155,42 +146,26 @@ impl Cups {
             Some(document) => reqwest::Body::wrap(Chunks(VecDeque::from([attributes, document]))),
         };
 
-        let mut post = self
-            .client
-            .post(uri.to_string())
-            .header("content-type", "application/ipp")
-            .body(body);
+        let mut post = self.client.post(uri.to_string()).body(body);
         if let Some(timeout) = timeout {
             post = post.timeout(timeout);
         }
-        let response = post.send().await.map_err(|error| {
-            // Only a connection that never opened is sure not to have carried the request: a
-            // timeout or a broken connection may come after CUPS read it.
-            if error.is_connect() || error.is_builder() {
-                Failure::Unsent(transport_error(error))
-            } else {
-                Failure::Unanswered(error_chain(&error))
-            }
-        })?;
-        let status = response.status();
-        if !status.is_success() {
-            // A server error may come from a proxy that passed the request on.
-            return Err(if status.is_server_error() {
-                Failure::Unanswered(format!(
-                    "CUPS answered with HTTP status {}",
-                    status.as_u16()
-                ))
-            } else {
-                Failure::Unsent(http_status_error(status.as_u16()))
-            });
-        }
-        let bytes = response
-            .bytes()
+        transport::exchange(post)
             .await
-            .map_err(|error| Failure::Unanswered(error_chain(&error)))?;
-        IppParser::new(IppReader::new(Cursor::new(bytes)))
-            .parse()
-            .map_err(|error| Failure::Unanswered(format!("unreadable CUPS answer: {error}")))
+            .map_err(|failure| match failure {
+                transport::Failure::Unsent(error) => Failure::Unsent(transport_error(error)),
+                // A server error may come from a proxy that passed the request on.
+                transport::Failure::Status(status) if status.is_server_error() => {
+                    Failure::Unanswered(format!(
+                        "CUPS answered with HTTP status {}",
+                        status.as_u16()
+                    ))
+                }
+                transport::Failure::Status(status) => {
+                    Failure::Unsent(http_status_error(status.as_u16()))
+                }
+                transport::Failure::Unanswered(reason) => Failure::Unanswered(reason),
+            })
     }
 
     async fn jobs_with(
@@ -448,18 +423,6 @@ fn transport_error(error: reqwest::Error) -> PrintError {
     PrintError::Unavailable(error_chain(&error))
 }
 
-/// The error and its causes, joined, so the reason is not lost behind "error sending request".
-pub(crate) fn error_chain(error: &reqwest::Error) -> String {
-    let mut message = error.to_string();
-    let mut source = std::error::Error::source(error);
-    while let Some(cause) = source {
-        message.push_str(": ");
-        message.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    message
-}
-
 /// Turns a non-success IPP status into the error the interface can explain.
 fn check(
     response: &IppRequestResponse,
@@ -469,11 +432,7 @@ fn check(
     if status.is_success() {
         return Ok(());
     }
-    let message = response
-        .attributes()
-        .groups_of(DelimiterTag::OperationAttributes)
-        .find_map(|group| string(group, "status-message"))
-        .unwrap_or_else(|| format!("{status:?}"));
+    let message = status_message(response).unwrap_or_else(|| format!("{status:?}"));
     Err(match status {
         StatusCode::ClientErrorNotFound | StatusCode::ClientErrorGone => not_found(),
         StatusCode::ServerErrorNotAcceptingJobs => {

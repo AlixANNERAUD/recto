@@ -22,6 +22,8 @@ pub mod raster;
 mod service;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+#[cfg(feature = "service")]
+mod transport;
 
 #[cfg(feature = "service")]
 pub use admin::{CupsAdmin, PrinterAdmin};
