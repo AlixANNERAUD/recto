@@ -50,8 +50,8 @@ v1.2.4`): `release.yml` runs for it and creates the release with generated notes
 ## Required setup
 
 - `main` is protected (Settings, Branches): the status checks `CI passed` and `Pull request
-  title` are required, for administrators too, with a linear history and no force pushes or
-  deletions. Settings, General, Pull Requests: squash merging only, with the pull request title
+  title` are required, with a linear history and no force pushes or deletions. Administrators
+  may bypass the protection when a fix cannot wait for a pull request. Settings, General, Pull Requests: squash merging only, with the pull request title
   and description as the commit, auto-merge allowed and head branches deleted after merge.
 - Settings, Actions, General, Workflow permissions: "Allow GitHub Actions to create and approve
   pull requests", so the workflow can open the release pull request. Pull requests opened with
