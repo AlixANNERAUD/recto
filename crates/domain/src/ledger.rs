@@ -168,8 +168,8 @@ pub async fn refund(database: &impl ConnectionTrait, id: i64) -> Result<()> {
 /// error) or recto stopped between the insert and the attach; [`refund_unattached`] sweeps it.
 pub const ATTACH_GRACE: Duration = Duration::minutes(10);
 
-/// The entries CUPS may still be working on, as `(entry id, CUPS job id)`: attached, not final.
-pub async fn unfinished(database: &impl ConnectionTrait) -> Result<Vec<(i64, i32)>> {
+/// The entries CUPS may still be working on, attached and not final, with their CUPS job id.
+pub async fn unfinished(database: &impl ConnectionTrait) -> Result<Vec<(print_jobs::Model, i32)>> {
     let rows = print_jobs::Entity::find()
         .filter(print_jobs::Column::Finished.eq(false))
         .filter(print_jobs::Column::CupsJobId.is_not_null())
@@ -177,45 +177,55 @@ pub async fn unfinished(database: &impl ConnectionTrait) -> Result<Vec<(i64, i32
         .await?;
     Ok(rows
         .into_iter()
-        .filter_map(|row| Some((row.id, i32::try_from(row.cups_job_id?).ok()?)))
+        .filter_map(|row| {
+            let cups_job_id = i32::try_from(row.cups_job_id?).ok()?;
+            Some((row, cups_job_id))
+        })
         .collect())
 }
 
-/// Records what CUPS says of an entry's job. A job that printed nothing is refunded; `None`
-/// (CUPS forgot the job) only finishes the entry, because nothing says it did not print.
+/// Records what CUPS says of an entry's job, `row` being the entry as [`unfinished`] read it. A
+/// job that printed nothing is refunded; `None` (CUPS forgot the job) only finishes the entry,
+/// because nothing says it did not print. The poll sees most jobs unchanged, so only the columns
+/// that change are written, and nothing when none does.
 pub async fn observe(
     database: &impl ConnectionTrait,
-    id: i64,
+    row: print_jobs::Model,
     status: Option<&JobStatus>,
-    _now: DateTime<Utc>,
 ) -> Result<()> {
-    let Some(row) = print_jobs::Entity::find_by_id(id).one(database).await? else {
-        return Ok(());
-    };
-    let mut entry: print_jobs::ActiveModel = row.clone().into();
+    let seen_before = row.seen_processing;
+    let mut entry: print_jobs::ActiveModel = row.into();
     match status {
         // Nothing says that it did not print.
-        None => entry.finished = Set(true),
+        None => entry.finished.set_if_not_equals(true),
         Some(status) => {
-            entry.state = Set(status.state.keyword().to_owned());
+            entry
+                .state
+                .set_if_not_equals(status.state.keyword().to_owned());
             if let Some(impressions) = status.impressions_completed {
-                entry.impressions_completed = Set(Some(i64::from(impressions)));
+                entry
+                    .impressions_completed
+                    .set_if_not_equals(Some(i64::from(impressions)));
             }
-            let seen_processing = row.seen_processing
-                || matches!(status.state, JobState::Processing | JobState::Stopped);
-            entry.seen_processing = Set(seen_processing);
+            let seen_processing =
+                seen_before || matches!(status.state, JobState::Processing | JobState::Stopped);
+            entry.seen_processing.set_if_not_equals(seen_processing);
             let printed_nothing = status.impressions_completed.unwrap_or(0) == 0;
             match status.state {
-                JobState::Completed => entry.finished = Set(true),
+                JobState::Completed => entry.finished.set_if_not_equals(true),
                 JobState::Canceled | JobState::Aborted => {
-                    entry.finished = Set(true);
-                    entry.refunded = Set(printed_nothing && !seen_processing);
+                    entry.finished.set_if_not_equals(true);
+                    entry
+                        .refunded
+                        .set_if_not_equals(printed_nothing && !seen_processing);
                 }
                 _ => {}
             }
         }
     }
-    entry.update(database).await?;
+    if entry.is_changed() {
+        entry.update(database).await?;
+    }
     Ok(())
 }
 
@@ -400,13 +410,13 @@ mod tests {
     async fn observing_a_job_through_to_completion_keeps_its_counts() {
         let database = crate::testing::database().await;
         let id = attached(&database, 5).await;
-        assert_eq!(unfinished(&database).await.unwrap(), vec![(id, 5)]);
+        let listed = unfinished(&database).await.unwrap();
+        assert_eq!(listed, vec![(row(&database, id).await, 5)]);
 
         observe(
             &database,
-            id,
+            row(&database, id).await,
             Some(&status(JobState::Pending, None)),
-            Utc::now(),
         )
         .await
         .unwrap();
@@ -416,9 +426,8 @@ mod tests {
 
         observe(
             &database,
-            id,
+            row(&database, id).await,
             Some(&status(JobState::Processing, Some(1))),
-            Utc::now(),
         )
         .await
         .unwrap();
@@ -428,9 +437,8 @@ mod tests {
 
         observe(
             &database,
-            id,
+            row(&database, id).await,
             Some(&status(JobState::Completed, Some(10))),
-            Utc::now(),
         )
         .await
         .unwrap();
@@ -451,9 +459,13 @@ mod tests {
         ] {
             let database = crate::testing::database().await;
             let id = attached(&database, 5).await;
-            observe(&database, id, Some(&status(state, impressions)), Utc::now())
-                .await
-                .unwrap();
+            observe(
+                &database,
+                row(&database, id).await,
+                Some(&status(state, impressions)),
+            )
+            .await
+            .unwrap();
             let job = row(&database, id).await;
             assert!(job.finished && job.refunded, "{state:?} {impressions:?}");
             assert_eq!(job.state, state.keyword());
@@ -477,16 +489,19 @@ mod tests {
             if seen {
                 observe(
                     &database,
-                    id,
+                    row(&database, id).await,
                     Some(&status(JobState::Processing, None)),
-                    Utc::now(),
                 )
                 .await
                 .unwrap();
             }
-            observe(&database, id, Some(&status(state, impressions)), Utc::now())
-                .await
-                .unwrap();
+            observe(
+                &database,
+                row(&database, id).await,
+                Some(&status(state, impressions)),
+            )
+            .await
+            .unwrap();
             let job = row(&database, id).await;
             assert!(
                 job.finished && !job.refunded,
@@ -497,10 +512,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn observing_an_unchanged_job_writes_nothing() {
+        let database = crate::testing::database().await;
+        let id = attached(&database, 5).await;
+        let printing = || status(JobState::Processing, Some(1));
+        observe(&database, row(&database, id).await, Some(&printing()))
+            .await
+            .unwrap();
+        let seen = row(&database, id).await;
+        // Without its row, any write fails.
+        print_jobs::Entity::delete_by_id(id)
+            .exec(&database)
+            .await
+            .unwrap();
+
+        observe(&database, seen.clone(), Some(&printing()))
+            .await
+            .unwrap();
+        let done = status(JobState::Completed, Some(1));
+        assert!(observe(&database, seen, Some(&done)).await.is_err());
+    }
+
+    #[tokio::test]
     async fn a_job_cups_forgot_is_finished_without_a_refund() {
         let database = crate::testing::database().await;
         let id = attached(&database, 5).await;
-        observe(&database, id, None, Utc::now()).await.unwrap();
+        observe(&database, row(&database, id).await, None)
+            .await
+            .unwrap();
         let job = row(&database, id).await;
         assert!(job.finished && !job.refunded);
         assert_eq!(job.state, "pending");

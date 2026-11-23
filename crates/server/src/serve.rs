@@ -529,7 +529,7 @@ pub async fn poll_once(print: &dyn PrintService, database: &DatabaseConnection) 
             return;
         }
     };
-    for (id, cups_job_id) in unfinished {
+    for (entry, cups_job_id) in unfinished {
         let status = match print.job_status(cups_job_id).await {
             Ok(status) => status,
             Err(error) => {
@@ -538,7 +538,7 @@ pub async fn poll_once(print: &dyn PrintService, database: &DatabaseConnection) 
                 return;
             }
         };
-        if let Err(error) = ledger::observe(database, id, status.as_ref(), now).await {
+        if let Err(error) = ledger::observe(database, entry, status.as_ref()).await {
             tracing::error!(%error, job = cups_job_id, "recording a job state failed");
         }
     }
