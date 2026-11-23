@@ -488,46 +488,55 @@ mod server {
             ServerFnError::new(embedded_i18n::t!("common.try_again", locale = self.locale))
         }
 
-        /// Drops the printers the user may not use. The rules not being readable is a failure,
-        /// not an open door: a restricted printer must never show because its rule was lost.
+        /// Drops the printers the user may not use, see [`usable`](Self::usable).
         pub async fn usable_printers(
             &self,
             printers: Vec<Printer>,
         ) -> Result<Vec<Printer>, ServerFnError> {
-            let usable = self.usable(DeviceKind::Printer).await.map_err(|error| {
-                tracing::error!(%error, "reading the printer access rules failed");
-                self.try_again()
-            })?;
-            Ok(printers
-                .into_iter()
-                .filter(|printer| usable.allows(&printer.name))
-                .collect())
+            self.usable(DeviceKind::Printer, printers, |printer| &printer.name)
+                .await
         }
 
-        /// Drops the scanners the user may not use; fails closed like
-        /// [`usable_printers`](Self::usable_printers).
+        /// Drops the scanners the user may not use, see [`usable`](Self::usable).
         pub async fn usable_scanners(
             &self,
             scanners: Vec<ScannerInfo>,
         ) -> Result<Vec<ScannerInfo>, ServerFnError> {
-            let usable = self.usable(DeviceKind::Scanner).await.map_err(|error| {
-                tracing::error!(%error, "reading the scanner access rules failed");
-                self.try_again()
-            })?;
-            Ok(scanners
-                .into_iter()
-                .filter(|scanner| usable.allows(&scanner.id))
-                .collect())
+            self.usable(DeviceKind::Scanner, scanners, |scanner| &scanner.id)
+                .await
         }
 
-        async fn usable(&self, kind: DeviceKind) -> recto_domain::Result<Usable> {
-            Usable::read(
+        /// The `devices` of `kind` the user may use, each named by `name`. The rules not being
+        /// readable is a failure, not an open door: a restricted device must never show because
+        /// its rule was lost.
+        async fn usable<T>(
+            &self,
+            kind: DeviceKind,
+            devices: Vec<T>,
+            name: impl Fn(&T) -> &str,
+        ) -> Result<Vec<T>, ServerFnError> {
+            let usable = Usable::read(
                 &self.state.database,
                 kind,
                 self.user.id,
                 self.user.is_administrator,
             )
             .await
+            .map_err(|error| {
+                match kind {
+                    DeviceKind::Printer => {
+                        tracing::error!(%error, "reading the printer access rules failed");
+                    }
+                    DeviceKind::Scanner => {
+                        tracing::error!(%error, "reading the scanner access rules failed");
+                    }
+                }
+                self.try_again()
+            })?;
+            Ok(devices
+                .into_iter()
+                .filter(|device| usable.allows(name(device)))
+                .collect())
         }
 
         /// Refuses a scanner the scanner list does not have. Ids come from the browser, and
