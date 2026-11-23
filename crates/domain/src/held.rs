@@ -17,15 +17,15 @@ pub mod files;
 use std::collections::HashSet;
 
 use chrono::{DateTime, TimeDelta, Utc};
-use recto_entity::{device_passwords, held_jobs, print_jobs, users};
+use recto_entity::{device_passwords, held_jobs, print_jobs};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait, DatabaseBackend,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, ConnectionTrait,
     DatabaseTransaction, DbErr, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
-    Select, TransactionSession, TransactionTrait, sea_query::Expr,
+    TransactionSession, TransactionTrait, sea_query::Expr,
 };
 
 use crate::{
-    database::begin_write,
+    database::{begin_write, lock_user, locked},
     error::{Error, Problem, Result},
 };
 
@@ -738,32 +738,6 @@ async fn owns_device(
         Ok(())
     } else {
         Err(Error::NotFound)
-    }
-}
-
-/// Locks the user's row on PostgreSQL, so two jobs of one user arriving together are checked
-/// against the limits one after the other, as the quota check does. SQLite's write transaction
-/// already runs alone.
-async fn lock_user(transaction: &impl ConnectionTrait, user_id: i64) -> Result<()> {
-    if transaction.get_database_backend() != DatabaseBackend::Sqlite {
-        users::Entity::find_by_id(user_id)
-            .lock_exclusive()
-            .one(transaction)
-            .await?;
-    }
-    Ok(())
-}
-
-/// The query, locking the rows it reads on PostgreSQL. SQLite has no row locks, and its write
-/// transaction already runs alone.
-fn locked(
-    transaction: &impl ConnectionTrait,
-    query: Select<held_jobs::Entity>,
-) -> Select<held_jobs::Entity> {
-    if transaction.get_database_backend() == DatabaseBackend::Sqlite {
-        query
-    } else {
-        query.lock_exclusive()
     }
 }
 

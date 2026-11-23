@@ -6,10 +6,12 @@
 
 use std::{path::Path, time::Duration};
 
+use recto_entity::users;
 use recto_migration::{Migrator, MigratorTrait};
 use sea_orm::{
     ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, DbErr,
-    SqliteTransactionMode, Statement, TransactionOptions, TransactionTrait,
+    EntityTrait, QuerySelect, Select, SqliteTransactionMode, Statement, TransactionOptions,
+    TransactionTrait,
 };
 
 /// How long a SQLite connection waits for the write lock, held by another connection, before
@@ -63,6 +65,41 @@ where
             ..TransactionOptions::default()
         })
         .await
+}
+
+/// `query`, locking the rows it reads until the transaction ends (`SELECT … FOR UPDATE`) on
+/// PostgreSQL, whose default isolation lets two transactions read the same rows and both act on
+/// what they saw. SQLite has no row locks, and its write transaction already runs alone.
+pub(crate) fn locked<E: EntityTrait>(
+    transaction: &impl ConnectionTrait,
+    query: Select<E>,
+) -> Select<E> {
+    if transaction.get_database_backend() == DatabaseBackend::Sqlite {
+        query
+    } else {
+        query.lock_exclusive()
+    }
+}
+
+/// Locks the rows `query` finds (see [`locked`]), for a check-then-act that must not run twice
+/// at once.
+pub(crate) async fn lock<E: EntityTrait>(
+    transaction: &impl ConnectionTrait,
+    query: Select<E>,
+) -> Result<(), DbErr> {
+    if transaction.get_database_backend() != DatabaseBackend::Sqlite {
+        query.lock_exclusive().all(transaction).await?;
+    }
+    Ok(())
+}
+
+/// Locks a user's row (see [`lock`]): what everything checked per user (quotas, held jobs,
+/// device passwords) waits on, so two requests of one user are checked one after the other.
+pub(crate) async fn lock_user(
+    transaction: &impl ConnectionTrait,
+    user_id: i64,
+) -> Result<(), DbErr> {
+    lock(transaction, users::Entity::find_by_id(user_id)).await
 }
 
 /// Applies every pending migration of [`recto_migration::Migrator`]. Migrations only move

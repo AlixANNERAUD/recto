@@ -13,13 +13,13 @@ use std::collections::HashMap;
 
 use recto_entity::{device_passwords, user_identities, users};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, TransactionSession, TransactionTrait,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect, TransactionSession, TransactionTrait,
 };
 use sha2::{Digest, Sha256};
 
 use crate::{
-    database::begin_write,
+    database::{begin_write, lock_user},
     error::{Error, Problem, Result},
 };
 
@@ -86,12 +86,7 @@ pub async fn create(
     // already runs alone; PostgreSQL's default isolation lets both read the same count, so the
     // user's row is locked first, as the quota check does, and the second waits for the first.
     let transaction = begin_write(database).await?;
-    if transaction.get_database_backend() != DatabaseBackend::Sqlite {
-        users::Entity::find_by_id(user_id)
-            .lock_exclusive()
-            .one(&transaction)
-            .await?;
-    }
+    lock_user(&transaction, user_id).await?;
     let count = device_passwords::Entity::find()
         .filter(device_passwords::Column::UserId.eq(user_id))
         .count(&transaction)
