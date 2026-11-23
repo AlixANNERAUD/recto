@@ -1028,3 +1028,157 @@ async fn direct_printing_needs_os_integration() {
         .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+/// A body that sends `chunks`, then nothing, ever: a device that stalls.
+struct Stalled {
+    chunks: VecDeque<Bytes>,
+}
+
+impl futures_core::Stream for Stalled {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.chunks.pop_front() {
+            Some(chunk) => Poll::Ready(Some(Ok(chunk))),
+            None => Poll::Pending,
+        }
+    }
+}
+
+fn stalled(chunks: &[&[u8]]) -> Body {
+    Body::from_stream(Stalled {
+        chunks: chunks.iter().map(|c| Bytes::copy_from_slice(c)).collect(),
+    })
+}
+
+#[tokio::test]
+async fn an_unauthenticated_body_stays_small() {
+    let harness = Harness::new().await;
+    // Get-Printer-Attributes needs no credentials and carries no document: past 64 KiB, the
+    // body is refused rather than kept in memory.
+    let attributes = request(IppOperation::GetPrinterAttributes).to_bytes();
+    let response = harness
+        .send(post_ipp(
+            "/ipp/print",
+            None,
+            Body::from(body(
+                &request(IppOperation::GetPrinterAttributes),
+                &vec![0; 100 * 1024],
+            )),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let answer = ipp(
+        &harness,
+        post_ipp("/ipp/print", None, Body::from(attributes.to_vec())),
+    )
+    .await;
+    assert_eq!(status(&answer), 0x0000);
+}
+
+#[tokio::test]
+async fn a_stalled_body_times_out() {
+    let harness = Harness::with(Setup {
+        device_read_timeout: std::time::Duration::from_millis(200),
+        ..Setup::default()
+    })
+    .await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let laptop = device(&harness, alice, "Laptop").await;
+    let job = print_job("minutes.pdf", &sample_pdf(2));
+
+    // Nothing at all, and the header but no document, with or without credentials.
+    for (secret, body) in [
+        (None, stalled(&[])),
+        (None, stalled(&[&job[..4]])),
+        (Some(laptop.secret.as_str()), stalled(&[&job[..8]])),
+        (
+            Some(laptop.secret.as_str()),
+            stalled(&[&job[..8], &job[8..200]]),
+        ),
+    ] {
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            harness.send(post_ipp("/ipp/print", secret, body)),
+        )
+        .await
+        .expect("recto stops waiting");
+        assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+    }
+    // A personal address alike.
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        harness.send(post_ipp(&personal(&laptop), None, stalled(&[&job[..8]]))),
+    )
+    .await
+    .expect("recto stops waiting");
+    assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+    assert!(
+        held::list(&harness.database, alice)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn one_user_sends_two_documents_at_a_time() {
+    let harness = Harness::new().await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let bob = harness.local_user("bob", ALICE_PASSWORD).await;
+    let laptop = device(&harness, alice, "Laptop").await;
+    let phone = device(&harness, alice, "Phone").await;
+    let bobs = device(&harness, bob, "Laptop").await;
+    let job = print_job("minutes.pdf", &sample_pdf(2));
+
+    // Two documents of alice's still arriving, from two devices.
+    let mut sending = Vec::new();
+    for device in [&laptop, &phone] {
+        let request = post_ipp(
+            "/ipp/print",
+            Some(&device.secret),
+            stalled(&[&job[..8], &job[8..100]]),
+        );
+        let router = harness.router.clone();
+        sending.push(tokio::spawn(async move {
+            router.oneshot(from_peer(request)).await.unwrap()
+        }));
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    // A third waits for neither: it is told to come back, before its document is read.
+    let answer = ipp(
+        &harness,
+        post_ipp("/ipp/print", Some(&laptop.secret), Body::from(job.clone())),
+    )
+    .await;
+    assert_eq!(status(&answer), 0x0507, "server-error-busy");
+    // Other users are not held up, nor are alice's other operations.
+    let answer = ipp(
+        &harness,
+        post_ipp("/ipp/print", Some(&bobs.secret), Body::from(job.clone())),
+    )
+    .await;
+    assert_eq!(status(&answer), 0x0000);
+    let jobs = request(IppOperation::GetJobs);
+    let answer = ipp(
+        &harness,
+        post_ipp(
+            "/ipp/print",
+            Some(&laptop.secret),
+            Body::from(jobs.to_bytes().to_vec()),
+        ),
+    )
+    .await;
+    assert_eq!(status(&answer), 0x0000);
+
+    // Once one ends, alice sends again.
+    sending.remove(0).abort();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let answer = ipp(
+        &harness,
+        post_ipp("/ipp/print", Some(&laptop.secret), Body::from(job)),
+    )
+    .await;
+    assert_eq!(status(&answer), 0x0000);
+}

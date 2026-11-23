@@ -55,6 +55,10 @@ pub struct AuthState {
     /// The failures and refused secrets of device passwords, shared by every route serving
     /// devices.
     pub device_limits: DeviceLimits,
+    /// How long a device has to send the first bytes of its request, then each later piece of
+    /// its body: a device that stalls is answered `408` rather than holding a task and its
+    /// buffer forever.
+    pub device_read_timeout: Duration,
 }
 
 impl AuthState {
@@ -77,6 +81,7 @@ impl AuthState {
             ipp_allow_plain: false,
             default_media: Media::A4,
             device_limits: DeviceLimits::default(),
+            device_read_timeout: Duration::from_secs(30),
         }
     }
 

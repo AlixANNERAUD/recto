@@ -94,6 +94,8 @@ struct Setup {
     managed: bool,
     /// `RECTO_OS_INTEGRATION`, on by default.
     os_integration: bool,
+    /// How long a device may leave its request's body idle; 30 seconds, as the server's.
+    device_read_timeout: Duration,
 }
 
 impl Default for Setup {
@@ -113,6 +115,7 @@ impl Default for Setup {
             printers: None,
             managed: false,
             os_integration: true,
+            device_read_timeout: Duration::from_secs(30),
         }
     }
 }
@@ -213,6 +216,7 @@ impl Harness {
         let auth = AuthState {
             local_accounts: setup.local_accounts,
             trust_forwarded_headers: setup.trust_forwarded_headers,
+            device_read_timeout: setup.device_read_timeout,
             ..AuthState::new(openid, public_url, database.clone())
         };
         let sessions = auth.sessions.clone();

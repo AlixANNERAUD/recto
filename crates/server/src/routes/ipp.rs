@@ -19,6 +19,11 @@
 //! them. Every URI in an answer is built on the address the request came in on, so a
 //! device that switches to the URI it is given keeps its personal address.
 //!
+//! Reading a body is bounded in size, time and number: `RECTO_MAX_UPLOAD_SIZE` (64 KiB without
+//! credentials, since Get-Printer-Attributes carries no document), the device read timeout for
+//! the header and for each later piece of the body (`408` past it), and two documents per user
+//! at once (`server-error-busy` for a third, before its document is read).
+//!
 //! Log lines name the device password's id, never the path, which may hold the secret.
 
 use std::{future::poll_fn, pin::Pin, sync::Arc, time::Duration};
@@ -60,7 +65,7 @@ use url::Url;
 use super::held::release_held;
 use super::print::{Choices, FORM_SLACK, Rejected, Submitted, job_name};
 use crate::{
-    device_auth::{self, DeviceAuth},
+    device_auth::{self, DeviceAuth, Uploads},
     state::AuthState,
 };
 
@@ -85,7 +90,18 @@ struct IppState {
     tls: bool,
     /// The largest body read: the document and its IPP attributes.
     body_limit: usize,
+    /// How long the header, then each later piece of a body, may take to arrive.
+    read_timeout: Duration,
+    /// The documents each user is sending, shared by every route serving devices.
+    uploads: Uploads,
 }
+
+/// The largest body of a request without credentials: only Get-Printer-Attributes is answered
+/// without them, and it carries no document.
+const UNAUTHENTICATED_BODY: usize = FORM_SLACK;
+
+/// The operations that carry a document: Print-Job and Send-Document.
+const DOCUMENT_OPERATIONS: [u16; 2] = [0x02, 0x06];
 
 /// `ipps://host:port` for an `https` public URL, `ipp://host:port` for an `http` one, always
 /// with its port: `ipps` alone means port 631. The bool says whether it is TLS.
@@ -122,6 +138,8 @@ pub fn router(app: AppState, auth: &AuthState) -> Router {
         address: Arc::from(address),
         tls,
         body_limit: app.max_upload_size.saturating_add(FORM_SLACK),
+        read_timeout: auth.device_read_timeout,
+        uploads: auth.device_limits.uploads.clone(),
         app,
     };
     Router::new()
@@ -193,8 +211,13 @@ async fn serve(state: IppState, request: Request, secret: Option<String>) -> Res
         None => None,
     };
     let mut buffer = Vec::new();
-    if let Err(unread) = fill(&mut body, &mut buffer, 8, limit).await {
-        return unread.into_response();
+    let timeout = state.read_timeout;
+    // The header as a whole within the timeout, however it is split.
+    let header = tokio::time::timeout(timeout, fill(&mut body, &mut buffer, 8, limit, timeout));
+    match header.await {
+        Ok(Ok(())) => {}
+        Ok(Err(unread)) => return unread.into_response(),
+        Err(_) => return Unread::TimedOut.into_response(),
     }
     let Some(first) = buffer
         .get(..8)
@@ -209,7 +232,29 @@ async fn serve(state: IppState, request: Request, secret: Option<String>) -> Res
             Err(refusal) => return state.devices.refuse(refusal),
         }
     }
-    if let Err(unread) = fill(&mut body, &mut buffer, usize::MAX, limit).await {
+    let limit = if device.is_some() {
+        limit
+    } else {
+        limit.min(UNAUTHENTICATED_BODY)
+    };
+    // Kept until the document is held, or refused: it is in memory until then.
+    let _upload = match &device {
+        Some(device) if DOCUMENT_OPERATIONS.contains(&head.operation) => {
+            match state.uploads.begin(device.user_id) {
+                Some(upload) => Some(upload),
+                None => {
+                    tracing::info!(
+                        user = device.username,
+                        device_password_id = device.device_password_id,
+                        "a third document at once refused"
+                    );
+                    return answer(printer::refusal(&head, BUSY));
+                }
+            }
+        }
+        _ => None,
+    };
+    if let Err(unread) = fill(&mut body, &mut buffer, usize::MAX, limit, timeout).await {
         return unread.into_response();
     }
     let incoming = match printer::decode(Bytes::from(buffer)) {
@@ -239,6 +284,7 @@ async fn serve(state: IppState, request: Request, secret: Option<String>) -> Res
 enum Unread {
     TooLarge,
     Failed,
+    TimedOut,
 }
 
 impl IntoResponse for Unread {
@@ -246,21 +292,31 @@ impl IntoResponse for Unread {
         match self {
             Unread::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Unread::Failed => StatusCode::BAD_REQUEST,
+            Unread::TimedOut => StatusCode::REQUEST_TIMEOUT,
         }
         .into_response()
     }
 }
 
 /// Reads the body into `buffer` until it holds `wanted` bytes or the body ends, refusing more
-/// than `limit` in all, whatever the body announced: chunked bodies announce nothing.
+/// than `limit` in all, whatever the body announced: chunked bodies announce nothing. Each piece
+/// must arrive within `idle` of the last.
 async fn fill(
     body: &mut Body,
     buffer: &mut Vec<u8>,
     wanted: usize,
     limit: usize,
+    idle: Duration,
 ) -> Result<(), Unread> {
+    // What an earlier read took may already be over a limit lowered since.
+    if buffer.len() > limit {
+        return Err(Unread::TooLarge);
+    }
     while buffer.len() < wanted {
-        let frame = poll_fn(|context| Pin::new(&mut *body).poll_frame(context)).await;
+        let next = poll_fn(|context| Pin::new(&mut *body).poll_frame(context));
+        let frame = tokio::time::timeout(idle, next)
+            .await
+            .map_err(|_| Unread::TimedOut)?;
         let Some(frame) = frame else {
             return Ok(());
         };

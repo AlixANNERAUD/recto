@@ -98,6 +98,9 @@ Send-Document); a held job is complete for the device, and the IPP answer to can
 | A raster recto cannot read: cut short, damaged, 16-bit, CMYK or black and white, outside 75 to 600 dpi | `client-error-document-format-error` |
 | A raster past a bound of the table above, time included | `client-error-request-entity-too-large` |
 | Two other rasters converting for the whole minute | `server-error-busy`, which devices retry |
+| A third document of the same person while two are still arriving | `server-error-busy` |
+| A request without credentials (only printer attributes are answered without) over 64 KiB | HTTP `413` |
+| The first bytes of a request, or a later piece of its body, not arriving within 30 seconds | HTTP `408` |
 | Empty document | `client-error-bad-request` |
 | Document over `RECTO_MAX_UPLOAD_SIZE` | `client-error-request-entity-too-large` |
 | A job of another device, or none | `client-error-not-found` |

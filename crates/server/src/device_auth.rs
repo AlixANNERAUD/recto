@@ -275,6 +275,58 @@ impl FailedSecrets {
 pub struct DeviceLimits {
     pub limiter: DeviceLimiter,
     pub failed: FailedSecrets,
+    pub uploads: Uploads,
+}
+
+/// The documents each user's devices are sending right now. A document is read whole into
+/// memory before it is kept, and the room left for held jobs is checked before that: without
+/// this bound, many uploads at once with one leaked password would all pass the check and be
+/// buffered together.
+#[derive(Clone, Default)]
+pub struct Uploads {
+    sending: Arc<Mutex<HashMap<i64, usize>>>,
+}
+
+impl Uploads {
+    /// The documents one user may send at once.
+    pub const PER_USER: usize = 2;
+
+    /// A place for one more document of `user`, kept until the returned guard drops; `None`
+    /// when they already send [`Self::PER_USER`].
+    pub fn begin(&self, user: i64) -> Option<Upload> {
+        let mut sending = self.sending.lock().unwrap_or_else(PoisonError::into_inner);
+        let count = sending.entry(user).or_default();
+        if *count >= Self::PER_USER {
+            return None;
+        }
+        *count += 1;
+        Some(Upload {
+            uploads: self.clone(),
+            user,
+        })
+    }
+}
+
+/// A document being sent, counted until it drops.
+pub struct Upload {
+    uploads: Uploads,
+    user: i64,
+}
+
+impl Drop for Upload {
+    fn drop(&mut self) {
+        let mut sending = self
+            .uploads
+            .sending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(count) = sending.get_mut(&self.user) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                sending.remove(&self.user);
+            }
+        }
+    }
 }
 
 /// What device authentication needs.
@@ -823,6 +875,21 @@ mod tests {
         assert!(plain("https://recto.example.org", false).plain_allowed);
         assert!(!plain("http://192.168.1.2:8080", false).plain_allowed);
         assert!(plain("http://192.168.1.2:8080", true).plain_allowed);
+    }
+
+    #[test]
+    fn uploads_are_counted_per_user_until_they_end() {
+        let uploads = Uploads::default();
+        let first = uploads.begin(1).unwrap();
+        let second = uploads.begin(1).unwrap();
+        assert!(uploads.begin(1).is_none());
+        let other = uploads.begin(2);
+        assert!(other.is_some());
+        drop(first);
+        let third = uploads.begin(1);
+        assert!(third.is_some());
+        drop((second, third, other));
+        assert!(uploads.sending.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

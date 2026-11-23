@@ -151,7 +151,11 @@ is written. A body over the limit is refused without being kept. recto authentic
 reading a document: a personal address is checked before any byte of the body, and on
 `/ipp/print` only the 8-byte header that names the operation is read first. A device may still
 have sent part of its document by then, and some proxies read whole bodies anyway: recto only
-promises not to read or keep it.
+promises not to read or keep it. Without credentials, recto reads at most 64 KiB, enough for the
+printer attributes devices ask before they know they need a password. A request whose first
+bytes or later pieces stall for 30 seconds is dropped, and each person's devices send at most
+two documents at once, since a document is held in memory until it is written: a leaked device
+password cannot fill the memory with parallel uploads.
 
 Printing directly (**Documents from your devices** on the Account page) changes only when a
 document is released, not how: the same access rules, quotas and ledger apply as on the Jobs
