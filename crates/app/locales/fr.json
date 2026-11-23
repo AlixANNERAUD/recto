@@ -44,6 +44,7 @@
     "utc": "{time} UTC"
   },
   "size": {
+    "decimal_separator": ",",
     "megabytes": "{value} Mo",
     "kilobytes": "{value} Ko"
   },

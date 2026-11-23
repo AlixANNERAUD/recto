@@ -76,7 +76,12 @@ pub fn file_size(bytes: usize) -> String {
         let value = if tenths.is_multiple_of(10) {
             (tenths / 10).to_string()
         } else {
-            format!("{}.{}", tenths / 10, tenths % 10)
+            format!(
+                "{}{}{}",
+                tenths / 10,
+                t!("size.decimal_separator"),
+                tenths % 10
+            )
         };
         tf!("size.megabytes", value = value)
     } else {
