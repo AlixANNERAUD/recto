@@ -62,7 +62,7 @@ rpassword = "7.5"
 serde_json = "1"
 openidconnect = { version = "4.1.0", default-features = false, features = ["reqwest", "rustls-tls"] }
 # Sessions live in the accounts database (crates/server/src/session_store.rs).
-tower-sessions = { version = "0.14.0", default-features = false, features = ["axum-core"] }
+tower-sessions = { version = "0.15.0", default-features = false, features = ["axum-core"] }
 tower = { version = "0.5.3", features = ["util"] }
 # Both listeners serve their connections themselves (crates/server/src/connections.rs): axum's
 # `serve` gives hyper no timer, so idle connections would never be closed.
