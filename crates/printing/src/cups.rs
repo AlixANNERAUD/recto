@@ -19,6 +19,7 @@ use ipp::value::IppValue;
 use percent_encoding::percent_decode_str;
 use url::Url;
 
+use crate::ipp_values::{each, set, text};
 use crate::transport::{self, REQUEST_TIMEOUT, error_chain, status_message};
 use crate::{
     Capabilities, ColorMode, Job, JobState, JobStatus, PrintError, PrintRequest, PrintService,
@@ -393,12 +394,9 @@ fn add_requested(request: &mut IppRequestResponse, names: &[&str]) -> Result<(),
         .iter()
         .map(|name| keyword(name))
         .collect::<Result<Vec<_>, _>>()?;
-    let value = if values.len() == 1 {
-        values.into_iter().next().expect("one value")
-    } else {
-        IppValue::Array(values)
-    };
-    add_operation(request, attribute("requested-attributes", value)?);
+    if let Some(value) = set(values) {
+        add_operation(request, attribute("requested-attributes", value)?);
+    }
     Ok(())
 }
 
@@ -457,26 +455,18 @@ pub(crate) fn printer_groups(
 
 /// Every value of an attribute, with multi-valued ones flattened.
 fn values<'a>(group: &'a IppAttributeGroup, name: &str) -> Vec<&'a IppValue> {
-    match group.get(name).map(IppAttribute::value) {
-        Some(IppValue::Array(items)) => items.iter().collect(),
-        Some(value) => vec![value],
-        None => vec![],
-    }
+    group
+        .get(name)
+        .map(|attribute| each(attribute.value()).collect())
+        .unwrap_or_default()
 }
 
 /// Only real text counts. Out-of-band values (`unknown`, `no-value`, ...) are how CUPS hides an
 /// attribute, and they must never be mistaken for the text itself.
 fn text_of(value: &IppValue) -> Option<String> {
     let text = match value {
-        IppValue::TextWithoutLanguage(text) | IppValue::TextWithLanguage { text, .. } => {
-            text.to_string()
-        }
-        IppValue::NameWithoutLanguage(name) | IppValue::NameWithLanguage { name, .. } => {
-            name.to_string()
-        }
-        IppValue::Keyword(keyword) => keyword.to_string(),
         IppValue::Uri(uri) => uri.to_string(),
-        _ => return None,
+        value => text(value)?.to_owned(),
     };
     (!text.is_empty()).then_some(text)
 }

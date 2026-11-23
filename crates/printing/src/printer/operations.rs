@@ -14,6 +14,7 @@ use ipp::request::IppRequestResponse;
 use ipp::value::IppValue;
 
 use super::{Media, Requested};
+use crate::ipp_values::{each, text};
 use crate::{ColorMode, PageRanges, Sides};
 
 /// The one operation answered without credentials: clients read `uri-authentication-supported`
@@ -497,24 +498,12 @@ fn check_operation_group(group: &IppAttributeGroup) -> Result<(), StatusCode> {
 
 /// The values of a one-or-many attribute. Not `IppValue`'s own iterator, which walks into a
 /// collection's members.
-fn each(value: &IppValue) -> std::slice::Iter<'_, IppValue> {
-    match value {
-        IppValue::Array(values) => values.iter(),
-        one => std::slice::from_ref(one).iter(),
-    }
-}
-
 /// A string value of any string syntax; anything else, a string that was not UTF-8 included,
 /// counts as absent.
 fn string(value: &IppValue) -> Option<String> {
     match value {
-        IppValue::NameWithoutLanguage(text) => Some(text.as_str().to_owned()),
-        IppValue::NameWithLanguage { name, .. } => Some(name.as_str().to_owned()),
-        IppValue::TextWithoutLanguage(text) => Some(text.as_ref().to_owned()),
-        IppValue::TextWithLanguage { text, .. } => Some(text.as_ref().to_owned()),
-        IppValue::Keyword(keyword) => Some(keyword.as_str().to_owned()),
         IppValue::MimeMediaType(mime) => Some(mime.as_str().to_owned()),
-        _ => None,
+        value => text(value).map(str::to_owned),
     }
 }
 

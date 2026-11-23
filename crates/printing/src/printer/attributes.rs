@@ -11,6 +11,7 @@ use ipp::value::{IppDateTime, IppName, IppValue};
 use uuid::Uuid;
 
 use super::Media;
+use crate::ipp_values;
 
 /// The formats the queue takes. Rasters (`image/pwg-raster` for IPP Everywhere, `image/urf`
 /// for AirPrint) become a PDF when they arrive. `application/octet-stream` asks recto to detect
@@ -599,15 +600,9 @@ impl Attributes {
     }
 }
 
-/// A set of values, one bare value when there is one, and none at all when empty: an empty
-/// `IppValue::Array` encodes without a value length and desyncs the client's parser.
+/// A [set](ipp_values::set) of the values that could be built.
 fn set(values: impl IntoIterator<Item = Option<IppValue>>) -> Option<IppValue> {
-    let mut values: Vec<IppValue> = values.into_iter().flatten().collect();
-    match values.len() {
-        0 => None,
-        1 => values.pop(),
-        _ => Some(IppValue::Array(values)),
-    }
+    ipp_values::set(values.into_iter().flatten())
 }
 
 // Values below that come from the operator's settings (names, URLs) can be too long for IPP;

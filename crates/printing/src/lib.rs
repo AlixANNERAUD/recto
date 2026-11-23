@@ -17,6 +17,8 @@ pub mod count;
 #[cfg(feature = "service")]
 mod cups;
 #[cfg(feature = "service")]
+mod ipp_values;
+#[cfg(feature = "service")]
 pub mod raster;
 #[cfg(feature = "service")]
 mod service;

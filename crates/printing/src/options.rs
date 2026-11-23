@@ -193,13 +193,9 @@ impl PrintOptions {
         attributes.push(keyword(IppAttribute::SIDES, self.sides.keyword()));
         attributes.push(keyword("print-color-mode", self.color_mode.keyword()));
         // Images are one page, and CUPS ignores the attribute for them at best.
-        if let (Some(ranges), crate::DocumentFormat::Pdf) = (&self.page_ranges, format) {
-            let mut values = ranges.to_ipp();
-            let value = if values.len() == 1 {
-                values.remove(0)
-            } else {
-                IppValue::Array(values)
-            };
+        if let (Some(ranges), crate::DocumentFormat::Pdf) = (&self.page_ranges, format)
+            && let Some(value) = crate::ipp_values::set(ranges.to_ipp())
+        {
             attributes.push(
                 IppAttribute::with_name(IppAttribute::PAGE_RANGES, value)
                     .expect("valid attribute name"),
