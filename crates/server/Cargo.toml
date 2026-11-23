@@ -68,6 +68,8 @@ recto-scanning = { workspace = true, features = ["testing"] }
 wiremock.workspace = true
 futures-core.workspace = true
 tempfile.workspace = true
+# The Apple profile tests read the property list back.
+quick-xml.workspace = true
 # The LAN certificate tests run handshakes over an in-memory duplex stream.
 tokio = { workspace = true, features = ["io-util"] }
 

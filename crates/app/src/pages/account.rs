@@ -311,6 +311,8 @@ fn PasswordForm(username: String) -> impl IntoView {
 /// The password just created, its name and the username to go with it.
 #[component]
 fn CreatedPassword(created: NewDevicePassword) -> impl IntoView {
+    // Posted back rather than put in a link, so the secret stays out of addresses and history.
+    let secret = created.secret.clone();
     view! {
         <Card title=tf!("account.devices.created.title", name = created.name) class="max-w-xl">
             <div class="grid gap-4">
@@ -358,6 +360,15 @@ fn CreatedPassword(created: NewDevicePassword) -> impl IntoView {
                         </dd>
                     </div>
                 </dl>
+                <form method="post" action="/account/devices/profile" class="grid gap-2">
+                    <input type="hidden" name="secret" value=secret />
+                    <div>
+                        <button type="submit" class=button_class(ButtonVariant::Secondary)>
+                            {t!("account.devices.profile.download")}
+                        </button>
+                    </div>
+                    <p class=HINT>{t!("account.devices.profile.hint")}</p>
+                </form>
             </div>
         </Card>
     }

@@ -16,6 +16,32 @@ pub fn sign_in_required(locale: Locale) -> &'static str {
     t!("auth.sign_in_required", locale = locale)
 }
 
+/// The name an Apple profile adds recto's printer under, for the device password `device`.
+pub fn profile_name(brand: &str, device: &str, locale: Locale) -> String {
+    format!(
+        "{}",
+        t!(
+            "account.devices.profile.name",
+            brand = brand,
+            name = device,
+            locale = locale
+        )
+    )
+}
+
+/// What a device shows about an Apple profile before installing it.
+pub fn profile_description(brand: &str, device: &str, locale: Locale) -> String {
+    format!(
+        "{}",
+        t!(
+            "account.devices.profile.description",
+            brand = brand,
+            name = device,
+            locale = locale
+        )
+    )
+}
+
 /// Why a form or action was refused as cross-site. Most often recto was opened at another
 /// address than its public URL (`origin`), such as its LAN address. `name` is the app's name.
 pub fn cross_site_refused(locale: Locale, name: &str, origin: &str) -> String {

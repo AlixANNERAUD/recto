@@ -462,3 +462,302 @@ async fn device_forms_refuse_cross_site_posts() {
         Some("carol")
     );
 }
+
+/// A form post from the pages of a recto served over HTTPS.
+fn secure_form(uri: &str, cookie: &str, fields: &[(&str, &str)]) -> Request<Body> {
+    let mut request = form(uri, Some(cookie), fields);
+    request
+        .headers_mut()
+        .insert(header::ORIGIN, "https://recto.test".parse().unwrap());
+    request
+}
+
+/// Asks for the profile of `secret` and follows the redirect to it, as a browser does.
+async fn download_profile(harness: &Harness, cookie: &str, secret: &str) -> Response<Body> {
+    let response = harness
+        .send(secure_form(
+            "/account/devices/profile",
+            cookie,
+            &[("secret", secret)],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let target = location(&response);
+    assert!(target.starts_with("/account/devices/profile/"), "{target}");
+    // The address the browser keeps in its history holds a ticket, never the secret.
+    assert!(!target.contains(secret), "{target}");
+    harness.send(page(&target, Some(cookie))).await
+}
+
+/// A property list value, enough of the format to check a profile's structure.
+#[derive(Debug, PartialEq)]
+enum Plist {
+    Dict(Vec<(String, Plist)>),
+    Array(Vec<Plist>),
+    String(String),
+    Integer(i64),
+    Bool(bool),
+}
+
+impl Plist {
+    fn parse(xml: &str) -> Plist {
+        use quick_xml::{Reader, events::Event};
+        // Whitespace between elements is gathered too, and dropped by the next start tag.
+        let mut reader = Reader::from_str(xml);
+        let mut stack: Vec<(String, Vec<Plist>)> = Vec::new();
+        let mut text = String::new();
+        let mut root = None;
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Start(start) => {
+                    let name = start.name().as_ref().to_owned();
+                    stack.push((name, Vec::new()));
+                    text.clear();
+                }
+                Event::Empty(empty) => {
+                    let value = match empty.name().as_ref() {
+                        "true" => Plist::Bool(true),
+                        "false" => Plist::Bool(false),
+                        other => panic!("unexpected <{other}/>"),
+                    };
+                    stack.last_mut().unwrap().1.push(value);
+                }
+                Event::Text(content) => text.push_str(&content.xml10_content()),
+                Event::GeneralRef(reference) => {
+                    let name = reference.xml10_content();
+                    text.push_str(quick_xml::escape::resolve_predefined_entity(&name).unwrap());
+                }
+                Event::End(_) => {
+                    let (name, children) = stack.pop().unwrap();
+                    let value = match name.as_str() {
+                        "plist" => {
+                            root = children.into_iter().next();
+                            continue;
+                        }
+                        "dict" => {
+                            let mut entries = Vec::new();
+                            let mut children = children.into_iter();
+                            while let Some(key) = children.next() {
+                                let Plist::String(key) = key else {
+                                    panic!("a dict key that is not a <key>")
+                                };
+                                entries.push((key, children.next().expect("a value per key")));
+                            }
+                            Plist::Dict(entries)
+                        }
+                        "array" => Plist::Array(children),
+                        "key" | "string" => Plist::String(std::mem::take(&mut text)),
+                        "integer" => Plist::Integer(std::mem::take(&mut text).parse().unwrap()),
+                        other => panic!("unexpected <{other}>"),
+                    };
+                    stack.last_mut().unwrap().1.push(value);
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        root.expect("a <plist> with one value")
+    }
+
+    fn get(&self, key: &str) -> &Plist {
+        let Plist::Dict(entries) = self else {
+            panic!("{self:?} is not a dict")
+        };
+        let mut found = entries.iter().filter(|(name, _)| name == key);
+        let value = &found
+            .next()
+            .unwrap_or_else(|| panic!("no {key} in {self:?}"))
+            .1;
+        assert!(found.next().is_none(), "{key} twice");
+        value
+    }
+
+    fn string(&self, key: &str) -> &str {
+        match self.get(key) {
+            Plist::String(value) => value,
+            other => panic!("{key} is {other:?}"),
+        }
+    }
+
+    fn only(&self) -> &Plist {
+        match self {
+            Plist::Array(items) if items.len() == 1 => &items[0],
+            other => panic!("{other:?} is not an array of one"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_profile_points_at_the_personal_address() {
+    let harness = Harness::with(Setup {
+        public_url: "https://recto.test/",
+        ..Setup::default()
+    })
+    .await;
+    let cookie = harness.sign_in("carol-subject", "carol").await;
+    // The page showing a new password offers its profile, posting the secret back: it is never
+    // in a link.
+    let response = harness
+        .send(secure_form(
+            "/account/devices",
+            &cookie,
+            &[("name", "Carol's <iPhone> & co")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    let secret = secrets_in(&html).remove(0);
+    assert!(
+        html.contains("action=\"/account/devices/profile\""),
+        "{html}"
+    );
+    assert!(
+        html.contains(&format!("name=\"secret\" value=\"{secret}\"")),
+        "{html}"
+    );
+    assert!(html.contains("Download for iPhone, iPad and Mac"), "{html}");
+    let carol = harness.user_id("carol").await;
+    let id = device_passwords::list(&harness.database, carol)
+        .await
+        .unwrap()[0]
+        .id;
+
+    let response = download_profile(&harness, &cookie, &secret).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    assert_eq!(
+        headers[header::CONTENT_TYPE],
+        "application/x-apple-aspen-config"
+    );
+    assert_eq!(
+        headers[header::CONTENT_DISPOSITION],
+        "attachment; filename=\"recto.mobileconfig\""
+    );
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    let xml = text(response).await;
+    assert!(
+        xml.contains("<string>recto printer (Carol's &lt;iPhone&gt; &amp; co)</string>"),
+        "{xml}"
+    );
+
+    let profile = Plist::parse(&xml);
+    assert_eq!(profile.string("PayloadType"), "Configuration");
+    assert_eq!(
+        profile.string("PayloadDisplayName"),
+        "recto printer (Carol's <iPhone> & co)"
+    );
+    assert_eq!(profile.get("PayloadVersion"), &Plist::Integer(1));
+    let identifier = profile.string("PayloadIdentifier");
+    assert!(identifier.ends_with(&format!(".{id}")), "{identifier}");
+    uuid::Uuid::parse_str(profile.string("PayloadUUID")).unwrap();
+    let payload = profile.get("PayloadContent").only();
+    assert_eq!(payload.string("PayloadType"), "com.apple.airprint");
+    assert_eq!(payload.get("PayloadVersion"), &Plist::Integer(1));
+    assert!(payload.string("PayloadIdentifier").starts_with(identifier));
+    let printer = payload.get("AirPrint").only();
+    assert_eq!(printer.string("IPAddress"), "recto.test");
+    assert_eq!(printer.get("Port"), &Plist::Integer(443));
+    assert_eq!(printer.get("ForceTLS"), &Plist::Bool(true));
+    assert_eq!(
+        printer.string("ResourcePath"),
+        format!("/device/{secret}/ipp/print")
+    );
+
+    // The download can be asked for again while the page is open.
+    let again = download_profile(&harness, &cookie, &secret).await;
+    assert_eq!(again.status(), StatusCode::OK);
+    assert_eq!(text(again).await, xml);
+}
+
+#[tokio::test]
+async fn a_revoked_or_foreign_secret_gets_no_profile() {
+    let harness = Harness::with(Setup {
+        public_url: "https://recto.test/",
+        ..Setup::default()
+    })
+    .await;
+    let cookie = harness.sign_in("carol-subject", "carol").await;
+    let bob = harness.sign_in("bob-subject", "bob").await;
+    let carol = harness.user_id("carol").await;
+    let phone = device_passwords::create(&harness.database, carol, "Phone", chrono::Utc::now())
+        .await
+        .unwrap();
+    let ask = |cookie: &str, secret: &str| {
+        secure_form("/account/devices/profile", cookie, &[("secret", secret)])
+    };
+
+    // Someone else's secret, a malformed one and none at all.
+    for (who, secret) in [
+        (&bob, phone.secret.as_str()),
+        (&cookie, &"a".repeat(32)),
+        (&cookie, "not a secret"),
+        (&cookie, ""),
+    ] {
+        let response = harness.send(ask(who, secret)).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{secret}");
+        assert!(!response.headers().contains_key(header::LOCATION));
+    }
+    // Anonymous and cross-site posts are refused like every other form.
+    let mut request = form(
+        "/account/devices/profile",
+        None,
+        &[("secret", &phone.secret)],
+    );
+    request
+        .headers_mut()
+        .insert(header::ORIGIN, "https://recto.test".parse().unwrap());
+    let response = harness.send(request).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let mut request = ask(&cookie, &phone.secret);
+    let headers = request.headers_mut();
+    headers.insert(header::ORIGIN, "https://evil.example".parse().unwrap());
+    headers.insert("sec-fetch-site", "cross-site".parse().unwrap());
+    let response = harness.send(request).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(!text(response).await.contains(&phone.secret));
+
+    // A ticket is the asking user's alone, and ends with the password.
+    let response = harness.send(ask(&cookie, &phone.secret)).await;
+    let ticket = location(&response);
+    let response = harness.send(page(&ticket, Some(&bob))).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(!text(response).await.contains(&phone.secret));
+    let response = harness.send(get(&ticket)).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        device_passwords::revoke(&harness.database, carol, phone.id)
+            .await
+            .unwrap()
+    );
+    let response = harness.send(page(&ticket, Some(&cookie))).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(!text(response).await.contains(&phone.secret));
+    let response = harness.send(ask(&cookie, &phone.secret)).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = harness
+        .send(page("/account/devices/profile/unknown", Some(&cookie)))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn os_integration_off_offers_no_profile() {
+    let harness = Harness::with(Setup {
+        os_integration: false,
+        ..Setup::default()
+    })
+    .await;
+    let cookie = harness.sign_in("carol-subject", "carol").await;
+    let carol = harness.user_id("carol").await;
+    let phone = device_passwords::create(&harness.database, carol, "Phone", chrono::Utc::now())
+        .await
+        .unwrap();
+    let response = harness
+        .send(form(
+            "/account/devices/profile",
+            Some(&cookie),
+            &[("secret", &phone.secret)],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

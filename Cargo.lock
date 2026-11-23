@@ -4133,6 +4133,7 @@ dependencies = [
  "leptos",
  "leptos_axum",
  "mdns-sd",
+ "quick-xml",
  "rcgen",
  "recto-app",
  "recto-authentication",

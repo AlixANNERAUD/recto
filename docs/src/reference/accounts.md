@@ -140,6 +140,10 @@ default). They are kept in the **Devices** section of the Account page, at `/acc
   `2` to `7`, 160 bits) and shows it once, with your username, the printer's address and your
   personal address (see below). Copy them then: the password is stored only as its SHA-256 and
   cannot be shown again. The page that shows it is not cached by the browser.
+- **Download for iPhone, iPad and Mac**, on the page that shows a new password, downloads an
+  Apple configuration profile that adds the printer with the personal address (see below). It
+  is not signed, so the device shows it as unsigned (see
+  [The Apple profile](../explanation/devices.md#the-apple-profile)).
 - **Revoke** one when a device is lost, sold or no longer used. The device's next request is
   refused.
 - Each user has at most 20. The list shows when each was created and last used, to within 5

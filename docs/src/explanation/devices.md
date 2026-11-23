@@ -61,14 +61,28 @@ anyone who can open the printer's settings on the device can read it. recto neve
 wrong one answers as an address that does not exist. Use the personal address only on a device
 that only you use, and revoke its device password when that changes.
 
+## The Apple profile
+
+iPhones and iPads cannot add a printer by its address. Besides printers that announce themselves
+on the network, they take a **configuration profile**: a small file, installed in Settings, that
+can add an AirPrint printer at a given address. The Account page offers one for a new device
+password, **Download for iPhone, iPad and Mac**, holding the personal address. Macs install it
+too.
+
+The profile is not signed. A signature only helps when the device already trusts the certificate
+that made it, and a server of your own has no such certificate, so iOS and macOS show it as
+unsigned; that changes nothing about what it does. Since it holds the password, recto serves it
+only to the person who owns the password, writes it to no file or log, and tells browsers not to
+keep it (`Cache-Control: no-store`).
+
 ## What each system supports
 
 | System | How it adds recto | Status |
 | --- | --- | --- |
-| macOS | Printer address and a password prompt, or the personal address | Supported |
+| macOS | Printer address and a password prompt, or the personal address, by hand or with a profile | Supported |
 | Linux (CUPS, GNOME, KDE) | Printer address and a password prompt, or the personal address | Supported |
 | Windows 10 and 11 | Personal address only | Experimental |
-| iOS and iPadOS | A profile with the personal address, or a discovered printer and a password | Experimental, being built |
+| iOS and iPadOS | A profile with the personal address; a discovered printer and a password is being built | Experimental |
 | Android | A discovered printer and a password, through Mopria Print Service | Experimental, being built |
 
 A system is experimental until printing from it has passed its checks on real devices. On every

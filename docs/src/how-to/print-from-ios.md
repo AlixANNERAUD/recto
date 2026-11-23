@@ -28,15 +28,21 @@ sent that way wait in recto until you print them from the Jobs page, where you c
 
 ## Add the printer
 
-> **In progress.** iOS and iPadOS cannot add a printer by its address: they use printers that
-> announce themselves on the local network, or a profile. recto is gaining both. This section
-> describes them as planned: names, steps and settings may still change.
+iOS and iPadOS cannot add a printer by its address: they use a profile, or printers that announce
+themselves on the local network.
 
-**With a profile**, coming to the Account page:
+**With a profile**, from the Account page:
 
-1. Next to the new device password, tap **Download for iPhone, iPad and Mac**, and allow the
-   download.
-2. Open **Settings**, tap **Profile Downloaded**, then **Install**, and confirm with your passcode.
+1. Under the new device password, tap **Download for iPhone, iPad and Mac**, and allow the
+   download. The button works while the page is open; if it is closed, create another device
+   password.
+2. Within 8 minutes, open **Settings**, tap **Profile Downloaded**, then **Install**, and confirm
+   with your passcode. iOS discards a downloaded profile it has not installed after 8 minutes:
+   download it again if it is gone.
+
+iOS shows the profile as **Unsigned**: recto does not sign it, since that needs a certificate
+your iPhone already trusts, which a server of your own does not have. Check that it names your
+recto, as **recto printer (My iPhone)**, before installing it.
 
 The profile adds recto with your personal address, over HTTPS to your public host name, such as
 `recto.example.org`. Away from home that works as is. On your home network, that name must also
@@ -45,8 +51,13 @@ or NAT loopback (it accepts its own public address from inside). Without either,
 only away from home.
 
 **As a discovered printer**, when your administrator has recto announce itself on the local
-network: recto appears in the **Print** menu's printer list while you are on that network. The
-first time, iOS asks for a name and a password: give your **Username** and the device password.
+network:
+
+> **In progress.** Announcing recto on the local network is still being built. This paragraph
+> describes it as planned: names, steps and settings may still change.
+
+recto appears in the **Print** menu's printer list while you are on that network. The first
+time, iOS asks for a name and a password: give your **Username** and the device password.
 
 ## Print
 

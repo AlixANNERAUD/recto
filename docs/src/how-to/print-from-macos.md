@@ -49,6 +49,21 @@ sudo lpadmin -p recto -D "recto" -E -v ipps://recto.example.org:443/device/<pass
 Any user of the Mac can then read the address, with `lpstat -v`, and print as you. Use it only on
 a Mac that only you use.
 
+### Or install a profile
+
+A profile adds the printer with the personal address too, without Terminal:
+
+1. On the page showing the new device password, press **Download for iPhone, iPad and Mac**. The
+   Mac saves a `.mobileconfig` file in **Downloads**.
+2. Open the file. macOS says the profile is ready to review in **System Settings**.
+3. In **System Settings**, open the downloaded profile, under **General > Device Management** or
+   **Privacy & Security > Profiles** depending on the version of macOS, press **Install**, and
+   confirm with your Mac's password.
+
+macOS shows the profile as unsigned: recto does not sign it, since that needs a certificate your
+Mac already trusts, which a server of your own does not have. As with the personal address in
+Terminal, any user of the Mac can read the address from the printer's settings.
+
 ## Print
 
 Choose **File > Print** in any application, pick **recto** as the printer, set the copies, sides
@@ -73,27 +88,24 @@ a printer under **Documents from your devices** on the Account page (see
 ## Remove the printer
 
 1. In **System Settings > Printers & Scanners**, Control-click **recto** and choose **Remove
-   Printer**, or run `sudo lpadmin -x recto`.
+   Printer**, or run `sudo lpadmin -x recto`. If you installed the profile, remove the profile in
+   **System Settings** instead, where you installed it.
 2. In recto, on the Account page, press **Revoke** next to the device password. The Mac can no
    longer print as you, even with a copy of the address.
 
 If you ticked **Remember this password in my keychain**, delete the entry in **Keychain Access**
 too.
 
-## Planned: discovery, profile and scanning
+## Planned: discovery and scanning
 
-> **In progress.** recto is gaining automatic discovery on the local network, a profile to
-> download and scanning from the Mac. This section describes them as planned: names, steps and
-> settings may still change.
+> **In progress.** recto is gaining automatic discovery on the local network and scanning from
+> the Mac. This section describes them as planned: names, steps and settings may still change.
 
 - **Discovered printer.** When your administrator has recto announce itself on the local
   network, recto appears under **System Settings > Printers & Scanners > Add Printer, Scanner or
   Fax**, on the default tab. Select it and press **Add**. The Mac asks for a name and a password
   the first time you print: give your **Username** and the device password, and keep them in the
   keychain.
-- **Profile.** The Account page will offer **Download for iPhone, iPad and Mac** next to a new
-  device password. Installing the downloaded profile in **System Settings**, where macOS lists
-  downloaded profiles, adds the printer with your personal address.
 - **Scanning.** recto's scanners will appear in **Image Capture** and in **Printers & Scanners**
   when recto announces them on the local network. The Mac does not send a password to a
   scanner it discovered, so this needs your administrator to let your network scan without one;

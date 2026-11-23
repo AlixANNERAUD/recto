@@ -1,11 +1,24 @@
 //! The device forms of the Account page: `POST /account/devices` creates a device password,
-//! `POST /account/devices/{id}/revoke` revokes one, and `POST /account/direct-printer` sets
-//! where documents from devices go. All are plain forms, behind the session and the cross-site
-//! check like every other form, and answer the not-found page when OS integration is off.
+//! `POST /account/devices/{id}/revoke` revokes one, `POST /account/devices/profile` downloads
+//! the Apple profile of a new one, and `POST /account/direct-printer` sets where documents from
+//! devices go. All are plain forms, behind the session and the cross-site check like every
+//! other form, and answer the not-found page when OS integration is off.
 //!
 //! A new password is answered with the Account page showing it once, with
 //! `Cache-Control: no-store`, never with a redirect: the secret must not enter an address, the
 //! history or a cache. Logs name the device password's id and name, never its secret.
+//!
+//! The profile is answered in two steps: the form posts the secret, and the answer sends the
+//! browser to `GET /account/devices/profile/{ticket}`, which serves the file. Whether Safari
+//! on iOS installs a profile answered to a POST is not documented, while profiles served by a
+//! link are the usual way and known to work. The ticket is random, never the secret, works only
+//! for the user who asked, and only for 5 minutes.
+
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use axum::{
     Extension, Form, Router,
@@ -13,7 +26,7 @@ use axum::{
     http::{HeaderValue, StatusCode, Uri, header, request::Parts},
     middleware,
     response::{IntoResponse, Redirect, Response},
-    routing::post,
+    routing::{get, post},
 };
 use leptos::prelude::provide_context;
 use recto_app::{
@@ -28,10 +41,16 @@ use recto_domain::{
     access::{DeviceKind, Usable},
     device_passwords, users,
 };
+use recto_printing::printer::VirtualPrinter;
 use serde::Deserialize;
+use uuid::Uuid;
+
+mod profile;
+
+use profile::AirPrintProfile;
 
 use super::render;
-use crate::{session, state::AuthState};
+use crate::{device_auth::PERSONAL_PREFIX, session, state::AuthState};
 
 #[derive(Clone)]
 struct DevicesState {
@@ -39,18 +58,37 @@ struct DevicesState {
     methods: SignInMethods,
     /// Where devices reach the printer: `ipps://host:port`.
     printer_address: String,
+    /// The printer as a profile names it: the public host, its port, and whether it is TLS.
+    host: Arc<str>,
+    port: u16,
+    tls: bool,
+    /// The printer's `printer-uuid`, as the IPP routes answer it.
+    printer_uuid: Uuid,
+    tickets: ProfileTickets,
 }
 
-/// `POST /account/devices` and `POST /account/devices/{id}/revoke`.
+/// `POST /account/devices`, `POST /account/devices/{id}/revoke`, the profile download and
+/// `POST /account/direct-printer`.
 pub fn router(app: AppState, auth: &AuthState) -> Router {
+    let (printer_address, tls) = super::ipp::printer_address(&auth.public_url);
     let state = DevicesState {
         app,
         methods: auth.sign_in_methods(),
-        printer_address: super::ipp::printer_address(&auth.public_url).0,
+        printer_address,
+        host: Arc::from(auth.public_url.host_str().unwrap_or("localhost")),
+        port: auth
+            .public_url
+            .port_or_known_default()
+            .unwrap_or(if tls { 443 } else { 80 }),
+        tls,
+        printer_uuid: VirtualPrinter::uuid_for(auth.public_url.as_str()),
+        tickets: ProfileTickets::default(),
     };
     Router::new()
         .route("/account/devices", post(create))
         .route("/account/devices/{id}/revoke", post(revoke))
+        .route("/account/devices/profile", post(ask_profile))
+        .route("/account/devices/profile/{ticket}", get(download_profile))
         .route("/account/direct-printer", post(direct_printer))
         .route_layer(middleware::from_fn(session::require_user))
         .with_state(state)
@@ -255,6 +293,178 @@ async fn direct_printer(
             Redirect::to("/account?error=direct_unavailable").into_response()
         }
     }
+}
+
+/// Profiles asked for and not yet expired, by ticket. One per device password: asking again
+/// replaces the ticket, so a user has at most as many as device passwords.
+#[derive(Clone, Default)]
+struct ProfileTickets {
+    tickets: Arc<Mutex<HashMap<String, Ticket>>>,
+}
+
+struct Ticket {
+    user_id: i64,
+    device_password_id: i64,
+    secret: String,
+    expires_at: Instant,
+}
+
+impl ProfileTickets {
+    /// Long enough for a slow phone to start the download, short enough that a ticket left in
+    /// the history is dead.
+    const LIFETIME: Duration = Duration::from_secs(5 * 60);
+
+    fn issue(&self, user_id: i64, device_password_id: i64, secret: String) -> String {
+        let ticket = Uuid::new_v4().simple().to_string();
+        let now = Instant::now();
+        let mut tickets = self
+            .tickets
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        tickets.retain(|_, old| {
+            old.expires_at > now
+                && !(old.user_id == user_id && old.device_password_id == device_password_id)
+        });
+        tickets.insert(
+            ticket.clone(),
+            Ticket {
+                user_id,
+                device_password_id,
+                secret,
+                expires_at: now + Self::LIFETIME,
+            },
+        );
+        ticket
+    }
+
+    /// The secret of `user_id`'s ticket, while it lasts.
+    fn secret(&self, user_id: i64, ticket: &str) -> Option<String> {
+        let tickets = self
+            .tickets
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        tickets
+            .get(ticket)
+            .filter(|found| found.user_id == user_id && found.expires_at > Instant::now())
+            .map(|found| found.secret.clone())
+    }
+
+    fn forget(&self, ticket: &str) {
+        let mut tickets = self
+            .tickets
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        tickets.remove(ticket);
+    }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct ProfileFields {
+    secret: String,
+}
+
+/// Checks that the secret posted back is one of the user's live device passwords, and sends
+/// the browser to the profile's download. Anything else gets the not-found page, so the form
+/// does not tell whether a secret exists.
+async fn ask_profile(
+    State(state): State<DevicesState>,
+    Extension(user): Extension<User>,
+    parts: Parts,
+    Form(fields): Form<ProfileFields>,
+) -> Response {
+    if !state.app.os_integration {
+        return not_found(&state, parts).await;
+    }
+    match device_passwords::owns(&state.app.database, user.id, &fields.secret).await {
+        Ok(Some(id)) => {
+            let ticket = state.tickets.issue(user.id, id, fields.secret);
+            Redirect::to(&format!("/account/devices/profile/{ticket}")).into_response()
+        }
+        Ok(None) => not_found(&state, parts).await,
+        Err(error) => {
+            tracing::error!(%error, "checking a device password failed");
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
+    }
+}
+
+/// Serves the profile of a ticket: an AirPrint printer at the personal address of its device
+/// password, with `Cache-Control: no-store` since it holds the secret. A ticket of another
+/// user, an expired one, or one whose password was revoked since gets the not-found page.
+async fn download_profile(
+    State(state): State<DevicesState>,
+    Extension(user): Extension<User>,
+    Path(ticket): Path<String>,
+    parts: Parts,
+) -> Response {
+    // The ticket's address is not the page's: the not-found page must not echo it.
+    let mut parts = parts;
+    parts.uri = Uri::from_static("/account/devices/profile");
+    if !state.app.os_integration {
+        return not_found(&state, parts).await;
+    }
+    let Some(secret) = state.tickets.secret(user.id, &ticket) else {
+        return not_found(&state, parts).await;
+    };
+    let database = &state.app.database;
+    let device = match device_passwords::owns(database, user.id, &secret).await {
+        Ok(Some(id)) => match device_passwords::list(database, user.id).await {
+            Ok(passwords) => passwords.into_iter().find(|password| password.id == id),
+            Err(error) => {
+                tracing::error!(%error, "checking a device password failed");
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
+        },
+        Ok(None) => None,
+        Err(error) => {
+            tracing::error!(%error, "checking a device password failed");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    };
+    let Some(device) = device else {
+        state.tickets.forget(&ticket);
+        return not_found(&state, parts).await;
+    };
+    let locale = recto_app::i18n::from_headers(&parts.headers);
+    let brand = &state.app.branding.name;
+    let display_name = recto_app::messages::profile_name(brand, &device.name, locale);
+    let description = recto_app::messages::profile_description(brand, &device.name, locale);
+    let resource_path = format!("{PERSONAL_PREFIX}{secret}/ipp/print");
+    let profile = AirPrintProfile {
+        brand,
+        display_name: &display_name,
+        description: &description,
+        printer_uuid: state.printer_uuid,
+        device_password_id: device.id,
+        host: &state.host,
+        port: state.port,
+        tls: state.tls,
+        resource_path: &resource_path,
+    };
+    tracing::info!(
+        user = user.username,
+        device_password_id = device.id,
+        device_name = device.name,
+        "device profile downloaded"
+    );
+    let disposition = format!("attachment; filename=\"{}\"", profile.file_name());
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/x-apple-aspen-config"),
+            ),
+            (
+                header::CONTENT_DISPOSITION,
+                HeaderValue::from_str(&disposition)
+                    .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        ],
+        profile.to_xml(),
+    )
+        .into_response()
 }
 
 /// The not-found page, at the form's own address, which no page has.

@@ -129,6 +129,12 @@
         "personal_address": "Personal printer address",
         "personal_address_hint": "For devices that cannot ask for a password, such as Windows computers. It holds the password: keep it as private, and revoke the password if it leaks."
       },
+      "profile": {
+        "download": "Download for iPhone, iPad and Mac",
+        "hint": "A profile that adds the printer with the personal address. Install it in Settings on an iPhone or iPad, or in System Settings on a Mac. It is not signed, so the device shows it as unsigned.",
+        "name": "{brand} printer ({name})",
+        "description": "Adds the {brand} printer with the device password {name}. Remove the profile to remove the printer."
+      },
       "errors": {
         "name_invalid": "The device name must be 1 to {maximum} characters long.",
         "name_control": "The device name cannot contain line breaks, tabs or other control characters.",
