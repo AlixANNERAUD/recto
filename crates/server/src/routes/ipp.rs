@@ -924,14 +924,9 @@ impl Job<'_> {
         device: &DeviceUser,
         job_ids: &[i32],
     ) -> recto_domain::Result<(u16, Groups)> {
-        let database = &self.state.app.database;
-        let jobs = held::list_for_device(database, device.device_password_id).await?;
-        for job in jobs.iter().filter(|job| {
-            job.state == HeldState::Incoming
-                && (job_ids.is_empty() || job_ids.iter().any(|id| i64::from(*id) == job.id))
-        }) {
-            held::delete_for_device(database, device.device_password_id, job.id).await?;
-        }
+        let ids: Vec<i64> = job_ids.iter().copied().map(i64::from).collect();
+        held::delete_incoming_for_device(&self.state.app.database, device.device_password_id, &ids)
+            .await?;
         Ok(status(OK))
     }
 

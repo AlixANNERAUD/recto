@@ -629,12 +629,12 @@ async fn delete_only_takes_held_rows() {
 }
 
 #[tokio::test]
-async fn a_device_counts_its_incoming_jobs() {
+async fn a_device_counts_and_cancels_its_incoming_jobs_at_once() {
     let database = crate::testing::database().await;
     let alice = user(&database, "alice", false).await;
     let phone = device(&database, alice, "Phone").await;
     let laptop = device(&database, alice, "Laptop").await;
-    for (device, name) in [(phone, "a.pdf"), (phone, "b.pdf"), (laptop, "c.pdf")] {
+    let incoming = |device, name| {
         create_incoming(
             &database,
             alice,
@@ -645,18 +645,42 @@ async fn a_device_counts_its_incoming_jobs() {
             LIFETIME,
             MAX_BYTES,
         )
-        .await
-        .unwrap();
-    }
-    // A job with its document is held, no longer incoming.
-    receive(
+    };
+    let first = incoming(phone, "a.pdf").await.unwrap();
+    let second = incoming(phone, "b.pdf").await.unwrap();
+    let third = incoming(phone, "c.pdf").await.unwrap();
+    let other = incoming(laptop, "d.pdf").await.unwrap();
+    let sent = receive(
         &database,
         new_held(alice, Some(phone), "sent", noon()),
         MAX_BYTES,
     )
     .await
     .unwrap();
+    assert_eq!(incoming_count(&database, phone).await.unwrap(), 3);
+
+    // Only those named, and only the device's own.
+    assert_eq!(
+        delete_incoming_for_device(&database, phone, &[first, other, sent])
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(state(&database, other).await, Some(HeldState::Incoming));
+    assert_eq!(state(&database, sent).await, Some(HeldState::Held));
     assert_eq!(incoming_count(&database, phone).await.unwrap(), 2);
+
+    // None named: every one still waiting.
+    assert_eq!(
+        delete_incoming_for_device(&database, phone, &[])
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(state(&database, second).await, None);
+    assert_eq!(state(&database, third).await, None);
+    assert_eq!(state(&database, sent).await, Some(HeldState::Held));
+    assert_eq!(incoming_count(&database, phone).await.unwrap(), 0);
     assert_eq!(incoming_count(&database, laptop).await.unwrap(), 1);
 }
 

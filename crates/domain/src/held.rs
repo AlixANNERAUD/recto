@@ -564,6 +564,23 @@ pub async fn delete_for_device(
     delete_where(database, condition).await
 }
 
+/// Deletes the jobs of the device password still `incoming`, or only those among `ids` when it
+/// is not empty (IPP Cancel-My-Jobs), and returns how many. An `incoming` row never names a
+/// file: its document and its `held` state are stored together.
+pub async fn delete_incoming_for_device(
+    database: &impl ConnectionTrait,
+    device_password_id: i64,
+    ids: &[i64],
+) -> Result<u64> {
+    let mut delete = held_jobs::Entity::delete_many()
+        .filter(held_jobs::Column::DevicePasswordId.eq(device_password_id))
+        .filter(held_jobs::Column::State.eq(HeldState::Incoming.keyword()));
+    if !ids.is_empty() {
+        delete = delete.filter(held_jobs::Column::Id.is_in(ids.iter().copied()));
+    }
+    Ok(delete.exec(database).await?.rows_affected)
+}
+
 /// How many jobs of the device password wait for their document, for the printer's
 /// `queued-job-count`, which devices poll.
 pub async fn incoming_count(
