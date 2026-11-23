@@ -565,7 +565,8 @@
       "uncountable": "recto could not count the pages of this PDF, and your quotas count pages. Save it again as PDF and retry.",
       "counting_busy": "recto is busy counting the pages of other documents, and your quotas count pages. Try again in a moment.",
       "held_gone": "That document is no longer waiting: it was printed, deleted or it expired.",
-      "uploads_busy": "You are already sending two documents, from this page or your devices. Try again once one of them is sent."
+      "uploads_busy": "You are already sending two documents, from this page or your devices. Try again once one of them is sent.",
+      "too_slow": "The document took too long to arrive. Try again on a faster connection, or with a smaller file."
     },
     "left": {
       "title": "What you have left"

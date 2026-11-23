@@ -18,27 +18,45 @@ use tower_http::timeout::{DeadlineBody, TimeoutBody};
 /// arrive within the read timeout itself.
 pub(crate) const DOCUMENT_DEADLINE_FACTOR: u32 = 20;
 
+/// The slowest upload the print form waits for, in bytes per second, so that a larger
+/// `RECTO_MAX_UPLOAD_SIZE` also gives a document longer to arrive.
+const SLOWEST_UPLOAD: u64 = 64 * 1024;
+
 /// The path of the print form, the one web form that carries a document.
 const PRINT_FORM: &str = "/print";
 
 /// Bounds the body of a web request in time, as devices' are: each piece must arrive within
-/// `timeout` of the last, and the whole body within `timeout`, or [`DOCUMENT_DEADLINE_FACTOR`]
-/// times it for the print form. A body that runs out of time fails to read, which the route
-/// answers as any unreadable body. Without this, a few slow posts, signed in or not (the
+/// `timeout` of the last, and the whole body within `timeout`. The print form has
+/// [`DOCUMENT_DEADLINE_FACTOR`] times it, or as long as [`SLOWEST_UPLOAD`] takes for
+/// `max_upload` bytes when that is longer. A body that runs out of time fails to read with a
+/// [`TimeoutError`](tower_http::timeout::TimeoutError), which [`timed_out`] finds. Without this, a few slow posts, signed in or not (the
 /// sign-in form), would hold connections and their buffers for as long as they trickle.
 pub(crate) async fn bounded(
-    State(timeout): State<Duration>,
+    State((timeout, max_upload)): State<(Duration, usize)>,
     request: Request,
     next: Next,
 ) -> Response {
     let deadline = if request.uri().path() == PRINT_FORM {
-        timeout * DOCUMENT_DEADLINE_FACTOR
+        document_deadline(timeout, max_upload)
     } else {
         timeout
     };
     let request =
         request.map(|body| Body::new(DeadlineBody::new(deadline, TimeoutBody::new(timeout, body))));
     next.run(request).await
+}
+
+/// How long the print form's whole body may take (see [`bounded`]).
+fn document_deadline(timeout: Duration, max_upload: usize) -> Duration {
+    (timeout * DOCUMENT_DEADLINE_FACTOR)
+        .max(Duration::from_secs(max_upload as u64 / SLOWEST_UPLOAD))
+}
+
+/// Whether reading a body failed because it ran out of time in [`bounded`], whatever wraps the
+/// error on its way up.
+pub(crate) fn timed_out(error: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(error), |error| error.source())
+        .any(|error| error.is::<tower_http::timeout::TimeoutError>())
 }
 
 /// Whether the body announces more than `limit` bytes, so it can be refused before any is read.
@@ -113,4 +131,27 @@ pub(crate) async fn read_all(
         .await
         .unwrap_or(Err(Unread::TimedOut))?;
     Ok(buffer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_larger_upload_limit_gives_documents_longer() {
+        const MIB: usize = 1024 * 1024;
+        let timeout = Duration::from_secs(30);
+        assert_eq!(
+            document_deadline(timeout, 50 * MIB),
+            Duration::from_secs(800)
+        );
+        assert_eq!(
+            document_deadline(timeout, 10 * MIB),
+            Duration::from_secs(600)
+        );
+        assert_eq!(
+            document_deadline(timeout, 200 * MIB),
+            Duration::from_secs(3200)
+        );
+    }
 }

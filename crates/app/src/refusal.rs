@@ -32,6 +32,8 @@ coded! {
         HeldGone = "held_gone",
         /// The user is already sending as many documents as they may at once.
         UploadsBusy = "uploads_busy",
+        /// The document did not arrive in time.
+        TooSlow = "too_slow",
     }
 }
 
@@ -84,6 +86,7 @@ impl Refusal {
             Refusal::UploadsBusy => {
                 embedded_i18n::t!("print.errors.uploads_busy", locale = locale)
             }
+            Refusal::TooSlow => embedded_i18n::t!("print.errors.too_slow", locale = locale),
         }
         .to_string()
     }

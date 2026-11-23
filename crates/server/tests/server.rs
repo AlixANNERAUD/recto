@@ -989,7 +989,7 @@ async fn a_stalled_print_form_runs_out_of_time() {
     let response = tokio::time::timeout(Duration::from_secs(10), harness.send(request))
         .await
         .expect("recto stops waiting");
-    assert_redirect(&response, "/?error=invalid_form");
+    assert_redirect(&response, "/?error=too_slow");
     assert!(harness.print.submitted().is_empty());
 }
 

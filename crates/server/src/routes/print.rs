@@ -657,6 +657,9 @@ impl Form {
 fn unreadable(error: MultipartError) -> Refusal {
     if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
         Refusal::TooLarge
+    } else if super::body::timed_out(&error) {
+        tracing::info!(%error, "a print form arrived too slowly");
+        Refusal::TooSlow
     } else {
         tracing::warn!(%error, "unreadable print form");
         Refusal::InvalidForm

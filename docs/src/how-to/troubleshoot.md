@@ -118,6 +118,14 @@ none` and `JobPrivateAccess all` (see [Use an existing CUPS server](existing-cup
 browsers show a connection reset instead of this message. Behind nginx, a `413` error means
 `client_max_body_size` is lower than recto's limit.
 
+**"You are already sending two documents".** Each person sends at most two documents at once,
+from the Print page and their devices together. recto refuses a third before reading it, so for
+a large file the browser may show a connection reset instead of this message.
+
+**"The document took too long to arrive".** The upload did not finish in time (about 13 minutes
+with the default 50 MiB limit, longer with a larger `RECTO_MAX_UPLOAD_SIZE`), or it stalled for
+30 seconds, for example while a phone's screen was locked.
+
 **Only PDF, JPEG and PNG files can be printed.** Export the document to PDF first.
 
 ## Scanning

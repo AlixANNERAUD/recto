@@ -108,7 +108,8 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
     );
     let shell_options = state.leptos_options.clone();
     let branding = Arc::clone(&state.branding);
-    let body_limit = state.max_upload_size.saturating_add(print::FORM_SLACK);
+    let max_upload = state.max_upload_size;
+    let body_limit = max_upload.saturating_add(print::FORM_SLACK);
     let methods = auth.sign_in_methods();
     let context = move || provide_context(methods);
     let password = password::router(state.clone(), &auth);
@@ -155,7 +156,7 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
             refuse_cross_site,
         ))
         .layer(middleware::from_fn_with_state(
-            auth.device_read_timeout,
+            (auth.device_read_timeout, max_upload),
             body::bounded,
         ));
     // The pages load these files on every visit. Outside the session, they cost no session read,
