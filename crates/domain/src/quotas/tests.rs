@@ -579,8 +579,12 @@ async fn verdict(
     now: DateTime<Utc>,
 ) -> Verdict {
     let transaction = begin_write(db).await.unwrap();
-    lock_subjects(&transaction, user, groups).await.unwrap();
-    let verdict = check(&transaction, user, groups, printer, &counts, now, TZ)
+    let rules = rules(&transaction).await.unwrap();
+    let applicable = applicable(&rules, user, groups, printer);
+    lock_subjects(&transaction, user, &pool_groups(&applicable))
+        .await
+        .unwrap();
+    let verdict = check(&transaction, user, &applicable, &counts, now, TZ)
         .await
         .unwrap();
     transaction.commit().await.unwrap();

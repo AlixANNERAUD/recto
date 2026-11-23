@@ -2,11 +2,17 @@
 
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
-use recto_entity::{groups, users};
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseTransaction, EntityTrait, QuerySelect};
+use recto_entity::groups;
+use sea_orm::{DatabaseTransaction, EntityTrait};
 
-use super::{Enforcement, amount, applicable, rules, standing, usage::Standing};
-use crate::{error::Result, ledger::Counts};
+#[cfg(doc)]
+use super::applicable;
+use super::{Enforcement, Rule, amount, standing, usage::Standing};
+use crate::{
+    database::{lock, lock_user},
+    error::Result,
+    ledger::Counts,
+};
 
 /// What the quotas say of a job.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,23 +34,25 @@ pub enum Verdict {
 ///
 /// Concurrent jobs must not both pass: call it in a [`begin_write`](crate::database::begin_write)
 /// transaction, after [`lock_subjects`], and enter the job in the ledger before committing.
+///
+/// `applicable` are the rules [`applicable`] chose from the rules read in this transaction, the
+/// same ones whose pools [`lock_subjects`] locked: read again here, on PostgreSQL they could
+/// include a pool rule enabled since, whose group nobody locked.
 pub async fn check(
     tx: &DatabaseTransaction,
     user_id: i64,
-    groups: &[i64],
-    printer: &str,
+    applicable: &[Rule],
     counts: &Counts,
     now: DateTime<Utc>,
     tz: Tz,
 ) -> Result<Verdict> {
-    let rules = rules(tx).await?;
     let mut warnings = Vec::new();
-    for rule in applicable(&rules, user_id, groups, printer) {
+    for rule in applicable {
         let job = amount(rule.metric, counts).unwrap_or(0);
         if job <= 0 {
             continue;
         }
-        let standing = standing(tx, &rule, user_id, now, tz).await?;
+        let standing = standing(tx, rule, user_id, now, tz).await?;
         if standing.left >= job {
             continue;
         }
@@ -68,21 +76,12 @@ pub async fn lock_subjects(
     user_id: i64,
     pool_groups: &[i64],
 ) -> Result<()> {
-    if tx.get_database_backend() == DatabaseBackend::Sqlite {
-        return Ok(());
-    }
-    users::Entity::find_by_id(user_id)
-        .lock_exclusive()
-        .one(tx)
-        .await?;
+    lock_user(tx, user_id).await?;
     let mut pool_groups = pool_groups.to_vec();
     pool_groups.sort_unstable();
     pool_groups.dedup();
     for group in pool_groups {
-        groups::Entity::find_by_id(group)
-            .lock_exclusive()
-            .one(tx)
-            .await?;
+        lock(tx, groups::Entity::find_by_id(group)).await?;
     }
     Ok(())
 }

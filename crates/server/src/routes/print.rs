@@ -457,8 +457,7 @@ async fn enter(
         let verdict = quotas::check(
             &transaction,
             user.id,
-            &groups,
-            &entry.printer,
+            &applicable,
             &entry.counts,
             now,
             state.timezone,
