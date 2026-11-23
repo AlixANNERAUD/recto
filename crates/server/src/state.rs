@@ -61,7 +61,7 @@ pub struct AuthState {
     pub device_limits: DeviceLimits,
     /// How long a device has to send the first bytes of its request, then each later piece of
     /// its body: a device that stalls is answered `408` rather than holding a task and its
-    /// buffer forever.
+    /// buffer forever. Web forms' bodies have as long, see `routes::body::bounded`.
     pub device_read_timeout: Duration,
     /// How long eSCL's `NextDocument` waits for a scan before answering 503: under the 60
     /// seconds after which URLSession-based apps give up on a request.

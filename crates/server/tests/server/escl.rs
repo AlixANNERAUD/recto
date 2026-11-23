@@ -2,14 +2,9 @@
 //! may use, or without one from the networks the operator opened, on the LAN listener only; the
 //! documents go back to the app, and every scan is logged.
 
-use std::{
-    collections::VecDeque,
-    net::IpAddr,
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::net::IpAddr;
 
-use axum::{body::Bytes, http::Method};
+use axum::http::Method;
 use chrono::Utc;
 use recto_domain::device_passwords;
 use recto_entity::scan_jobs;
@@ -714,22 +709,6 @@ async fn settings_are_read_within_bounds() {
     assert!(harness.scan.scan_requests().is_empty());
 }
 
-/// A body that sends `chunks`, then nothing, ever: a client that stalls.
-struct Stalled {
-    chunks: VecDeque<Bytes>,
-}
-
-impl futures_core::Stream for Stalled {
-    type Item = Result<Bytes, std::io::Error>;
-
-    fn poll_next(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.chunks.pop_front() {
-            Some(chunk) => Poll::Ready(Some(Ok(chunk))),
-            None => Poll::Pending,
-        }
-    }
-}
-
 #[tokio::test]
 async fn stalled_settings_time_out() {
     let harness = Harness::with(Setup {
@@ -740,13 +719,8 @@ async fn stalled_settings_time_out() {
     let alice = harness.local_user("alice", ALICE_PASSWORD).await;
     let secret = device_secret(&harness, alice).await;
     let settings = settings("Platen", "image/png");
-    for chunks in [
-        vec![],
-        vec![Bytes::copy_from_slice(&settings.as_bytes()[..100])],
-    ] {
-        let body = Body::from_stream(Stalled {
-            chunks: chunks.into(),
-        });
+    for chunks in [&[][..], &[&settings.as_bytes()[..100]]] {
+        let body = stalled(chunks);
         let request = from_address(
             escl_request(
                 Method::POST,

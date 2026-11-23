@@ -30,6 +30,8 @@ coded! {
         CountingBusy = "counting_busy",
         /// A held job is no longer waiting: released, deleted or expired.
         HeldGone = "held_gone",
+        /// The user is already sending as many documents as they may at once.
+        UploadsBusy = "uploads_busy",
     }
 }
 
@@ -79,6 +81,9 @@ impl Refusal {
                 embedded_i18n::t!("print.errors.counting_busy", locale = locale)
             }
             Refusal::HeldGone => embedded_i18n::t!("print.errors.held_gone", locale = locale),
+            Refusal::UploadsBusy => {
+                embedded_i18n::t!("print.errors.uploads_busy", locale = locale)
+            }
         }
         .to_string()
     }

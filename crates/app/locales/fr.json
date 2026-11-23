@@ -562,7 +562,8 @@
       "quota_rule": "Cette impression demande plus qu’il ne vous reste de « {rule} » : {left}.",
       "uncountable": "recto n’a pas pu compter les pages de ce PDF, et vos quotas comptent les pages. Enregistrez-le de nouveau en PDF et réessayez.",
       "counting_busy": "recto est occupé à compter les pages d’autres documents, et vos quotas comptent les pages. Réessayez dans un instant.",
-      "held_gone": "Ce document n’attend plus : il a été imprimé, supprimé, ou il a expiré."
+      "held_gone": "Ce document n’attend plus : il a été imprimé, supprimé, ou il a expiré.",
+      "uploads_busy": "Vous envoyez déjà deux documents, depuis cette page ou vos appareils. Réessayez une fois l’un d’eux envoyé."
     },
     "left": {
       "title": "Ce qu’il vous reste"

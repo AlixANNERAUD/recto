@@ -62,7 +62,7 @@ use recto_printing::{
 };
 use url::Url;
 
-use super::body::{self, Unread, fill};
+use super::body::{self, DOCUMENT_DEADLINE_FACTOR, Unread, fill};
 use super::held::release_held;
 use super::print::{Choices, FORM_SLACK, Rejected, Submitted, job_name};
 use crate::{
@@ -101,11 +101,6 @@ struct IppState {
 /// The largest body of a request without a document, or without credentials: only
 /// Get-Printer-Attributes is answered without them, and it carries no document.
 const SMALL_BODY: usize = FORM_SLACK;
-
-/// How many times the device read timeout a request carrying a document may take in all: 10
-/// minutes with the 30 seconds default, about 85 kB/s for a 50 MiB document. A request without
-/// one must arrive within the read timeout itself.
-const DOCUMENT_DEADLINE_FACTOR: u32 = 20;
 
 /// The operations that carry a document: Print-Job and Send-Document.
 const DOCUMENT_OPERATIONS: [u16; 2] = [0x02, 0x06];

@@ -7,6 +7,7 @@
 //! any database failure refuses the job: quotas fail closed. Without rules, the ledger is best
 //! effort and never stops printing.
 
+use crate::device_auth::Uploads;
 use axum::{
     Extension,
     body::Bytes,
@@ -44,17 +45,26 @@ const MAX_JOB_NAME: usize = 255;
 /// `page_ranges`. Answers `303 /jobs?submitted=<id>`, with `&over=<rule id>,…` when the job went
 /// over soft quota rules, `303 /?error=quota&rule=<id>` when a hard rule refused it, or
 /// `303 /?error=<code>`.
+///
+/// A user sends at most [`Uploads::PER_USER`] documents at once, from this form and their devices
+/// together: each is in memory until it is printed, and one stolen session must not fill it.
 pub async fn submit(
     State(state): State<AppState>,
     Extension(user): Extension<User>,
+    Extension(uploads): Extension<Uploads>,
     multipart: Result<Multipart, axum::extract::multipart::MultipartRejection>,
 ) -> Redirect {
-    let submitted = match multipart {
-        Ok(multipart) => submit_form(&state, &user, multipart).await,
-        Err(rejection) => {
+    let submitted = match (multipart, uploads.begin(user.id)) {
+        (Err(rejection), _) => {
             tracing::warn!(%rejection, "unreadable print form");
             Err(Refusal::InvalidForm.into())
         }
+        (Ok(_), None) => {
+            tracing::info!(user = user.username, "a third document at once refused");
+            Err(Refusal::UploadsBusy.into())
+        }
+        // Kept until the job is printed or refused: the document is in memory until then.
+        (Ok(multipart), Some(_upload)) => submit_form(&state, &user, multipart).await,
     };
     match &submitted {
         Ok(Submitted { job, over }) if over.is_empty() => {

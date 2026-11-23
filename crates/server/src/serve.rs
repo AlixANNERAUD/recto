@@ -7,7 +7,7 @@ use std::{
 };
 
 use axum::{
-    Router,
+    Extension, Router,
     body::Body,
     extract::{DefaultBodyLimit, Request, State},
     http::{HeaderValue, Method, StatusCode, header},
@@ -46,7 +46,8 @@ use crate::{
     device_auth::{self, Listener},
     dnssd, lan,
     routes::{
-        administration, auth, devices, escl, held as held_routes, ipp, password, print, pwa, scan,
+        administration, auth, body, devices, escl, held as held_routes, ipp, password, print, pwa,
+        scan,
     },
     session, state,
 };
@@ -119,7 +120,10 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
     let interface = Router::new()
         .route(
             "/print",
-            post(print::submit).layer(DefaultBodyLimit::max(body_limit)),
+            post(print::submit).layer((
+                DefaultBodyLimit::max(body_limit),
+                Extension(auth.device_limits.uploads.clone()),
+            )),
         )
         .route("/jobs/{id}/cancel", post(print::cancel))
         .route("/scan/results/{id}", get(scan::show))
@@ -149,6 +153,10 @@ pub fn router(state: AppState, auth: AuthState) -> Router {
         .layer(middleware::from_fn_with_state(
             (AllowedOrigin::new(&auth.public_url), branding),
             refuse_cross_site,
+        ))
+        .layer(middleware::from_fn_with_state(
+            auth.device_read_timeout,
+            body::bounded,
         ));
     // The pages load these files on every visit. Outside the session, they cost no session read,
     // user lookup and session write each; only reads route to them, which the cross-site check

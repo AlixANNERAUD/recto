@@ -1155,28 +1155,6 @@ async fn direct_printing_needs_os_integration() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
-/// A body that sends `chunks`, then nothing, ever: a device that stalls.
-struct Stalled {
-    chunks: VecDeque<Bytes>,
-}
-
-impl futures_core::Stream for Stalled {
-    type Item = Result<Bytes, std::io::Error>;
-
-    fn poll_next(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.chunks.pop_front() {
-            Some(chunk) => Poll::Ready(Some(Ok(chunk))),
-            None => Poll::Pending,
-        }
-    }
-}
-
-fn stalled(chunks: &[&[u8]]) -> Body {
-    Body::from_stream(Stalled {
-        chunks: chunks.iter().map(|c| Bytes::copy_from_slice(c)).collect(),
-    })
-}
-
 #[tokio::test]
 async fn an_unauthenticated_body_stays_small() {
     let harness = Harness::new().await;
@@ -1332,34 +1310,10 @@ async fn a_stalled_body_times_out() {
 
 /// A body whose 8-byte header comes at once, then the rest one byte at a time, each well
 /// within the read timeout of the piece before.
-struct Trickle {
-    bytes: VecDeque<Bytes>,
-    every: std::time::Duration,
-    next: Pin<Box<tokio::time::Sleep>>,
-}
-
-impl futures_core::Stream for Trickle {
-    type Item = Result<Bytes, std::io::Error>;
-
-    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.next.as_mut().poll(context).is_pending() {
-            return Poll::Pending;
-        }
-        let every = self.every;
-        let deadline = tokio::time::Instant::now() + every;
-        self.next.as_mut().reset(deadline);
-        Poll::Ready(self.bytes.pop_front().map(Ok))
-    }
-}
-
 fn trickle(bytes: &[u8], every: std::time::Duration) -> Body {
     let mut pieces = VecDeque::from([Bytes::copy_from_slice(&bytes[..8])]);
     pieces.extend(bytes[8..].iter().map(|&byte| Bytes::from(vec![byte])));
-    Body::from_stream(Trickle {
-        bytes: pieces,
-        every,
-        next: Box::pin(tokio::time::sleep(std::time::Duration::ZERO)),
-    })
+    trickled(pieces, every)
 }
 
 #[tokio::test]

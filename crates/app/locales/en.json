@@ -562,7 +562,8 @@
       "quota_rule": "This job needs more than you have left of “{rule}”: {left}.",
       "uncountable": "recto could not count the pages of this PDF, and your quotas count pages. Save it again as PDF and retry.",
       "counting_busy": "recto is busy counting the pages of other documents, and your quotas count pages. Try again in a moment.",
-      "held_gone": "That document is no longer waiting: it was printed, deleted or it expired."
+      "held_gone": "That document is no longer waiting: it was printed, deleted or it expired.",
+      "uploads_busy": "You are already sending two documents, from this page or your devices. Try again once one of them is sent."
     },
     "left": {
       "title": "What you have left"

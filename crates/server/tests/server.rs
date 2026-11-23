@@ -3,11 +3,19 @@
 //! by writing their session straight into the router's session store; no route of the server can
 //! do that.
 
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::VecDeque,
+    net::SocketAddr,
+    path::PathBuf,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 use axum::{
     Router,
-    body::Body,
+    body::{Body, Bytes},
     extract::ConnectInfo,
     http::{HeaderMap, Request, Response, StatusCode, header},
 };
@@ -500,6 +508,65 @@ async fn print(
         .await
 }
 
+/// A body that sends `chunks`, then nothing, ever: a client that stalls.
+struct Stalled {
+    chunks: VecDeque<Bytes>,
+}
+
+impl futures_core::Stream for Stalled {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.chunks.pop_front() {
+            Some(chunk) => Poll::Ready(Some(Ok(chunk))),
+            None => Poll::Pending,
+        }
+    }
+}
+
+fn stalled(chunks: &[&[u8]]) -> Body {
+    Body::from_stream(Stalled {
+        chunks: chunks.iter().map(|c| Bytes::copy_from_slice(c)).collect(),
+    })
+}
+
+/// A body sending `pieces` one at a time, `every` apart.
+struct Trickle {
+    pieces: VecDeque<Bytes>,
+    every: Duration,
+    next: Pin<Box<tokio::time::Sleep>>,
+}
+
+impl futures_core::Stream for Trickle {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.next.as_mut().poll(context).is_pending() {
+            return Poll::Pending;
+        }
+        let every = self.every;
+        let deadline = tokio::time::Instant::now() + every;
+        self.next.as_mut().reset(deadline);
+        Poll::Ready(self.pieces.pop_front().map(Ok))
+    }
+}
+
+fn trickled(pieces: VecDeque<Bytes>, every: Duration) -> Body {
+    Body::from_stream(Trickle {
+        pieces,
+        every,
+        next: Box::pin(tokio::time::sleep(Duration::ZERO)),
+    })
+}
+
+/// The print form of `fields` and `file`, its body replaced by `body`.
+fn print_request(cookie: &str, file: &[u8], body: impl FnOnce(&[u8]) -> Body) -> Request<Body> {
+    let (content_type, form) = multipart(&[("printer", "office")], Some(("minutes.pdf", file)));
+    let mut request = post("/print", cookie, Some(&content_type), Vec::new());
+    *request.body_mut() = body(&form);
+    request
+}
+
 fn assert_redirect(response: &Response<Body>, expected: &str) {
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     assert_eq!(location(response), expected);
@@ -907,6 +974,108 @@ async fn print_refuses_oversized_upload() {
 
     let response = harness.send(page("/?error=too_large", Some(&cookie))).await;
     assert!(text(response).await.contains("The file is too large"));
+}
+
+#[tokio::test]
+async fn a_stalled_print_form_runs_out_of_time() {
+    let harness = Harness::with(Setup {
+        device_read_timeout: Duration::from_millis(200),
+        ..Setup::default()
+    })
+    .await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let request = print_request(&cookie, PDF, |form| stalled(&[&form[..100]]));
+    let response = tokio::time::timeout(Duration::from_secs(10), harness.send(request))
+        .await
+        .expect("recto stops waiting");
+    assert_redirect(&response, "/?error=invalid_form");
+    assert!(harness.print.submitted().is_empty());
+}
+
+#[tokio::test]
+async fn a_trickling_form_runs_out_of_time() {
+    let harness = Harness::with(Setup {
+        device_read_timeout: Duration::from_millis(300),
+        ..Setup::default()
+    })
+    .await;
+    harness.local_user("alice", ALICE_PASSWORD).await;
+    // Each byte comes 100 ms after the last, so no single wait is too long: the whole sign-in
+    // form must still arrive within the read timeout, here 300 ms instead of 30 seconds.
+    let mut request = form(
+        "/sign-in",
+        None,
+        &[("login", "alice"), ("password", ALICE_PASSWORD)],
+    );
+    let bytes = axum::body::to_bytes(std::mem::take(request.body_mut()), usize::MAX)
+        .await
+        .unwrap();
+    let pieces = bytes.iter().map(|&byte| Bytes::from(vec![byte])).collect();
+    *request.body_mut() = trickled(pieces, Duration::from_millis(100));
+    let started = std::time::Instant::now();
+    let response = tokio::time::timeout(Duration::from_secs(5), harness.send(request))
+        .await
+        .expect("recto stops waiting");
+    assert!(response.status().is_client_error(), "{}", response.status());
+    assert!(session_cookie(response.headers()).is_none());
+    assert!(started.elapsed() < Duration::from_secs(2));
+
+    // The print form, which carries a document, has 20 times as long.
+    let cookie = harness.sign_in("bob-subject", "bob").await;
+    let request = print_request(&cookie, PDF, |form| {
+        trickled(
+            form.chunks(form.len() / 8 + 1)
+                .map(Bytes::copy_from_slice)
+                .collect(),
+            Duration::from_millis(100),
+        )
+    });
+    let response = harness.send(request).await;
+    assert!(location(&response).starts_with("/jobs?submitted="));
+}
+
+#[tokio::test]
+async fn one_user_prints_two_documents_at_a_time() {
+    let harness = Harness::new().await;
+    let alice = harness.sign_in("alice-subject", "alice").await;
+    // Two documents of alice's still arriving.
+    let mut sending = Vec::new();
+    for _ in 0..2 {
+        let request = print_request(&alice, PDF, |form| stalled(&[&form[..100]]));
+        let router = harness.router.clone();
+        sending.push(tokio::spawn(async move {
+            router.oneshot(from_peer(request)).await.unwrap()
+        }));
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // A third is refused before it is read; other users are not held up.
+    let response = harness
+        .send(print_request(&alice, PDF, |form| Body::from(form.to_vec())))
+        .await;
+    assert_redirect(&response, "/?error=uploads_busy");
+    let response = harness
+        .send(page("/?error=uploads_busy", Some(&alice)))
+        .await;
+    assert!(
+        text(response)
+            .await
+            .contains("already sending two documents")
+    );
+    let bob = harness.sign_in("bob-subject", "bob").await;
+    let response = harness
+        .send(print_request(&bob, PDF, |form| Body::from(form.to_vec())))
+        .await;
+    assert!(location(&response).starts_with("/jobs?submitted="));
+
+    // Once one ends, alice prints again.
+    sending.remove(0).abort();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let response = harness
+        .send(print_request(&alice, PDF, |form| Body::from(form.to_vec())))
+        .await;
+    assert!(location(&response).starts_with("/jobs?submitted="));
+    assert_eq!(harness.print.submitted().len(), 2);
 }
 
 #[tokio::test]

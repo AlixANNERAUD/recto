@@ -183,7 +183,16 @@ async fn many_racing_jobs_never_go_over() {
     let cookie = harness.sign_in("alice-subject", "alice").await;
     harness.rule(monthly_pages(3, Enforcement::Hard)).await;
 
-    let job = || harness.print_pages(&cookie, 1);
+    // A user sends two documents at once: the others are told to try again, and do.
+    let job = || async {
+        loop {
+            let response = harness.print_pages(&cookie, 1).await;
+            if location(&response) != "/?error=uploads_busy" {
+                return response;
+            }
+            tokio::task::yield_now().await;
+        }
+    };
     let (a, b, c, d, e, f) = tokio::join!(job(), job(), job(), job(), job(), job());
     let printed = [a, b, c, d, e, f]
         .iter()

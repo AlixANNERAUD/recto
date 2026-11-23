@@ -35,6 +35,7 @@ only.
 | info | `document sent to the printer` | `user`, `job` |
 | info | `document sent to the printer over a soft quota` | `user`, `job`, `rules` (the rule ids, comma-separated) |
 | info | `print refused by a quota` | `user`, `rule` |
+| info | `a third document at once refused`: the user was already sending two documents, from the Print page or their devices | `user`, and `device_password_id` from a device |
 | info | `job canceled` | `user`, `job` |
 | info | `device access changed`, `device access forgotten` | `by`, `device` |
 | info | `device password created` | `user`, `device_password_id`, `device_name` |

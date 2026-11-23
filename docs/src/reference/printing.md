@@ -12,6 +12,12 @@ The file name and the type the browser claims are not trusted: recto reads the s
 Any other file is refused with **Only PDF, JPEG and PNG files can be printed.** The largest file
 is `RECTO_MAX_UPLOAD_SIZE`, 50 MiB by default.
 
+A person sends at most two documents at once, from the Print page and their computers and phones
+together; a third is refused with **You are already sending two documents** until one of them is
+sent. A file must arrive within 10 minutes, each piece of it within 30 seconds of the last, or it
+is refused as an unreadable form. Every other form, the sign-in form included, must arrive within
+30 seconds.
+
 ## Printing from computers and phones
 
 With OS integration on (`RECTO_OS_INTEGRATION`, the default), recto is also a printer that

@@ -1,14 +1,45 @@
-//! Reading request bodies that devices send, bounded in size and in time, whatever they
-//! announce: chunked bodies announce nothing, and a client trickling bytes must not hold a
-//! request open.
+//! Reading request bodies bounded in size and in time, whatever they announce: chunked bodies
+//! announce nothing, and a client trickling bytes must not hold a request open. Devices' bodies
+//! are read with [`fill`] and [`read_all`]; the web's go through [`bounded`].
 
 use std::{future::poll_fn, pin::Pin, time::Duration};
 
 use axum::{
     body::{Body, HttpBody},
+    extract::{Request, State},
     http::{HeaderMap, StatusCode, header},
+    middleware::Next,
     response::{IntoResponse, Response},
 };
+use tower_http::timeout::{DeadlineBody, TimeoutBody};
+
+/// How many times the read timeout a request carrying a document may take in all: 10 minutes
+/// with the 30 seconds default, about 85 kB/s for a 50 MiB document. A request without one must
+/// arrive within the read timeout itself.
+pub(crate) const DOCUMENT_DEADLINE_FACTOR: u32 = 20;
+
+/// The path of the print form, the one web form that carries a document.
+const PRINT_FORM: &str = "/print";
+
+/// Bounds the body of a web request in time, as devices' are: each piece must arrive within
+/// `timeout` of the last, and the whole body within `timeout`, or [`DOCUMENT_DEADLINE_FACTOR`]
+/// times it for the print form. A body that runs out of time fails to read, which the route
+/// answers as any unreadable body. Without this, a few slow posts, signed in or not (the
+/// sign-in form), would hold connections and their buffers for as long as they trickle.
+pub(crate) async fn bounded(
+    State(timeout): State<Duration>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let deadline = if request.uri().path() == PRINT_FORM {
+        timeout * DOCUMENT_DEADLINE_FACTOR
+    } else {
+        timeout
+    };
+    let request =
+        request.map(|body| Body::new(DeadlineBody::new(deadline, TimeoutBody::new(timeout, body))));
+    next.run(request).await
+}
 
 /// Whether the body announces more than `limit` bytes, so it can be refused before any is read.
 pub(crate) fn announced_over(headers: &HeaderMap, limit: usize) -> bool {
