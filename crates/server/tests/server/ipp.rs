@@ -1208,6 +1208,71 @@ async fn a_stalled_body_times_out() {
     );
 }
 
+/// A body whose 8-byte header comes at once, then the rest one byte at a time, each well
+/// within the read timeout of the piece before.
+struct Trickle {
+    bytes: VecDeque<Bytes>,
+    every: std::time::Duration,
+    next: Pin<Box<tokio::time::Sleep>>,
+}
+
+impl futures_core::Stream for Trickle {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.next.as_mut().poll(context).is_pending() {
+            return Poll::Pending;
+        }
+        let every = self.every;
+        let deadline = tokio::time::Instant::now() + every;
+        self.next.as_mut().reset(deadline);
+        Poll::Ready(self.bytes.pop_front().map(Ok))
+    }
+}
+
+fn trickle(bytes: &[u8], every: std::time::Duration) -> Body {
+    let mut pieces = VecDeque::from([Bytes::copy_from_slice(&bytes[..8])]);
+    pieces.extend(bytes[8..].iter().map(|&byte| Bytes::from(vec![byte])));
+    Body::from_stream(Trickle {
+        bytes: pieces,
+        every,
+        next: Box::pin(tokio::time::sleep(std::time::Duration::ZERO)),
+    })
+}
+
+#[tokio::test]
+async fn a_trickling_body_runs_out_of_time() {
+    let harness = Harness::with(Setup {
+        device_read_timeout: std::time::Duration::from_millis(300),
+        ..Setup::default()
+    })
+    .await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let laptop = device(&harness, alice, "Laptop").await;
+    // Each byte comes 100 ms after the last, so no single wait is too long: the whole request
+    // must still arrive within the read timeout, here 300 ms instead of 30 seconds.
+    for (secret, operation) in [
+        (None, IppOperation::GetPrinterAttributes),
+        (Some(laptop.secret.as_str()), IppOperation::GetJobs),
+    ] {
+        let sent = request(operation).to_bytes();
+        assert!(sent.len() > 20);
+        let started = std::time::Instant::now();
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            harness.send(post_ipp(
+                "/ipp/print",
+                secret,
+                trickle(&sent, std::time::Duration::from_millis(100)),
+            )),
+        )
+        .await
+        .expect("recto stops waiting");
+        assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+}
+
 #[tokio::test]
 async fn one_user_sends_two_documents_at_a_time() {
     let harness = Harness::new().await;

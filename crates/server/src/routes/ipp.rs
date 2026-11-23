@@ -23,8 +23,9 @@
 //!
 //! Reading a body is bounded in size, time and number: `RECTO_MAX_UPLOAD_SIZE` for a document
 //! (64 KiB for any other operation, and without credentials), the device read timeout for
-//! the header and for each later piece of the body (`408` past it), and two documents per user
-//! at once (`server-error-busy` for a third, before its document is read).
+//! the header, for each later piece of the body and for a whole request without a document,
+//! 20 times that for a whole request with one (`408` past any of them), and two documents per
+//! user at once (`server-error-busy` for a third, before its document is read).
 //!
 //! Log lines name the device password's id, never the path, which may hold the secret.
 
@@ -102,6 +103,11 @@ struct IppState {
 /// The largest body of a request without a document, or without credentials: only
 /// Get-Printer-Attributes is answered without them, and it carries no document.
 const SMALL_BODY: usize = FORM_SLACK;
+
+/// How many times the device read timeout a request carrying a document may take in all: 10
+/// minutes with the 30 seconds default, about 85 kB/s for a 50 MiB document. A request without
+/// one must arrive within the read timeout itself.
+const DOCUMENT_DEADLINE_FACTOR: u32 = 20;
 
 /// The operations that carry a document: Print-Job and Send-Document.
 const DOCUMENT_OPERATIONS: [u16; 2] = [0x02, 0x06];
@@ -237,6 +243,7 @@ async fn serve(state: IppState, request: Request, secret: Option<String>) -> Res
     };
     let mut buffer = Vec::new();
     let timeout = state.read_timeout;
+    let started = tokio::time::Instant::now();
     // The header as a whole within the timeout, however it is split.
     let header = tokio::time::timeout(timeout, fill(&mut body, &mut buffer, 8, limit, timeout));
     match header.await {
@@ -280,8 +287,19 @@ async fn serve(state: IppState, request: Request, secret: Option<String>) -> Res
         },
         _ => None,
     };
-    if let Err(unread) = fill(&mut body, &mut buffer, usize::MAX, limit, timeout).await {
-        return unread.into_response();
+    // Each piece within the timeout is not enough: one byte every few seconds would keep the
+    // request open for weeks. The whole request must also arrive within a deadline.
+    let deadline = started
+        + if document {
+            timeout * DOCUMENT_DEADLINE_FACTOR
+        } else {
+            timeout
+        };
+    let rest = fill(&mut body, &mut buffer, usize::MAX, limit, timeout);
+    match tokio::time::timeout_at(deadline, rest).await {
+        Ok(Ok(())) => {}
+        Ok(Err(unread)) => return unread.into_response(),
+        Err(_) => return Unread::TimedOut.into_response(),
     }
     let incoming = match printer::decode(Bytes::from(buffer)) {
         Ok(incoming) => incoming,

@@ -33,7 +33,9 @@ recto must be at the root of its address: `https://recto.example.org` works,
   [Count sign-in attempts per person](#count-sign-in-attempts-per-person)).
 - Optionally, check `GET /health` for a `200` answer.
 
-recto uses no WebSockets in production, so no upgrade rules are needed.
+recto uses no WebSockets in production, so no upgrade rules are needed. It speaks HTTP/1.1 to
+the proxy, not HTTP/2 without TLS (h2c), and closes a connection on which no request has
+arrived for 30 seconds, which proxies handle by opening a new one.
 
 The example files are in [`examples/proxy`](https://github.com/AlixANNERAUD/recto/tree/main/examples/proxy).
 Replace `recto.example.org` in them with your host name.

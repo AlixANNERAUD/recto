@@ -106,7 +106,7 @@ Send-Document); a held job is complete for the device, and the IPP answer to can
 | A third document of the same person while two are still arriving | `server-error-busy` |
 | A request without a document, or without credentials (only printer attributes are answered without), over 64 KiB | HTTP `413` |
 | Collections nested more than 4 deep, more than 1,000 attributes, or more than 64 values for one attribute | `client-error-bad-request` |
-| The first bytes of a request, or a later piece of its body, not arriving within 30 seconds | HTTP `408` |
+| The first bytes of a request, or a later piece of its body, not arriving within 30 seconds; a whole request without a document taking more than 30 seconds, or one with a document more than 10 minutes | HTTP `408` |
 | Empty document | `client-error-bad-request` |
 | Document over `RECTO_MAX_UPLOAD_SIZE` | `client-error-request-entity-too-large` |
 | A job of another device, or none | `client-error-not-found` |

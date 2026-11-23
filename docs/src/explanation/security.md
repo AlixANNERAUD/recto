@@ -134,7 +134,11 @@ address a bare `404`. Device passwords work there as behind the proxy, and the w
 toward the same limit, by the connection's address: forwarded headers are never read there,
 since devices reach it without a proxy and a header would be the device's own claim. A device
 has 10 seconds to complete its handshake, each in a task of its own, so one that connects and
-says nothing holds nothing up.
+says nothing holds nothing up. One address may run 8 handshakes and keep 32 connections at
+once; past that, its new connections are closed, so one host on the network cannot take every
+place. On both listeners a connection whose next request headers do not arrive within 30
+seconds is closed, and a request without a document must arrive whole within 30 seconds, one
+with a document within 10 minutes.
 
 Its certificate is the operator's (`RECTO_LAN_TLS_CERTIFICATE`), or one recto makes itself at
 the first start and keeps in `RECTO_DATA_DIR/lan-tls/`, readable by recto alone. No device

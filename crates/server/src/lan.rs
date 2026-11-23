@@ -8,9 +8,13 @@
 //!
 //! The listener itself ([`TlsListener`], [`serve`]) runs each handshake in a task of its own,
 //! under [`HANDSHAKE_TIMEOUT`]: a device that connects and says nothing holds only its own
-//! connection, never the others'.
+//! connection, never the others'. Devices connect directly, without a proxy in front, so each
+//! address has a few handshakes and connections at most, and a connection whose next request
+//! does not arrive within [`HEADER_READ_TIMEOUT`](crate::connections::HEADER_READ_TIMEOUT)
+//! is closed.
 
 use std::{
+    collections::HashMap,
     fmt::Write as _,
     fs::{self, DirBuilder, OpenOptions},
     future::Future,
@@ -18,10 +22,12 @@ use std::{
     net::{IpAddr, SocketAddr},
     os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
-    sync::Arc,
+    pin::Pin,
+    sync::{Arc, Mutex, PoisonError},
+    task::{Context, Poll},
 };
 
-use axum::{Router, serve::ListenerExt as _};
+use axum::Router;
 use chrono::{Datelike as _, Duration, Utc};
 use rcgen::{
     CertificateParams, DnType, ExtendedKeyUsagePurpose, KeyPair, PKCS_ECDSA_P256_SHA256,
@@ -33,6 +39,7 @@ use rustls::{
 };
 use sha2::{Digest as _, Sha256};
 use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
     net::{TcpListener, TcpStream},
     sync::{Semaphore, mpsc},
 };
@@ -285,10 +292,117 @@ pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// How many handshakes may run at once; past that, connections wait in the kernel's backlog.
 const HANDSHAKES: usize = 128;
 
+/// How many handshakes one address may run at once; past that, its connections are closed.
+const HANDSHAKES_PER_ADDRESS: usize = 8;
+
+/// How many connections one address may keep open, handshakes included; past that, its new
+/// connections are closed.
+const CONNECTIONS_PER_ADDRESS: usize = 32;
+
+/// The handshakes and connections of each address, which [`Place`]s count.
+#[derive(Clone, Default)]
+struct Peers(Arc<Mutex<HashMap<IpAddr, Counts>>>);
+
+#[derive(Default)]
+struct Counts {
+    handshakes: usize,
+    connections: usize,
+}
+
+impl Peers {
+    /// A connection and a handshake for `address`, or `None` when it has its share of either.
+    fn admit(&self, address: IpAddr) -> Option<(Place, Place)> {
+        let mut peers = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let counts = peers.entry(address).or_default();
+        if counts.connections >= CONNECTIONS_PER_ADDRESS
+            || counts.handshakes >= HANDSHAKES_PER_ADDRESS
+        {
+            return None;
+        }
+        counts.connections += 1;
+        counts.handshakes += 1;
+        let place = |handshake| Place {
+            peers: self.clone(),
+            address,
+            handshake,
+        };
+        Some((place(false), place(true)))
+    }
+}
+
+/// A connection or a handshake of one address, given back when dropped.
+struct Place {
+    peers: Peers,
+    address: IpAddr,
+    handshake: bool,
+}
+
+impl Drop for Place {
+    fn drop(&mut self) {
+        let mut peers = self.peers.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(counts) = peers.get_mut(&self.address) {
+            if self.handshake {
+                counts.handshakes -= 1;
+            } else {
+                counts.connections -= 1;
+            }
+            if counts.handshakes == 0 && counts.connections == 0 {
+                peers.remove(&self.address);
+            }
+        }
+    }
+}
+
+/// A TLS connection of the LAN listener, which holds its address's place while it is open.
+pub struct LanConnection {
+    stream: TlsStream<TcpStream>,
+    _place: Place,
+}
+
+impl AsyncRead for LanConnection {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_read(context, buffer)
+    }
+}
+
+impl AsyncWrite for LanConnection {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().stream).poll_write(context, buffer)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffers: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().stream).poll_write_vectored(context, buffers)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.stream.is_write_vectored()
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_flush(context)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_shutdown(context)
+    }
+}
+
 /// TLS connections, ready for HTTP: an axum listener over a TCP listener, whose handshakes run
 /// in tasks of their own and reach [`accept`](axum::serve::Listener::accept) once complete.
 pub struct TlsListener {
-    ready: mpsc::Receiver<(TlsStream<TcpStream>, SocketAddr)>,
+    ready: mpsc::Receiver<(LanConnection, SocketAddr)>,
     local: SocketAddr,
 }
 
@@ -314,9 +428,10 @@ async fn accept_connections(
     tcp: TcpListener,
     acceptor: TlsAcceptor,
     handshake_timeout: std::time::Duration,
-    ready: mpsc::Sender<(TlsStream<TcpStream>, SocketAddr)>,
+    ready: mpsc::Sender<(LanConnection, SocketAddr)>,
 ) {
     let handshakes = Arc::new(Semaphore::new(HANDSHAKES));
+    let peers = Peers::default();
     loop {
         let permit = tokio::select! {
             permit = Arc::clone(&handshakes).acquire_owned() => permit,
@@ -336,13 +451,26 @@ async fn accept_connections(
             },
             () = ready.closed() => return,
         };
+        // Counted by address alone, and an IPv4 client on a dual-stack socket by its IPv4 one.
+        let Some((place, handshake)) = peers.admit(peer.ip().to_canonical()) else {
+            tracing::debug!(%peer, "LAN connection refused: too many from this address");
+            continue;
+        };
+        // Small IPP and eSCL answers would otherwise wait for an acknowledgement.
+        let _ = stream.set_nodelay(true);
         let acceptor = acceptor.clone();
         let ready = ready.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            match tokio::time::timeout(handshake_timeout, acceptor.accept(stream)).await {
+            let accepted = tokio::time::timeout(handshake_timeout, acceptor.accept(stream)).await;
+            drop(handshake);
+            match accepted {
                 Ok(Ok(stream)) => {
-                    let _ = ready.send((stream, peer)).await;
+                    let connection = LanConnection {
+                        stream,
+                        _place: place,
+                    };
+                    let _ = ready.send((connection, peer)).await;
                 }
                 // Scanners on the LAN probe ports and give up halfway: not worth a warning.
                 Ok(Err(error)) => tracing::debug!(%error, %peer, "LAN TLS handshake failed"),
@@ -353,7 +481,7 @@ async fn accept_connections(
 }
 
 impl axum::serve::Listener for TlsListener {
-    type Io = TlsStream<TcpStream>;
+    type Io = LanConnection;
     type Addr = SocketAddr;
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
@@ -376,16 +504,12 @@ pub async fn serve(
     router: Router,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
-    // axum hands the peer address to custom listeners only through `tap_io`; it also turns
-    // Nagle off, as small IPP and eSCL answers would otherwise wait for an acknowledgement.
-    let listener = listener.tap_io(|stream| {
-        let _ = stream.get_ref().0.set_nodelay(true);
-    });
-    axum::serve(
+    crate::connections::serve(
         listener,
-        router.into_make_service_with_connect_info::<SocketAddr>(),
+        router,
+        crate::connections::HEADER_READ_TIMEOUT,
+        shutdown,
     )
-    .with_graceful_shutdown(shutdown)
     .await
 }
 

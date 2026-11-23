@@ -4127,6 +4127,8 @@ dependencies = [
  "clap",
  "data-encoding",
  "futures-core",
+ "hyper",
+ "hyper-util",
  "if-addrs",
  "image",
  "ipnet",

@@ -165,9 +165,12 @@ fn the_fingerprint_is_written_like_openssl_s() {
     }));
 }
 
-/// One HTTP request over TLS to `address`, trusting `trusted`; the whole answer.
-async fn get_over_tls(address: std::net::SocketAddr, trusted: &[u8]) -> String {
-    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+/// A TLS connection to `address` from `from`, trusting `trusted`.
+async fn connect_tls(
+    address: std::net::SocketAddr,
+    trusted: &[u8],
+    from: IpAddr,
+) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
     let mut roots = RootCertStore::empty();
     roots.add(CertificateDer::from(trusted.to_vec())).unwrap();
     let client =
@@ -176,12 +179,30 @@ async fn get_over_tls(address: std::net::SocketAddr, trusted: &[u8]) -> String {
             .unwrap()
             .with_root_certificates(roots)
             .with_no_client_auth();
-    let tcp = tokio::net::TcpStream::connect(address).await.unwrap();
+    let tcp = connect_from(address, from).await;
     let name = ServerName::try_from("127.0.0.1").unwrap();
-    let mut stream = TlsConnector::from(Arc::new(client))
+    TlsConnector::from(Arc::new(client))
         .connect(name, tcp)
         .await
-        .unwrap();
+        .unwrap()
+}
+
+/// A TCP connection to `address` from `from`: any address of 127.0.0.0/8 is loopback on Linux,
+/// which makes a second client.
+async fn connect_from(address: std::net::SocketAddr, from: IpAddr) -> tokio::net::TcpStream {
+    let socket = tokio::net::TcpSocket::new_v4().unwrap();
+    socket.bind(std::net::SocketAddr::new(from, 0)).unwrap();
+    socket.connect(address).await.unwrap()
+}
+
+/// One HTTP request over TLS to `address`, trusting `trusted`; the whole answer.
+async fn get_over_tls(address: std::net::SocketAddr, trusted: &[u8]) -> String {
+    get_over_tls_from(address, trusted, LOOPBACK).await
+}
+
+async fn get_over_tls_from(address: std::net::SocketAddr, trusted: &[u8], from: IpAddr) -> String {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let mut stream = connect_tls(address, trusted, from).await;
     stream
         .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
         .await
@@ -189,6 +210,16 @@ async fn get_over_tls(address: std::net::SocketAddr, trusted: &[u8]) -> String {
     let mut answer = Vec::new();
     stream.read_to_end(&mut answer).await.unwrap();
     String::from_utf8(answer).unwrap()
+}
+
+/// Whether `stream` is closed within 5 seconds, without a byte.
+async fn closed_soon(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> bool {
+    use tokio::io::AsyncReadExt as _;
+    let mut byte = [0; 1];
+    matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut byte)).await,
+        Ok(Ok(0) | Err(_))
+    )
 }
 
 /// A listener on loopback answering `/` with the peer's address, and its certificate.
@@ -274,4 +305,69 @@ async fn plain_http_is_never_answered() {
     .await
     .expect("the connection is closed");
     assert!(!answer.starts_with(b"HTTP/"), "{answer:?}");
+}
+
+const SECOND_CLIENT: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
+
+#[tokio::test]
+async fn one_address_runs_eight_handshakes_at_once() {
+    let (address, der, _stop, _server, _data) = listening(std::time::Duration::from_secs(60)).await;
+    // Eight connections that never start their handshake hold all of their address's places.
+    let mut stalled = Vec::new();
+    for _ in 0..HANDSHAKES_PER_ADDRESS {
+        stalled.push(connect_from(address, LOOPBACK).await);
+    }
+    let mut ninth = connect_from(address, LOOPBACK).await;
+    assert!(
+        closed_soon(&mut ninth).await,
+        "a ninth handshake is refused"
+    );
+    // Another device is served meanwhile.
+    let answer = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        get_over_tls_from(address, &der, SECOND_CLIENT),
+    )
+    .await
+    .expect("another address is served");
+    assert!(answer.ends_with("peer 127.0.0.2"), "{answer}");
+    // Once one gives up, its place is free again.
+    drop(stalled.pop());
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let answer = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        get_over_tls(address, &der),
+    )
+    .await
+    .expect("a place is free");
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+}
+
+#[tokio::test]
+async fn one_address_keeps_thirty_two_connections() {
+    let (address, der, _stop, _server, _data) = listening(HANDSHAKE_TIMEOUT).await;
+    let mut open = Vec::new();
+    for _ in 0..CONNECTIONS_PER_ADDRESS {
+        open.push(connect_tls(address, &der, LOOPBACK).await);
+    }
+    let mut over = connect_from(address, LOOPBACK).await;
+    assert!(
+        closed_soon(&mut over).await,
+        "one connection too many is refused"
+    );
+    let answer = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        get_over_tls_from(address, &der, SECOND_CLIENT),
+    )
+    .await
+    .expect("another address is served");
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    drop(open.pop());
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let answer = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        get_over_tls(address, &der),
+    )
+    .await
+    .expect("a place is free");
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
 }

@@ -285,12 +285,14 @@ pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     }
     let listener = tokio::net::TcpListener::bind(address).await?;
     tracing::info!(%address, "listening");
-    // The peer address is what the sign-in rate limit counts attempts by.
-    axum::serve(
+    // The peer address is what the sign-in rate limit counts attempts by. The header timeout
+    // matters even behind a proxy: recto may be reachable without one on the host's network.
+    crate::connections::serve(
         listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
+        app,
+        crate::connections::HEADER_READ_TIMEOUT,
+        until(stopped),
     )
-    .with_graceful_shutdown(until(stopped))
     .await?;
     if let Some(lan_server) = lan_server {
         lan_server.await??;

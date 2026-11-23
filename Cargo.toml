@@ -64,6 +64,10 @@ openidconnect = { version = "4.1.0", default-features = false, features = ["reqw
 # Sessions live in the accounts database (crates/server/src/session_store.rs).
 tower-sessions = { version = "0.14.0", default-features = false, features = ["axum-core"] }
 tower = { version = "0.5.3", features = ["util"] }
+# Both listeners serve their connections themselves (crates/server/src/connections.rs): axum's
+# `serve` gives hyper no timer, so idle connections would never be closed.
+hyper = { version = "1.12.0", default-features = false, features = ["server", "http1"] }
+hyper-util = { version = "0.1.21", default-features = false, features = ["tokio", "server-graceful", "http1"] }
 # rustls lets PostgreSQL connections use TLS (`sslmode` in the URL), as managed databases require.
 sea-orm = { version = "2.0.4", default-features = false, features = ["sqlx-sqlite", "sqlx-postgres", "runtime-tokio-rustls", "macros", "with-chrono", "with-json"] }
 sea-orm-migration = { version = "2.0.4", default-features = false, features = ["sqlx-sqlite", "sqlx-postgres", "runtime-tokio-rustls"] }
