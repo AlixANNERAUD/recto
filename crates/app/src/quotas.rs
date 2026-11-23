@@ -80,7 +80,7 @@ impl Metric {
     /// A limit as a form field shows it: an amount in the currency for cost.
     pub fn field(self, limit: i64, currency: &Currency) -> String {
         match self {
-            Metric::Cost => currency.amount(limit),
+            Metric::Cost => currency.amount_in(limit, crate::i18n::locale()),
             _ => limit.to_string(),
         }
     }

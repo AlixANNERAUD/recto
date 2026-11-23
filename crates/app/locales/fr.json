@@ -43,8 +43,10 @@
     },
     "utc": "{time} UTC"
   },
+  "number": {
+    "decimal_separator": ","
+  },
   "size": {
-    "decimal_separator": ",",
     "megabytes": "{value} Mo",
     "kilobytes": "{value} Ko"
   },

@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::{Locale, locale};
+
 /// The currency prices and costs are shown in. Amounts are stored in minor units (cents); this
 /// only decides how they read, and never converts anything.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,14 +49,31 @@ impl Currency {
         Self { code, decimals }
     }
 
-    /// An amount in minor units as `12.34 EUR`.
+    /// An amount in minor units as `12.34 EUR`, or `12,34 EUR` in French: with the decimal mark
+    /// of the request's language.
     pub fn format(&self, minor: i64) -> String {
-        format!("{} {}", self.amount(minor), self.code)
+        self.format_in(minor, locale())
     }
 
-    /// An amount in minor units as `12.34`, without the code: what a form field shows, and
-    /// what [`Currency::parse_amount`] reads back.
+    /// [`Currency::format`] in `locale`, for code outside a page.
+    pub fn format_in(&self, minor: i64, locale: Locale) -> String {
+        format!("{} {}", self.amount_in(minor, locale), self.code)
+    }
+
+    /// An amount in minor units as `12.34`, or `12,34` in French, without the code: what a form
+    /// field shows, and what [`Currency::parse_amount`] reads back, whichever the mark.
+    pub fn amount_in(&self, minor: i64, locale: Locale) -> String {
+        let separator = embedded_i18n::t!("number.decimal_separator", locale = locale);
+        self.digits(minor, separator)
+    }
+
+    /// An amount in minor units as `12.34`, with a point whatever the language: what CSV files
+    /// hold, for the programs that read them.
     pub fn amount(&self, minor: i64) -> String {
+        self.digits(minor, ".")
+    }
+
+    fn digits(&self, minor: i64, separator: &str) -> String {
         let sign = if minor < 0 { "-" } else { "" };
         let minor = minor.unsigned_abs();
         if self.decimals == 0 {
@@ -62,7 +81,7 @@ impl Currency {
         }
         let unit = 10u64.pow(self.decimals);
         format!(
-            "{sign}{}.{:0width$}",
+            "{sign}{}{separator}{:0width$}",
             minor / unit,
             minor % unit,
             width = self.decimals as usize
@@ -127,6 +146,21 @@ mod tests {
         assert_eq!(dinar.format(7), "0.007 KWD");
         assert_eq!(euro.amount(5), "0.05");
         assert_eq!(Currency::new("JPY").amount(12), "12");
+    }
+
+    #[test]
+    fn amounts_read_with_the_decimal_mark_of_the_language() {
+        let euro = Currency::new("EUR");
+        let french = crate::i18n::find("fr").unwrap();
+        let english = crate::i18n::find("en").unwrap();
+        assert_eq!(euro.format_in(1234, french), "12,34 EUR");
+        assert_eq!(euro.format_in(-250, french), "-2,50 EUR");
+        assert_eq!(euro.format_in(1234, english), "12.34 EUR");
+        assert_eq!(euro.amount_in(5, french), "0,05");
+        assert_eq!(euro.parse_amount(&euro.amount_in(5, french)), Some(5));
+        assert_eq!(Currency::new("JPY").format_in(1234, french), "1234 JPY");
+        // CSV files keep the point.
+        assert_eq!(euro.amount(1234), "12.34");
     }
 
     #[test]

@@ -19,8 +19,8 @@ printed two-sided cost 30 × 0.05 + 15 × 0.01 = 1.65.
    read: recto converts nothing.
 2. Open **Administration**, then **Printers**.
 3. Open the printer's row (**Change access and prices**, or **Manage** with printer management on)
-   and fill in the prices under **Prices**, such as `0.05`. A comma works as the decimal mark
-   too, and an empty field means 0.
+   and fill in the prices under **Prices**, such as `0.05`. A point and a comma both work as the
+   decimal mark, whatever the language of the page, and an empty field means 0.
 4. Press **Save prices**.
 
 The row then shows the prices, or **Free** when they are all 0.

@@ -79,7 +79,7 @@ pub fn file_size(bytes: usize) -> String {
             format!(
                 "{}{}{}",
                 tenths / 10,
-                t!("size.decimal_separator"),
+                t!("number.decimal_separator"),
                 tenths % 10
             )
         };

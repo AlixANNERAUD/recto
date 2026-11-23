@@ -20,6 +20,7 @@ use axum::{
 };
 use leptos::prelude::provide_context;
 use recto_app::{
+    i18n::Locale,
     pages::{
         administration::{
             devices::{
@@ -635,15 +636,20 @@ async fn devices_view(
 /// amounts as typed.
 type TypedPrices = (String, [String; 3]);
 
-/// A printer's prices for its row, or the typed ones of a refused form.
-fn price_row(currency: &Currency, prices: Prices, typed: Option<&[String; 3]>) -> PriceRow {
+/// A printer's prices for its row in `locale`, or the typed ones of a refused form.
+fn price_row(
+    currency: &Currency,
+    locale: Locale,
+    prices: Prices,
+    typed: Option<&[String; 3]>,
+) -> PriceRow {
     let price = |minor: i64, index: usize| Price {
         value: match typed {
             Some(typed) => typed[index].clone(),
             None if minor == 0 => String::new(),
-            None => currency.amount(minor),
+            None => currency.amount_in(minor, locale),
         },
-        shown: currency.format(minor),
+        shown: currency.format_in(minor, locale),
         free: minor == 0,
     };
     PriceRow {
@@ -670,6 +676,8 @@ async fn devices_view_with(
     typed_prices: Option<TypedPrices>,
 ) -> Response {
     let managed = kind == DeviceKind::Printer && state.app.printer_admin.is_some();
+    // Rendered after this, so the amounts are written here in the page's language.
+    let locale = recto_app::i18n::from_headers(&parts.headers);
     let listed: Result<Vec<ListedDevice>, String> = match kind {
         DeviceKind::Printer => state
             .app
@@ -756,7 +764,7 @@ async fn devices_view_with(
                         .filter(|(printer, _)| *printer == name)
                         .map(|(_, typed)| typed);
                     let prices = priced.remove(&name).unwrap_or_default();
-                    price_row(currency, prices, typed)
+                    price_row(currency, locale, prices, typed)
                 });
                 DeviceRow {
                     name,
@@ -821,7 +829,7 @@ async fn devices_view_with(
         tools,
         refusal,
         currency: state.app.currency.code.clone(),
-        price_example: state.app.currency.amount(5),
+        price_example: state.app.currency.amount_in(5, locale),
     };
     render(&state.app, state.methods, parts, status, move || {
         provide_context(data.clone());
