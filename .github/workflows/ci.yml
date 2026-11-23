@@ -1,7 +1,7 @@
 name: CI
 
 on:
-  # Maintenance happens on main; pull requests come from outside contributors.
+  # Pull requests must pass before they merge; main runs again once they have.
   push:
     branches: [main]
     tags-ignore: ["**"]

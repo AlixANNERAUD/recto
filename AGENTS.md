@@ -49,7 +49,10 @@ Builds are heavy: run one cargo command at a time.
 - The user guide in `docs/src` follows Diátaxis (tutorials, how-to guides, reference, explanation).
   A change to settings, pages or behaviour updates the matching pages.
 - Comments explain why, never restate the code. Docs are plain, concise English with no em dashes.
-- Work and push directly on `main`; there are no pull requests, except the release PR that
-  release-plz opens and the owner merges to release (see `RELEASING.md`). Commits follow
-  Conventional Commits (`feat:`, `fix:`, `test:`, `build:`, `ci:`, `docs:`), imperative, with a
-  body. Do not mention AI tools and add no `Co-Authored-By` or "Generated with" lines.
+- `main` is protected: branch from it, open a pull request and let it merge itself
+  (`gh pr merge --auto --squash`) once the required checks, `CI passed` and `Pull request
+  title`, succeed. Pull requests are squash-merged, so the title becomes the commit on `main`
+  that release-plz reads (see `RELEASING.md`).
+- Commits and pull request titles follow Conventional Commits (`feat:`, `fix:`, `test:`,
+  `build:`, `ci:`, `docs:`), imperative, with a body. Do not mention AI tools and add no
+  `Co-Authored-By` or "Generated with" lines.

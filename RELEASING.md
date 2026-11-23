@@ -4,12 +4,13 @@ Releases are automated with [release-plz](https://release-plz.dev) through a rel
 request. recto is not published to crates.io: a release is a `vX.Y.Z` git tag, a GitHub release
 with the changelog, and container images on `ghcr.io/alixanneraud/recto` and Docker Hub.
 
-recto otherwise works directly on `main` with no pull requests. The release pull request opened
-by release-plz is the one exception: the owner merges it to release.
+Every change reaches the protected `main` through a pull request, squash-merged once the
+`CI passed` and `Pull request title` checks succeed, so each pull request title is one commit
+that release-plz reads. The release pull request is merged by the owner, to release.
 
 ## Flow
 
-1. Commits are pushed to `main`.
+1. Pull requests are squash-merged into `main`.
 2. The `Release-plz` workflow opens or updates a release pull request, `chore: release vX.Y.Z`,
    that bumps the workspace version, updates `Cargo.lock` and adds the version's entry to
    `CHANGELOG.md`.
@@ -48,6 +49,10 @@ v1.2.4`): `release.yml` runs for it and creates the release with generated notes
 
 ## Required setup
 
+- `main` is protected (Settings, Branches): the status checks `CI passed` and `Pull request
+  title` are required, for administrators too, with a linear history and no force pushes or
+  deletions. Settings, General, Pull Requests: squash merging only, with the pull request title
+  and description as the commit, auto-merge allowed and head branches deleted after merge.
 - Settings, Actions, General, Workflow permissions: "Allow GitHub Actions to create and approve
   pull requests", so the workflow can open the release pull request. Pull requests opened with
   `GITHUB_TOKEN` do not start CI; push an empty commit to the release branch, or close and

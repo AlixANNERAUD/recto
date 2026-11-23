@@ -101,13 +101,14 @@ development user, under `target/dev-data/held`.
 
 ## Send a change
 
-Open a pull request against `main`. Commit messages follow
+Open a pull request against `main`, whose title follows
 [Conventional Commits](https://www.conventionalcommits.org): `feat:`, `fix:`, `docs:` and so on.
+It is squash-merged under that title once CI passes; `main` takes no direct pushes.
 
 ## Release
 
-Releases use [release-plz](https://release-plz.dev). Pushes to `main` keep a release pull request
-open with the next version and its changelog; it is the only pull request the maintainer opens.
+Releases use [release-plz](https://release-plz.dev). Each merge into `main` updates a release
+pull request with the next version and its changelog.
 Merging it tags `vX.Y.Z`, builds the image for amd64 and arm64, publishes it to
 `ghcr.io/alixanneraud/recto` (and copies it to Docker Hub when configured) and publishes the
 GitHub release. Pushing a tag by hand does the same without a changelog. See `RELEASING.md` in
