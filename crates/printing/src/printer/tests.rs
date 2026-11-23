@@ -32,6 +32,7 @@ fn printer() -> VirtualPrinter {
         formats: DOCUMENT_FORMATS.to_vec(),
         started_at: Utc.with_ymd_and_hms(2026, 11, 23, 8, 0, 0).unwrap(),
         accepting_jobs: true,
+        languages: vec!["en", "fr"],
     }
 }
 
@@ -383,7 +384,7 @@ fn job_template_attributes_are_read() {
         .collect();
     assert_eq!(dropped, ["copies", "media"]);
     // Dropped values are reported back in the unsupported group with status 0x0001.
-    let answer = parse(&response(&incoming, 0, Vec::new()));
+    let answer = parse(&response(&incoming, "en", 0, Vec::new()));
     assert_eq!(answer.header().operation_or_status, 0x0001);
     let group = answer
         .attributes()
@@ -406,6 +407,7 @@ fn job_template_attributes_are_read() {
     ));
     let answer = parse(&response(
         &refused,
+        "en",
         StatusCode::ClientErrorAttributesOrValuesNotSupported as u16,
         Vec::new(),
     ));
@@ -832,7 +834,8 @@ fn responses_carry_raw_statuses_and_one_group_per_job() {
             printer.job_attributes(&job(JobViewState::Pending), &plain(), "", &all, now()),
         ),
     ];
-    let answer = parse(&response(&incoming, 0, groups));
+    assert_eq!(incoming.language, "en");
+    let answer = parse(&response(&incoming, "en", 0, groups));
     assert_eq!(answer.header().request_id, 77);
     assert_eq!(answer.header().version, IppVersion::v2_0());
     assert_eq!(
@@ -844,13 +847,22 @@ fn responses_carry_raw_statuses_and_one_group_per_job() {
     );
 
     // server-error-too-many-jobs is not in the ipp crate's StatusCode (R-P5-3).
-    let answer = parse(&response(&incoming, TOO_MANY_JOBS, Vec::new()));
+    let answer = parse(&response(&incoming, "en", TOO_MANY_JOBS, Vec::new()));
     assert_eq!(answer.header().operation_or_status, 0x050B);
     let operation = answer
         .attributes()
         .first_of(DelimiterTag::OperationAttributes)
         .unwrap();
     assert!(operation.get("attributes-charset").is_some());
+
+    // The response is labelled with the language its messages are in.
+    let answer = parse(&response(&incoming, "fr", 0, Vec::new()));
+    let language = answer
+        .attributes()
+        .first_of(DelimiterTag::OperationAttributes)
+        .and_then(|operation| operation.get("attributes-natural-language"))
+        .and_then(|attribute| attribute.value().as_natural_language().cloned());
+    assert_eq!(language.as_deref(), Some("fr"));
 
     let refused = parse(&refusal(&header(&[3, 0, 0, 2, 0, 0, 0, 5]), 0x0503));
     assert_eq!(refused.header().operation_or_status, 0x0503);
@@ -902,6 +914,7 @@ fn unknown_which_jobs_are_refused() {
     // RFC 8011 section 4.1.7: the refusal names the attribute and its value.
     let answer = response(
         &incoming,
+        "en",
         StatusCode::ClientErrorAttributesOrValuesNotSupported as u16,
         Vec::new(),
     );
@@ -944,6 +957,7 @@ fn extra_operation_attributes_join_the_operation_group() {
     );
     let answer = parse(&response(
         &incoming,
+        "en",
         0,
         vec![(DelimiterTag::OperationAttributes, vec![message])],
     ));

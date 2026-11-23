@@ -146,6 +146,7 @@ pub fn router(app: AppState, auth: &AuthState, listener: Listener) -> Router {
         started_at: Utc::now(),
         // Startup warned already: devices are told before they send.
         accepting_jobs: app.held.dir().is_dir(),
+        languages: recto_app::i18n::tags(),
     };
     let state = IppState {
         devices: DeviceAuth::for_listener(auth, &app.branding.name, listener),
@@ -314,14 +315,23 @@ async fn serve(state: IppState, request: Request, secret: Option<String>) -> Res
         tls: state.tls,
         basic: secret.is_none(),
     };
+    // The client's `attributes-natural-language`, not its HTTP headers: that is what IPP clients
+    // set from their user's language, and what the response must be labelled with.
+    let locale =
+        recto_app::i18n::find(&incoming.language).unwrap_or_else(recto_app::i18n::default_locale);
     let request = Job {
         state: &state,
         device: device.as_ref(),
         uri: &uri,
-        locale: recto_app::i18n::from_headers(&parts.headers),
+        locale,
     };
     let (status, groups) = request.dispatch(incoming.operation.clone()).await;
-    answer(printer::response(&incoming, status, groups))
+    answer(printer::response(
+        &incoming,
+        recto_app::i18n::tag(locale),
+        status,
+        groups,
+    ))
 }
 
 /// Why a body could not be read.
@@ -1029,7 +1039,7 @@ impl Job<'_> {
     /// The message of a held job whose release was refused.
     fn refused(&self, refusal: Refusal) -> String {
         recto_app::messages::direct_refused(
-            &refusal.message(),
+            &refusal.message_in(self.locale),
             &self.state.app.branding.name,
             self.locale,
         )

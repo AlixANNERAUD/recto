@@ -32,6 +32,19 @@ pub fn languages() -> impl Iterator<Item = (Locale, &'static str, &'static str)>
     })
 }
 
+/// The tags of the embedded locales, the default one first.
+pub fn tags() -> Vec<&'static str> {
+    let default = default_tag();
+    std::iter::once(default)
+        .chain(
+            embedded_i18n::available_locales!()
+                .iter()
+                .copied()
+                .filter(|&tag| tag != default),
+        )
+        .collect()
+}
+
 /// The request's locale, decided once by [`provide_locale`] for pages and on demand elsewhere
 /// (server functions, islands in the browser). It is always one of the embedded locales.
 pub fn locale() -> Locale {

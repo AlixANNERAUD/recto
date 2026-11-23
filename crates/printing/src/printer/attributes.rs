@@ -175,6 +175,8 @@ pub struct VirtualPrinter {
     /// Whether jobs can be kept: `false` when the held documents' directory is not usable, so
     /// devices are told before they send rather than failing at the write.
     pub accepting_jobs: bool,
+    /// The languages recto writes its messages in, the configured one first.
+    pub languages: Vec<&'static str>,
 }
 
 /// The address a request came in on, echoed in every URI recto returns: clients switch to the
@@ -271,7 +273,10 @@ impl VirtualPrinter {
         );
         put("finishings-default", Some(IppValue::Enum(3)));
         put("finishings-supported", Some(IppValue::Enum(3)));
-        put("generated-natural-language-supported", language("en"));
+        put(
+            "generated-natural-language-supported",
+            set(self.languages.iter().map(|tag| language(tag))),
+        );
         put("identify-actions-default", keyword("display"));
         put("identify-actions-supported", keyword("display"));
         put("ipp-features-supported", keyword("ipp-everywhere"));
@@ -349,7 +354,10 @@ impl VirtualPrinter {
         // The held-jobs sweep drops a Create-Job still without its document after 10 minutes.
         put("multiple-operation-time-out", Some(IppValue::Integer(600)));
         put("multiple-operation-time-out-action", keyword("abort-job"));
-        put("natural-language-configured", language("en"));
+        put(
+            "natural-language-configured",
+            self.languages.first().and_then(|tag| language(tag)),
+        );
         put(
             "operations-supported",
             set(OPERATIONS.map(|op| Some(IppValue::Enum(op)))),

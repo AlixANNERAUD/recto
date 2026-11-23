@@ -120,6 +120,9 @@ pub struct Incoming {
     /// Attributes whose values recto does not offer, dropped from the job and reported back by
     /// [`response`] with `successful-ok-ignored-or-substituted-attributes`.
     pub unsupported: Vec<IppAttribute>,
+    /// The request's `attributes-natural-language`, lowercase: the language the client wants its
+    /// messages in.
+    pub language: String,
 }
 
 /// Decodes a whole request body; the document is a slice of `body`, never a copy. The error is
@@ -156,6 +159,11 @@ pub fn decode(body: Bytes) -> Result<Incoming, StatusCode> {
         return Err(Bad);
     }
     check_operation_group(operation_group)?;
+    let language = operation_group
+        .get("attributes-natural-language")
+        .and_then(|attribute| attribute.value().as_natural_language())
+        .ok_or(Bad)?
+        .to_ascii_lowercase();
 
     let request = Request {
         operation: operation_group,
@@ -255,6 +263,7 @@ pub fn decode(body: Bytes) -> Result<Incoming, StatusCode> {
         request_id: head.request_id,
         operation,
         unsupported,
+        language,
     })
 }
 
@@ -348,6 +357,7 @@ fn check_shape(body: &[u8]) -> Result<(), StatusCode> {
 /// own group, and turn `successful-ok` into `successful-ok-ignored-or-substituted-attributes`.
 pub fn response(
     incoming: &Incoming,
+    language: &str,
     status: u16,
     groups: Vec<(DelimiterTag, Vec<IppAttribute>)>,
 ) -> Bytes {
@@ -366,6 +376,7 @@ pub fn response(
     encode(
         incoming.version,
         incoming.request_id,
+        language,
         status,
         unsupported.into_iter().chain(groups),
     )
@@ -405,12 +416,24 @@ pub fn refusal(header: &Header, status: u16) -> Bytes {
         (0 | 1, _) => IppVersion::v1_1(),
         _ => IppVersion::v2_0(),
     };
-    encode(version, header.request_id, status, std::iter::empty())
+    encode(
+        version,
+        header.request_id,
+        DEFAULT_LANGUAGE,
+        status,
+        std::iter::empty(),
+    )
 }
 
+/// The `attributes-natural-language` of an answer to a request recto could not read.
+const DEFAULT_LANGUAGE: &str = "en";
+
+/// `language` is the response's `attributes-natural-language`: RFC 8011 section 4.1.4.2 has
+/// every text the response carries in it.
 fn encode(
     version: IppVersion,
     request_id: u32,
+    language: &str,
     status: u16,
     groups: impl IntoIterator<Item = (DelimiterTag, Vec<IppAttribute>)>,
 ) -> Bytes {
@@ -418,6 +441,17 @@ fn encode(
     let mut response = IppRequestResponse::new_response(version, StatusCode::SuccessfulOk, id)
         .expect("a response header always builds");
     response.header_mut().operation_or_status = i16::from_be_bytes(status.to_be_bytes());
+    if let Ok(language) = IppValue::new_natural_language(language)
+        && let Some(attribute) = response
+            .attributes_mut()
+            .groups_mut()
+            .iter_mut()
+            .filter(|group| group.tag() == DelimiterTag::OperationAttributes)
+            .flat_map(|group| group.attributes_mut().iter_mut())
+            .find(|attribute| attribute.name().as_str() == "attributes-natural-language")
+    {
+        *attribute = IppAttribute::new(attribute.name().clone(), language);
+    }
     for (tag, attributes) in groups {
         // The encoder writes only the first operation group: extra operation attributes, such
         // as a status message, join it.

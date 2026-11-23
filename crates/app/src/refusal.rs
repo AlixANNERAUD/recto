@@ -2,7 +2,7 @@
 //! the `error` query parameter (`/?error=too_large`), and the page shows its message. Only codes
 //! travel in the address, so a crafted link cannot put arbitrary text on the page.
 
-use crate::t;
+use crate::i18n::Locale;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {
@@ -86,26 +86,49 @@ impl Refusal {
 
     /// The message shown on the page, in the request's language.
     pub fn message(self) -> String {
+        self.message_in(crate::i18n::locale())
+    }
+
+    /// The message in `locale`, for answers rendered outside a page, such as IPP's.
+    pub fn message_in(self, locale: Locale) -> String {
         match self {
-            Refusal::TooLarge => t!("print.errors.too_large"),
-            Refusal::NoFile => t!("print.errors.no_file"),
-            Refusal::EmptyFile => t!("print.errors.empty_file"),
-            Refusal::UnsupportedFormat => t!("print.errors.unsupported_format"),
-            Refusal::PrinterNotFound => t!("print.errors.printer_not_found"),
-            Refusal::NotAccepting => t!("print.errors.not_accepting"),
-            Refusal::InvalidCopies => t!("print.errors.invalid_copies"),
-            Refusal::UnsupportedSides => t!("print.errors.unsupported_sides"),
-            Refusal::UnsupportedColor => t!("print.errors.unsupported_color"),
-            Refusal::InvalidPageRanges => t!("print.errors.invalid_page_ranges"),
-            Refusal::InvalidForm => t!("print.errors.invalid_form"),
-            Refusal::JobNotFound => t!("print.errors.job_not_found"),
-            Refusal::Unavailable => t!("print.errors.unavailable"),
-            Refusal::Refused => t!("print.errors.refused"),
-            Refusal::Unconfirmed => t!("print.errors.unconfirmed"),
-            Refusal::Quota => t!("print.errors.quota"),
-            Refusal::Uncountable => t!("print.errors.uncountable"),
-            Refusal::CountingBusy => t!("print.errors.counting_busy"),
-            Refusal::HeldGone => t!("print.errors.held_gone"),
+            Refusal::TooLarge => embedded_i18n::t!("print.errors.too_large", locale = locale),
+            Refusal::NoFile => embedded_i18n::t!("print.errors.no_file", locale = locale),
+            Refusal::EmptyFile => embedded_i18n::t!("print.errors.empty_file", locale = locale),
+            Refusal::UnsupportedFormat => {
+                embedded_i18n::t!("print.errors.unsupported_format", locale = locale)
+            }
+            Refusal::PrinterNotFound => {
+                embedded_i18n::t!("print.errors.printer_not_found", locale = locale)
+            }
+            Refusal::NotAccepting => {
+                embedded_i18n::t!("print.errors.not_accepting", locale = locale)
+            }
+            Refusal::InvalidCopies => {
+                embedded_i18n::t!("print.errors.invalid_copies", locale = locale)
+            }
+            Refusal::UnsupportedSides => {
+                embedded_i18n::t!("print.errors.unsupported_sides", locale = locale)
+            }
+            Refusal::UnsupportedColor => {
+                embedded_i18n::t!("print.errors.unsupported_color", locale = locale)
+            }
+            Refusal::InvalidPageRanges => {
+                embedded_i18n::t!("print.errors.invalid_page_ranges", locale = locale)
+            }
+            Refusal::InvalidForm => embedded_i18n::t!("print.errors.invalid_form", locale = locale),
+            Refusal::JobNotFound => {
+                embedded_i18n::t!("print.errors.job_not_found", locale = locale)
+            }
+            Refusal::Unavailable => embedded_i18n::t!("print.errors.unavailable", locale = locale),
+            Refusal::Refused => embedded_i18n::t!("print.errors.refused", locale = locale),
+            Refusal::Unconfirmed => embedded_i18n::t!("print.errors.unconfirmed", locale = locale),
+            Refusal::Quota => embedded_i18n::t!("print.errors.quota", locale = locale),
+            Refusal::Uncountable => embedded_i18n::t!("print.errors.uncountable", locale = locale),
+            Refusal::CountingBusy => {
+                embedded_i18n::t!("print.errors.counting_busy", locale = locale)
+            }
+            Refusal::HeldGone => embedded_i18n::t!("print.errors.held_gone", locale = locale),
         }
         .to_string()
     }
