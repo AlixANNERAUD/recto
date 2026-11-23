@@ -501,7 +501,6 @@ pub async fn poll_once(print: &dyn PrintService, database: &DatabaseConnection) 
     }
 }
 
-/// Sweeps the held jobs in the background, every [`HELD_SWEEP_INTERVAL`].
 /// Starts the background tasks: the held jobs' sweep, the purge of scan results and sessions,
 /// the ledger's job polling and the first scanner listing. None depends on OS integration:
 /// documents held before it was turned off must still go.
@@ -513,6 +512,7 @@ pub fn start_maintenance(state: &AppState, auth: &AuthState) {
     find_scanners(Arc::clone(&state.scan));
 }
 
+/// Sweeps the held jobs in the background, every [`HELD_SWEEP_INTERVAL`].
 fn sweep_held(database: DatabaseConnection, files: Arc<HeldFiles>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(HELD_SWEEP_INTERVAL);

@@ -115,7 +115,7 @@ const LABEL_MIN: usize = 16;
 /// A scanner's instance name: `<vendor> <model> (<instance>)`, so that it differs from the name
 /// a network scanner announces itself under, with `tag` after the model when two scanners share
 /// it. At most [`INSTANCE_MAX`] bytes: recto's instance name is cut to leave the scanner
-/// [`LABEL_MIN`] bytes, then the vendor and model are, never the tag.
+/// 16 bytes, then the vendor and model are, never the tag.
 pub fn scanner_instance(info: &ScannerInfo, instance: &str, tag: Option<&str>) -> String {
     let tag = tag.map(|tag| format!(" {tag}")).unwrap_or_default();
     let room = INSTANCE_MAX.saturating_sub(LABEL_MIN + tag.len() + " ()".len());
