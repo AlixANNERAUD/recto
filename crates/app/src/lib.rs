@@ -140,7 +140,7 @@ pub fn App() -> impl IntoView {
                 <Route path=path!("/printers") view=PrintersPage ssr=SsrMode::Async />
                 <Route path=path!("/jobs") view=JobsPage ssr=SsrMode::Async />
                 <Route path=path!("/scan") view=ScanPage ssr=SsrMode::Async />
-                <Route path=path!("/account") view=AccountPage />
+                <Route path=path!("/account") view=AccountPage ssr=SsrMode::Async />
                 <Route path=path!("/administration/users") view=UsersPage />
                 <Route path=path!("/administration/groups") view=GroupsPage />
                 <Route path=path!("/administration/printers") view=PrintersAdministrationPage />

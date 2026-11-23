@@ -84,6 +84,9 @@ async fn a_single_sign_on_user_creates_and_revokes_a_device_password() {
         .unwrap()[0]
         .id;
     assert!(html.contains(&format!("action=\"/account/devices/{id}/revoke\"")));
+    // In the page itself, not in a streamed <template> that only a script would swap in: the
+    // form must work without JavaScript.
+    assert!(!html.contains("<template"), "{html}");
 
     // Another user cannot revoke it, nor learn that it exists.
     let bob = harness.sign_in("bob-subject", "bob").await;
