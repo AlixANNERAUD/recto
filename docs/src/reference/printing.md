@@ -105,6 +105,7 @@ Send-Document); a held job is complete for the device, and the IPP answer to can
 | Two other rasters converting for the whole minute | `server-error-busy`, which devices retry |
 | A third document of the same person while two are still arriving | `server-error-busy` |
 | A request without credentials (only printer attributes are answered without) over 64 KiB | HTTP `413` |
+| Collections nested more than 4 deep, more than 1,000 attributes, or more than 64 values for one attribute | `client-error-bad-request` |
 | The first bytes of a request, or a later piece of its body, not arriving within 30 seconds | HTTP `408` |
 | Empty document | `client-error-bad-request` |
 | Document over `RECTO_MAX_UPLOAD_SIZE` | `client-error-request-entity-too-large` |

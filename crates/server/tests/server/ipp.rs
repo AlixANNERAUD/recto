@@ -1081,6 +1081,41 @@ async fn an_unauthenticated_body_stays_small() {
 }
 
 #[tokio::test]
+async fn deeply_nested_collections_are_refused_without_credentials() {
+    let harness = Harness::new().await;
+    // About 4,000 collections, each the only member of the one around it, within the 64 KiB
+    // read without credentials. Parsed as is, they would stall the worker or overflow its stack.
+    fn entry(tag: u8, name: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![tag];
+        bytes.extend_from_slice(&u16::try_from(name.len()).unwrap().to_be_bytes());
+        bytes.extend_from_slice(name);
+        bytes.extend_from_slice(&[0, 0]);
+        bytes
+    }
+    let get = request(IppOperation::GetPrinterAttributes).to_bytes();
+    let mut nested = get[..get.len() - 1].to_vec();
+    nested.extend(entry(0x34, b"media-col"));
+    for _ in 1..4000 {
+        nested.extend([0x4A, 0, 0, 0, 1, b'm']);
+        nested.extend(entry(0x34, b""));
+    }
+    for _ in 0..4000 {
+        nested.extend(entry(0x37, b""));
+    }
+    nested.push(0x03);
+    assert!(nested.len() <= 64 * 1024);
+
+    let answer = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        ipp(&harness, post_ipp("/ipp/print", None, Body::from(nested))),
+    )
+    .await
+    .expect("refused at once");
+    // client-error-bad-request.
+    assert_eq!(status(&answer), 0x0400);
+}
+
+#[tokio::test]
 async fn a_stalled_body_times_out() {
     let harness = Harness::with(Setup {
         device_read_timeout: std::time::Duration::from_millis(200),

@@ -198,7 +198,10 @@ reading a document: a personal address is checked before any byte of the body, a
 `/ipp/print` only the 8-byte header that names the operation is read first. A device may still
 have sent part of its document by then, and some proxies read whole bodies anyway: recto only
 promises not to read or keep it. Without credentials, recto reads at most 64 KiB, enough for the
-printer attributes devices ask before they know they need a password. A request whose first
+printer attributes devices ask before they know they need a password. Before any attribute is
+parsed, one pass over the request refuses collections nested more than 4 deep, more than 1,000
+attributes and more than 64 values for one: the IPP parser copies each collection as it closes,
+so deep nesting would cost minutes or overflow the stack. A request whose first
 bytes or later pieces stall for 30 seconds is dropped, and each person's devices send at most
 two documents at once, since a document is held in memory until it is written: a leaked device
 password cannot fill the memory with parallel uploads.

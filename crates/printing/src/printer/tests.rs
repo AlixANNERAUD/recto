@@ -884,3 +884,157 @@ fn long_job_names_are_cut_and_a_closed_queue_says_so() {
         Some(&IppValue::Boolean(false))
     );
 }
+
+/// A Get-Printer-Attributes whose operation group ends with `tail`, written by hand: the `ipp`
+/// crate's encoder cannot nest collections past what it was given, and a value list is an
+/// attribute and its unnamed additional values.
+fn get_printer_attributes_with(tail: &[u8]) -> Bytes {
+    let get = request(IppOperation::GetPrinterAttributes).to_bytes();
+    let mut body = BytesMut::from(&get[..get.len() - 1]);
+    body.extend_from_slice(tail);
+    body.extend_from_slice(&[0x03]);
+    body.freeze()
+}
+
+/// One value: tag, name, value, each length on two bytes.
+fn entry(tag: u8, name: &str, value: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![tag];
+    bytes.extend_from_slice(&u16::try_from(name.len()).unwrap().to_be_bytes());
+    bytes.extend_from_slice(name.as_bytes());
+    bytes.extend_from_slice(&u16::try_from(value.len()).unwrap().to_be_bytes());
+    bytes.extend_from_slice(value);
+    bytes
+}
+
+/// `depth` collections, each the only member of the one around it.
+fn nested(depth: usize) -> Vec<u8> {
+    let mut bytes = entry(0x34, "media-col", b"");
+    for _ in 1..depth {
+        bytes.extend(entry(0x4A, "", b"m"));
+        bytes.extend(entry(0x34, "", b""));
+    }
+    for _ in 0..depth {
+        bytes.extend(entry(0x37, "", b""));
+    }
+    bytes
+}
+
+#[test]
+fn deeply_nested_collections_are_refused_on_a_small_stack() {
+    // About 4,000 levels fit in the 64 KiB read without credentials. The `ipp` crate clones
+    // each collection as it closes, recursively: parsed, this overflows the stack or takes
+    // minutes. Refused, it costs one pass over the bytes.
+    let body = get_printer_attributes_with(&nested(4000));
+    assert!(body.len() <= 64 * 1024, "{} bytes", body.len());
+    let started = std::time::Instant::now();
+    let decoded = std::thread::Builder::new()
+        .stack_size(128 * 1024)
+        .spawn(move || decode(body).map(|_| ()))
+        .unwrap()
+        .join()
+        .expect("decoding does not overflow the stack");
+    assert_eq!(decoded, Err(StatusCode::ClientErrorBadRequest));
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+}
+
+#[test]
+fn the_attribute_section_is_bounded() {
+    let bad = Err(StatusCode::ClientErrorBadRequest);
+    let decoded = |tail: &[u8]| decode(get_printer_attributes_with(tail)).map(|_| ());
+
+    // Four levels are plenty: recto reads media-col and its media-size.
+    assert_eq!(decoded(&nested(4)), Ok(()));
+    assert_eq!(decoded(&nested(5)), bad);
+    // Collections must close, and close only what was opened.
+    let unclosed = nested(2);
+    assert_eq!(decoded(&unclosed[..unclosed.len() - 5]), bad);
+    let mut extra = nested(2);
+    extra.extend(entry(0x37, "", b""));
+    assert_eq!(decoded(&extra), bad);
+
+    // 64 values for one attribute, 1,000 attributes in all.
+    let values = |count: usize| {
+        let mut bytes = entry(0x44, "requested-attributes", b"all");
+        for _ in 1..count {
+            bytes.extend(entry(0x44, "", b"printer-name"));
+        }
+        bytes
+    };
+    assert_eq!(decoded(&values(64)), Ok(()));
+    assert_eq!(decoded(&values(65)), bad);
+    // The request already carries three: charset, language and printer URI.
+    let attributes = |count: usize| {
+        (0..count)
+            .flat_map(|index| entry(0x21, &format!("x-{index}"), &[0, 0, 0, 1]))
+            .collect::<Vec<u8>>()
+    };
+    assert_eq!(decoded(&attributes(997)), Ok(()));
+    assert_eq!(decoded(&attributes(998)), bad);
+    // Members of a collection count as attributes too.
+    let mut members = entry(0x34, "media-col", b"");
+    for index in 0..998 {
+        members.extend(entry(0x4A, "", format!("x-{index}").as_bytes()));
+        members.extend(entry(0x21, "", &[0, 0, 0, 1]));
+    }
+    members.extend(entry(0x37, "", b""));
+    assert_eq!(decoded(&members), bad);
+}
+
+#[test]
+fn a_cups_get_printer_attributes_still_parses() {
+    // What CUPS's ipp backend (Linux, and macOS, which embeds it) asks before each job.
+    const CUPS: [&str; 24] = [
+        "compression-supported",
+        "copies-supported",
+        "cups-version",
+        "document-format-supported",
+        "job-password-encryption-supported",
+        "marker-colors",
+        "marker-high-levels",
+        "marker-levels",
+        "marker-low-levels",
+        "marker-message",
+        "marker-names",
+        "marker-types",
+        "media-col-supported",
+        "multiple-document-handling-supported",
+        "operations-supported",
+        "print-color-mode-supported",
+        "print-scaling-supported",
+        "printer-alert",
+        "printer-alert-description",
+        "printer-is-accepting-jobs",
+        "printer-mandatory-job-attributes",
+        "printer-state",
+        "printer-state-message",
+        "printer-state-reasons",
+    ];
+    let mut get = request(IppOperation::GetPrinterAttributes);
+    add(
+        &mut get,
+        DelimiterTag::OperationAttributes,
+        "requesting-user-name",
+        IppValue::new_name_without_language("alice").unwrap(),
+    );
+    add(
+        &mut get,
+        DelimiterTag::OperationAttributes,
+        "requested-attributes",
+        IppValue::Array(CUPS.iter().map(|name| keyword(name)).collect()),
+    );
+    let Operation::GetPrinterAttributes { requested } = decode(get.to_bytes()).unwrap().operation
+    else {
+        panic!("not a Get-Printer-Attributes");
+    };
+    assert_eq!(requested, strings(&CUPS));
+
+    // And what it asks when a queue is added: the media database too.
+    let mut add_queue = request(IppOperation::GetPrinterAttributes);
+    add(
+        &mut add_queue,
+        DelimiterTag::OperationAttributes,
+        "requested-attributes",
+        IppValue::Array(vec![keyword("all"), keyword("media-col-database")]),
+    );
+    assert!(decode(add_queue.to_bytes()).is_ok());
+}

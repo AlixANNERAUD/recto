@@ -131,6 +131,7 @@ pub fn decode(body: Bytes) -> Result<Incoming, StatusCode> {
     if head.request_id == 0 || i32::try_from(head.request_id).is_err() {
         return Err(Bad);
     }
+    check_shape(&body)?;
 
     let (parsed, attributes, reader) = IppParser::new(IppReader::new(Cursor::new(body.clone())))
         .parse_parts()
@@ -238,6 +239,91 @@ pub fn decode(body: Bytes) -> Result<Incoming, StatusCode> {
         operation,
         unsupported,
     })
+}
+
+/// How deep collections may nest. recto reads `media-col` and its `media-size`, two levels.
+const MAX_DEPTH: usize = 4;
+
+/// How many attributes a request may carry, collection members included.
+const MAX_ATTRIBUTES: usize = 1000;
+
+/// How many values one attribute or member may carry.
+const MAX_VALUES: usize = 64;
+
+/// Walks the attribute section before the `ipp` crate parses it, refusing nesting, attributes
+/// or values past the bounds above, and collections left open or closed twice. That parser
+/// deep-clones each collection as it closes, recursively: about 4,000 levels, which fit in a
+/// request read without credentials, cost quadratic time and can overflow the stack, which
+/// aborts recto. This pass is linear and uses no recursion.
+fn check_shape(body: &[u8]) -> Result<(), StatusCode> {
+    use StatusCode::ClientErrorBadRequest as Bad;
+
+    /// A two-byte length, then that many bytes, skipped.
+    fn skip(body: &[u8], at: &mut usize) -> Result<usize, StatusCode> {
+        let length = body
+            .get(*at..*at + 2)
+            .map(|bytes| usize::from(u16::from_be_bytes([bytes[0], bytes[1]])))
+            .ok_or(Bad)?;
+        *at += 2 + length;
+        Ok(length)
+    }
+
+    let mut at = 8;
+    // The values of the current attribute or member at each open level, outermost first.
+    let mut values: Vec<usize> = vec![0];
+    let mut attributes = 0;
+    loop {
+        let &tag = body.get(at).ok_or(Bad)?;
+        at += 1;
+        match tag {
+            0x03 if values.len() == 1 => return Ok(()),
+            // A group starts, or the attributes end, inside a collection.
+            0x00..=0x0F if values.len() > 1 => return Err(Bad),
+            0x00..=0x0F => {
+                values[0] = 0;
+                continue;
+            }
+            _ => {}
+        }
+        let name = skip(body, &mut at)?;
+        skip(body, &mut at)?;
+        // endCollection.
+        if tag == 0x37 {
+            if values.len() == 1 {
+                return Err(Bad);
+            }
+            values.pop();
+            continue;
+        }
+        let current = values.last_mut().ok_or(Bad)?;
+        match tag {
+            // memberAttrName: a member starts, its first value comes next.
+            0x4A => {
+                attributes += 1;
+                *current = 0;
+            }
+            _ => {
+                if name > 0 {
+                    attributes += 1;
+                    *current = 0;
+                }
+                *current += 1;
+                if *current > MAX_VALUES {
+                    return Err(Bad);
+                }
+                // begCollection.
+                if tag == 0x34 {
+                    if values.len() > MAX_DEPTH {
+                        return Err(Bad);
+                    }
+                    values.push(0);
+                }
+            }
+        }
+        if attributes > MAX_ATTRIBUTES {
+            return Err(Bad);
+        }
+    }
 }
 
 /// The answer to `incoming`: `status` (raw, see [`TOO_MANY_JOBS`]), then one group per entry of
