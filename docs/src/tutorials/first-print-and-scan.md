@@ -110,8 +110,9 @@ Open <http://localhost:8080>. recto shows its sign-in page. Enter `admin` and yo
 press **Sign in**. You land on the **Print** page, with **admin** at the top and an
 **Administration** entry in the menu, which only administrators have.
 
-The three small buttons at the top choose the theme: follow the device, light or dark. The
-sign-in page has them too. recto remembers the choice in this browser.
+The **EN** and **FR** buttons at the top choose the language, English or French, and the three
+small buttons next to them choose the theme: follow the device, light or dark. The sign-in page
+has them too. recto remembers both choices in this browser.
 
 ## 7. Print a document
 
