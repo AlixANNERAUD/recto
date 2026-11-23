@@ -354,7 +354,8 @@ pub async fn create_local(
         ..Default::default()
     }
     .insert(&transaction)
-    .await?;
+    .await
+    .map_err(taken)?;
     transaction.commit().await?;
     tracing::info!(user = %created.username, "local user created");
     Ok(created)
@@ -617,6 +618,20 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 
 fn is_unique_violation(error: &DbErr) -> bool {
     matches!(error.sql_err(), Some(SqlErr::UniqueConstraintViolation(_)))
+}
+
+/// The problem of a user insert that lost a race on the username or the email address. On
+/// PostgreSQL the checks before it do not lock anything, so a concurrent creation (or a first
+/// single sign-on picking the same username) can pass them too; the unique index then refuses
+/// the second. Its message names the column (`users.email`, `users_email_key`).
+fn taken(error: DbErr) -> Error {
+    match error.sql_err() {
+        Some(SqlErr::UniqueConstraintViolation(message)) if message.contains("email") => {
+            Error::Invalid(Problem::EmailTaken)
+        }
+        Some(SqlErr::UniqueConstraintViolation(_)) => Error::Invalid(Problem::UsernameTaken),
+        _ => error.into(),
+    }
 }
 
 #[cfg(test)]
@@ -1058,6 +1073,37 @@ mod tests {
             }
         }
         assert_eq!(user_count(&database).await, 1);
+    }
+
+    /// What a creation that passed the checks but lost the race to the unique index gets.
+    #[tokio::test]
+    async fn a_lost_race_on_the_unique_index_is_a_taken_name() {
+        let database = crate::testing::database().await;
+        create_local(
+            &database,
+            local("alice", Some("alice@example.org")),
+            &POLICY,
+        )
+        .await
+        .unwrap();
+        let insert = |username: &str, email: &str| users::ActiveModel {
+            username: Set(username.to_owned()),
+            display_name: Set(username.to_owned()),
+            email: Set(Some(email.to_owned())),
+            is_administrator: Set(false),
+            created_at: Set(Utc::now().fixed_offset()),
+            ..Default::default()
+        };
+        for (model, problem) in [
+            (insert("alice", "other@example.org"), Problem::UsernameTaken),
+            (insert("bob", "alice@example.org"), Problem::EmailTaken),
+        ] {
+            let error = model.insert(&database).await.unwrap_err();
+            match taken(error) {
+                Error::Invalid(refused) => assert_eq!(refused, problem),
+                other => panic!("expected {problem:?}, got {other:?}"),
+            }
+        }
     }
 
     #[tokio::test]
