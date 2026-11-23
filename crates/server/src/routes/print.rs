@@ -81,13 +81,13 @@ pub async fn submit(
 }
 
 /// A job CUPS accepted, and the soft rules it went over.
-struct Submitted {
-    job: i32,
-    over: Vec<i64>,
+pub(crate) struct Submitted {
+    pub job: i32,
+    pub over: Vec<i64>,
 }
 
 /// Why a job was not printed.
-enum Rejected {
+pub(crate) enum Rejected {
     Refusal(Refusal),
     /// The hard quota rule, by id, that has too little left.
     Quota(i64),
@@ -108,19 +108,72 @@ fn closed(what: &'static str) -> impl Fn(recto_domain::Error) -> Refusal + Copy 
     }
 }
 
+/// A document to print, its format already detected from its content.
+pub(crate) struct Document {
+    /// The name the user knows it by, such as the uploaded file's name.
+    pub name: String,
+    pub bytes: Bytes,
+    pub format: DocumentFormat,
+}
+
+/// The printer and the options as typed, before they are checked against the printer. A missing
+/// option means the printer's default.
+#[derive(Default)]
+pub(crate) struct Choices {
+    pub printer: String,
+    pub copies: Option<String>,
+    pub sides: Option<String>,
+    pub color_mode: Option<String>,
+    pub page_ranges: Option<String>,
+}
+
+/// A held job being released. Its row is claimed by the caller before the document is printed.
+#[expect(dead_code, reason = "held jobs cannot be released yet")]
+pub(crate) struct HeldClaim {
+    pub id: i64,
+}
+
 async fn submit_form(
     state: &AppState,
     user: &User,
     multipart: Multipart,
 ) -> Result<Submitted, Rejected> {
     let form = Form::read(multipart, state.max_upload_size).await?;
-    let (file_name, document) = form.file.ok_or(Refusal::NoFile)?;
-    if document.is_empty() {
+    let (file_name, bytes) = form.file.ok_or(Refusal::NoFile)?;
+    if bytes.is_empty() {
         return Err(Refusal::EmptyFile.into());
     }
     // From the content, never the name or declared type: a renamed document stops here.
-    let format = DocumentFormat::detect(&document).ok_or(Refusal::UnsupportedFormat)?;
-    let printer_name = form.printer.ok_or(Refusal::InvalidForm)?;
+    let format = DocumentFormat::detect(&bytes).ok_or(Refusal::UnsupportedFormat)?;
+    let printer = form.printer.ok_or(Refusal::InvalidForm)?;
+    let document = Document {
+        name: file_name,
+        bytes,
+        format,
+    };
+    let choices = Choices {
+        printer,
+        ..form.options
+    };
+    print_document(state, user, document, &choices, None).await
+}
+
+/// Prints a document for a user: the access rules, the page count, the quota check and the
+/// ledger entry, then CUPS. The print form and the release of a held job both come here, so
+/// neither can print around the other's checks.
+pub(crate) async fn print_document(
+    state: &AppState,
+    user: &User,
+    document: Document,
+    choices: &Choices,
+    _held: Option<HeldClaim>,
+) -> Result<Submitted, Rejected> {
+    let Document {
+        name: file_name,
+        bytes: document,
+        format,
+    } = document;
+    let printer_name = choices.printer.as_str();
     // Before CUPS is asked anything: a printer the user may not use is unknown to them. Rules
     // that cannot be read refuse everything, the open printers too.
     let usable = Usable::read(
@@ -131,7 +184,7 @@ async fn submit_form(
     )
     .await
     .map_err(closed("reading the printer access rules"))?;
-    if !usable.allows(&printer_name) {
+    if !usable.allows(printer_name) {
         return Err(Refusal::PrinterNotFound.into());
     }
     // Rules that cannot be read might be there: refused, like access rules. Whether they are
@@ -141,7 +194,7 @@ async fn submit_form(
         .map_err(closed("reading the quota rules"))?
         .iter()
         .any(|rule| rule.enabled);
-    let printer = state.print.printer(&printer_name).await.map_err(refusal)?;
+    let printer = state.print.printer(printer_name).await.map_err(refusal)?;
     // CUPS ignores the case of printer names, so "LAB" reaches the printer "lab": its rule is
     // checked again under the name CUPS answered with.
     if !usable.allows(&printer.name) {
@@ -150,7 +203,7 @@ async fn submit_form(
     if !printer.accepting_jobs {
         return Err(Refusal::NotAccepting.into());
     }
-    let options = options(&form.options, &printer.capabilities, format)?;
+    let options = options(choices, &printer.capabilities, format)?;
     let document_pages = match format {
         // Bounded in concurrency and time, and not copied: see `PageCounter`.
         DocumentFormat::Pdf => state.page_counter.count(document.clone()).await,
@@ -421,21 +474,13 @@ fn refusal(error: PrintError) -> Refusal {
     }
 }
 
-/// The options as typed in the form, before they are checked against the printer.
-#[derive(Default)]
-struct OptionFields {
-    copies: Option<String>,
-    sides: Option<String>,
-    color_mode: Option<String>,
-    page_ranges: Option<String>,
-}
-
 #[derive(Default)]
 struct Form {
     /// The file name the browser sent, and the content.
     file: Option<(String, Bytes)>,
     printer: Option<String>,
-    options: OptionFields,
+    /// The options as typed; the printer is in `printer` until it is known to be there.
+    options: Choices,
 }
 
 impl Form {
@@ -483,7 +528,7 @@ fn unreadable(error: MultipartError) -> Refusal {
 /// The options of the form, refused unless the printer supports them. Single-sided printing is
 /// always possible; a printer that lists no color modes is not second-guessed.
 fn options(
-    fields: &OptionFields,
+    fields: &Choices,
     capabilities: &Capabilities,
     format: DocumentFormat,
 ) -> Result<PrintOptions, Refusal> {
@@ -558,12 +603,7 @@ mod tests {
 
     #[test]
     fn defaults_follow_the_printer() {
-        let defaults = options(
-            &OptionFields::default(),
-            &capabilities(),
-            DocumentFormat::Pdf,
-        )
-        .unwrap();
+        let defaults = options(&Choices::default(), &capabilities(), DocumentFormat::Pdf).unwrap();
         assert_eq!(defaults.color_mode, ColorMode::Monochrome);
         assert_eq!(defaults.sides, Sides::OneSided);
         assert_eq!(defaults.copies, 1);
@@ -572,11 +612,11 @@ mod tests {
             sides: vec![],
             color_modes: vec![],
         };
-        let fields = OptionFields {
+        let fields = Choices {
             copies: Some("1".into()),
             color_mode: Some("color".into()),
             sides: Some("one-sided".into()),
-            ..OptionFields::default()
+            ..Choices::default()
         };
         assert!(options(&fields, &unknown, DocumentFormat::Pdf).is_ok());
     }
