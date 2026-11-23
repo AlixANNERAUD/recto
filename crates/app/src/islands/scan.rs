@@ -352,6 +352,10 @@ pub fn Scanner(scanners: Vec<ScannerInfo>, error: Option<String>) -> impl IntoVi
                                 .map(|scanner| scanner.id.clone())
                                 .unwrap_or_default(),
                         );
+                    } else if capabilities.with_untracked(Option::is_none) {
+                        // Its settings failed to load (asleep, busy): setting it again, even to
+                        // the same scanner, loads them anew now that it may be back.
+                        selected.set(current);
                     }
                     scanners.set(listed);
                 }
