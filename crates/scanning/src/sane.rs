@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -108,6 +109,8 @@ pub struct SaneScanners {
     /// without blocking the runtime.
     worker: tokio::sync::Mutex<Option<Arc<Worker>>>,
     cache: Mutex<Option<Vec<ScannerInfo>>>,
+    /// Counts the listings read from SANE, for [`ScannerService::listing`].
+    listings: AtomicU64,
     /// The DNS-SD instance names recto advertises its scanners under.
     advertised: Mutex<Vec<String>>,
 }
@@ -118,6 +121,7 @@ impl SaneScanners {
         Ok(Self {
             worker: tokio::sync::Mutex::new(Some(Worker::spawn()?)),
             cache: Mutex::new(None),
+            listings: AtomicU64::new(0),
             advertised: Mutex::new(Vec::new()),
         })
     }
@@ -178,6 +182,7 @@ impl ScannerService for SaneScanners {
             None => {
                 let list = self.ask(Command::List).await?;
                 *self.cache.lock().unwrap() = Some(list.clone());
+                self.listings.fetch_add(1, Ordering::Relaxed);
                 list
             }
         };
@@ -210,6 +215,10 @@ impl ScannerService for SaneScanners {
     /// [`escl::MODEL`].
     fn hide_advertised(&self, names: Vec<String>) {
         *self.advertised.lock().unwrap() = names;
+    }
+
+    fn listing(&self) -> u64 {
+        self.listings.load(Ordering::Relaxed)
     }
 }
 

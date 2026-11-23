@@ -13,7 +13,7 @@ use axum::{body::Bytes, http::Method};
 use chrono::Utc;
 use recto_domain::device_passwords;
 use recto_entity::scan_jobs;
-use recto_scanning::{ScanError, escl};
+use recto_scanning::{ScanError, ScannerService as _, escl};
 
 use super::*;
 
@@ -450,7 +450,7 @@ async fn an_empty_feeder_answers_404() {
 #[tokio::test]
 async fn a_busy_scanner_answers_503() {
     let harness = Harness::with(Setup {
-        scanner: Some(MockScannerService::default().with_scan_delay(Duration::from_millis(300))),
+        scanner: Some(MockScannerService::default().with_scan_delay(Duration::from_secs(2))),
         ..Setup::default()
     })
     .await;
@@ -465,6 +465,11 @@ async fn a_busy_scanner_answers_503() {
         ))
         .await;
     assert_eq!(first.status(), StatusCode::CREATED);
+    // A new listing makes what recto knew of the scanner stale: asking SANE for its
+    // capabilities now would wait for the whole scan, as SANE does one thing at a time.
+    harness.scan.scanners(true).await.unwrap();
+    scanning(&harness).await;
+    let started = std::time::Instant::now();
     let second = harness
         .send(post_job(
             &root(),
@@ -473,6 +478,10 @@ async fn a_busy_scanner_answers_503() {
         ))
         .await;
     assert_eq!(second.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "answered at once"
+    );
     assert!(second.headers().contains_key(header::RETRY_AFTER));
     assert_eq!(second.headers()[header::CACHE_CONTROL], "no-cache");
 
@@ -487,6 +496,52 @@ async fn a_busy_scanner_answers_503() {
             .await
             .contains("<pwg:State>Processing</pwg:State>")
     );
+}
+
+/// Waits until the mock scanner has started the scan the last job asked for.
+async fn scanning(harness: &Harness) {
+    let started = std::time::Instant::now();
+    while harness.scan.scan_requests().is_empty() {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the scan starts"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn capabilities_are_answered_during_a_scan() {
+    let harness = Harness::with(Setup {
+        scanner: Some(MockScannerService::default().with_scan_delay(Duration::from_secs(2))),
+        ..Setup::default()
+    })
+    .await;
+    let alice = harness.local_user("alice", ALICE_PASSWORD).await;
+    let secret = device_secret(&harness, alice).await;
+    let capabilities = format!("{}/ScannerCapabilities", root());
+
+    let before = harness.send(get_escl(&capabilities, Some(&secret))).await;
+    assert_eq!(before.status(), StatusCode::OK);
+    let first = harness
+        .send(post_job(
+            &root(),
+            Some(&secret),
+            settings("Platen", "image/png"),
+        ))
+        .await;
+    assert_eq!(first.status(), StatusCode::CREATED);
+    // SANE is scanning: what it said of the scanner is kept, so apps polling the
+    // capabilities get them without waiting for the scan.
+    scanning(&harness).await;
+    let started = std::time::Instant::now();
+    let during = harness.send(get_escl(&capabilities, Some(&secret))).await;
+    assert_eq!(during.status(), StatusCode::OK);
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "answered at once"
+    );
+    assert_eq!(text(during).await, text(before).await);
 }
 
 #[tokio::test]

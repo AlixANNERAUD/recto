@@ -23,7 +23,7 @@ use std::{
     future::poll_fn,
     pin::Pin,
     sync::{Arc, Mutex, PoisonError},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -41,7 +41,7 @@ use recto_domain::{
     scans::{self, NewScan},
 };
 use recto_scanning::{
-    OutputFormat, ScanError, ScannedPage, ScannerInfo,
+    OutputFormat, ScanError, ScannedPage, ScannerCapabilities, ScannerInfo,
     escl::{self, AdfState, EsclJobs, EsclRequest, NextDocument, SettingsError},
 };
 use uuid::Uuid;
@@ -61,6 +61,17 @@ const BUSY_RETRY: &str = "5";
 /// `Retry-After` while the job is still scanning.
 const SCANNING_RETRY: &str = "2";
 
+/// How long what a scanner said it can do is kept.
+const CAPABILITIES_AGE: Duration = Duration::from_secs(10 * 60);
+
+/// A scanner's capabilities, as SANE gave them.
+struct Known {
+    capabilities: ScannerCapabilities,
+    at: Instant,
+    /// The scanner list's [`listing`](recto_scanning::ScannerService::listing) then.
+    listing: u64,
+}
+
 #[derive(Clone)]
 struct EsclState {
     app: AppState,
@@ -74,9 +85,10 @@ struct EsclState {
     admin: Arc<str>,
     /// The brand's 512 px icon, public: apps fetch it without credentials.
     icon: Arc<str>,
-    /// Whether each scanner, by key, has a feeder, as its capabilities last said. The status
-    /// reads it rather than asking SANE, whose single thread is busy while a scan runs.
-    feeders: Arc<Mutex<HashMap<String, bool>>>,
+    /// What each scanner, by key, said it can do. SANE has a single thread, busy for the
+    /// whole of a scan: asking it again would keep apps waiting, so the status, the
+    /// capabilities and new jobs read this, until [`CAPABILITIES_AGE`] or a new listing.
+    capabilities: Arc<Mutex<HashMap<String, Known>>>,
     /// How long a client has to send its `ScanSettings`, at most [`escl::MAX_SETTINGS_BYTES`]
     /// (`AuthState::device_read_timeout`).
     read_timeout: Duration,
@@ -95,7 +107,7 @@ pub fn routes(devices: Router, app: AppState, auth: &AuthState, listener: Listen
         public_url: Arc::from(auth.public_url.as_str()),
         admin: Arc::from(auth.public("scan").as_str()),
         icon: Arc::from(auth.public("brand/icon-512.png").as_str()),
-        feeders: Arc::default(),
+        capabilities: Arc::default(),
         read_timeout: auth.device_read_timeout,
         app,
     };
@@ -320,11 +332,10 @@ struct Scan<'a> {
 
 impl Scan<'_> {
     async fn capabilities(&self) -> Response {
-        let capabilities = match self.state.app.scan.capabilities(&self.scanner.id).await {
+        let capabilities = match self.known().await {
             Ok(capabilities) => capabilities,
             Err(error) => return self.failed(&error),
         };
-        self.remember_feeder(capabilities.sources.iter().any(|source| source.is_feeder));
         let uuid = escl::scanner_uuid(&self.state.public_url, &self.scanner.id);
         xml(escl::capabilities_xml(
             self.scanner,
@@ -340,12 +351,17 @@ impl Scan<'_> {
         let adf = jobs.adf_state(self.key);
         let has_feeder = self
             .state
-            .feeders
+            .capabilities
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(self.key)
-            .copied()
-            .unwrap_or(false);
+            .is_some_and(|known| {
+                known
+                    .capabilities
+                    .sources
+                    .iter()
+                    .any(|source| source.is_feeder)
+            });
         // A feeder that was found empty, jammed or open is a feeder, whatever the cache says.
         let adf = (has_feeder || adf != AdfState::Loaded).then_some(adf);
         xml(escl::status_xml(
@@ -370,11 +386,14 @@ impl Scan<'_> {
             Ok(settings) => settings,
             Err(status) => return status.into_response(),
         };
-        let capabilities = match self.state.app.scan.capabilities(&self.scanner.id).await {
+        // Before SANE is asked anything: it would answer only once the running scan is over.
+        if self.state.jobs.state(self.key) == escl::EsclState::Processing {
+            return busy();
+        }
+        let capabilities = match self.known().await {
             Ok(capabilities) => capabilities,
             Err(error) => return self.failed(&error),
         };
-        self.remember_feeder(capabilities.sources.iter().any(|source| source.is_feeder));
         let request = match escl::parse_settings(&settings, &capabilities) {
             Ok(request) => request,
             Err(error) => {
@@ -391,11 +410,7 @@ impl Scan<'_> {
             .jobs
             .start(self.caller.owner(), self.key, request.format)
         else {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                [(header::RETRY_AFTER, HeaderValue::from_static(BUSY_RETRY))],
-            )
-                .into_response();
+            return busy();
         };
         tracing::info!(
             user = self.caller.name(),
@@ -476,12 +491,35 @@ impl Scan<'_> {
         }
     }
 
-    fn remember_feeder(&self, has_feeder: bool) {
-        self.state
-            .feeders
+    /// The scanner's capabilities, from what it said before when that is recent enough.
+    async fn known(&self) -> Result<ScannerCapabilities, ScanError> {
+        let scan = &self.state.app.scan;
+        let listing = scan.listing();
+        let cached = self
+            .state
+            .capabilities
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(self.key.to_owned(), has_feeder);
+            .get(self.key)
+            .filter(|known| known.listing == listing && known.at.elapsed() < CAPABILITIES_AGE)
+            .map(|known| known.capabilities.clone());
+        if let Some(capabilities) = cached {
+            return Ok(capabilities);
+        }
+        let capabilities = scan.capabilities(&self.scanner.id).await?;
+        self.state
+            .capabilities
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(
+                self.key.to_owned(),
+                Known {
+                    capabilities: capabilities.clone(),
+                    at: Instant::now(),
+                    listing,
+                },
+            );
+        Ok(capabilities)
     }
 
     /// The answer to a scanner that failed: 409 for what the person can fix at the scanner, 503
@@ -510,6 +548,15 @@ impl Scan<'_> {
             | ScanError::Storage { .. } => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }
+}
+
+/// The answer while another eSCL job holds the scanner.
+fn busy() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        [(header::RETRY_AFTER, HeaderValue::from_static(BUSY_RETRY))],
+    )
+        .into_response()
 }
 
 /// An eSCL XML answer.

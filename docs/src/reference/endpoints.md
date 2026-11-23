@@ -134,7 +134,7 @@ scan apps. `{scanner}` is the first 8 hex digits of the SHA-256 of the scanner's
 
 | Method and path | Does |
 | --- | --- |
-| `GET {root}/ScannerCapabilities` | What the scanner offers, as eSCL `ScannerCapabilities` XML (`text/xml`). |
+| `GET {root}/ScannerCapabilities` | What the scanner offers, as eSCL `ScannerCapabilities` XML (`text/xml`). recto keeps what the scanner said for 10 minutes, or until the scanner list is refreshed, so the answer does not wait for a scan in progress. |
 | `GET {root}/ScannerStatus` | `Idle`, or `Processing` while an eSCL scan runs on it, the feeder's state, and the caller's jobs of the last 10 minutes, each under the caller's own `{root}`. |
 | `POST {root}/ScanJobs` | Starts a scan from a `ScanSettings` XML body of at most 64 KiB, sent within 30 seconds. Answers `201` with `Location: {root}/ScanJobs/{job}`; `400` for a body recto cannot read, with a `DOCTYPE` or an unknown entity; `408` for a body that took too long; `409` for settings the scanner cannot do, an unsupported format or a page over the limit; `413` for a body over 64 KiB; `503` with `Retry-After: 5` while another eSCL scan runs on the scanner. |
 | `GET {root}/ScanJobs/{job}/NextDocument` | The next document: the PDF, or one PNG or JPEG page. Waits up to 30 seconds for the scan, then answers `503` with `Retry-After: 2`. `404` when every document was fetched, when the feeder was empty, and for a job that does not exist or is not the caller's; `409` for a jam or an open cover; `500` for another failure. |

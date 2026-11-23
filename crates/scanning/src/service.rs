@@ -49,4 +49,11 @@ pub trait ScannerService: Send + Sync + 'static {
     /// such devices out from then on. Replaces the previous names. The default ignores them,
     /// right for a stack without network backends.
     fn hide_advertised(&self, _names: Vec<String>) {}
+
+    /// How many times the scanner list was read from the backend: what was learnt of a scanner
+    /// before a newer listing, such as its capabilities, may be stale. The default never
+    /// changes, right for a stack whose scanners never do.
+    fn listing(&self) -> u64 {
+        0
+    }
 }

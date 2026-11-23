@@ -1,5 +1,5 @@
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -23,6 +23,8 @@ pub struct MockScannerService {
     queue: tokio::sync::Mutex<()>,
     active: AtomicUsize,
     peak: AtomicUsize,
+    /// Counts the refreshed listings, for [`ScannerService::listing`].
+    listings: AtomicU64,
     requests: Mutex<Vec<(String, ScanRequest)>>,
     /// Every id a caller tried to open, listed or not.
     opened: Mutex<Vec<String>>,
@@ -56,6 +58,7 @@ impl Default for MockScannerService {
             queue: tokio::sync::Mutex::new(()),
             active: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
+            listings: AtomicU64::new(0),
             requests: Mutex::new(Vec::new()),
             opened: Mutex::new(Vec::new()),
             hidden: Mutex::new(Vec::new()),
@@ -126,14 +129,23 @@ impl MockScannerService {
 
 #[async_trait]
 impl ScannerService for MockScannerService {
-    async fn scanners(&self, _refresh: bool) -> Result<Vec<ScannerInfo>, ScanError> {
+    async fn scanners(&self, refresh: bool) -> Result<Vec<ScannerInfo>, ScanError> {
         if let Some(error) = self.failure.lock().unwrap().clone() {
             return Err(error);
+        }
+        if refresh {
+            self.listings.fetch_add(1, Ordering::SeqCst);
         }
         Ok(self.scanners.clone())
     }
 
+    fn listing(&self) -> u64 {
+        self.listings.load(Ordering::SeqCst)
+    }
+
     async fn capabilities(&self, id: &str) -> Result<ScannerCapabilities, ScanError> {
+        // SANE answers one request at a time: this waits for a scan in progress, as it does.
+        let _turn = self.queue.lock().await;
         self.check(id)?;
         Ok(self.capabilities.clone())
     }
