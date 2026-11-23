@@ -718,12 +718,8 @@ async fn devices_view_with(
                 scanners
                     .into_iter()
                     .map(|scanner| {
-                        let detail = format!("{} {}", scanner.vendor, scanner.model);
-                        (
-                            scanner.id,
-                            Some(detail.trim().to_owned()).filter(|d| !d.is_empty()),
-                            None,
-                        )
+                        let detail = scanner.label();
+                        (scanner.id, Some(detail).filter(|d| !d.is_empty()), None)
                     })
                     .collect()
             }),

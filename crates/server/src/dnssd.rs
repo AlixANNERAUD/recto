@@ -99,16 +99,6 @@ fn cut(text: &str, max: usize) -> &str {
     &text[..end]
 }
 
-/// A scanner's vendor and model, as the scan page shows them.
-fn label(info: &ScannerInfo) -> String {
-    [info.vendor.trim(), info.model.trim()]
-        .iter()
-        .filter(|part| !part.is_empty())
-        .copied()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// The bytes a scanner's own name keeps, however long recto's instance name is.
 const LABEL_MIN: usize = 16;
 
@@ -121,7 +111,7 @@ pub fn scanner_instance(info: &ScannerInfo, instance: &str, tag: Option<&str>) -
     let room = INSTANCE_MAX.saturating_sub(LABEL_MIN + tag.len() + " ()".len());
     let suffix = format!(" ({})", cut(instance.trim(), room).trim_end());
     let room = INSTANCE_MAX.saturating_sub(suffix.len() + tag.len());
-    format!("{}{tag}{suffix}", cut(&label(info), room).trim_end())
+    format!("{}{tag}{suffix}", cut(&info.label(), room).trim_end())
 }
 
 /// A scanner as its eSCL capabilities describe it, announced as `name`.
@@ -136,7 +126,7 @@ pub fn advertised_scanner(
         key: escl::scanner_key(&info.id),
         name,
         uuid: escl::scanner_uuid(public_url.as_str(), &info.id),
-        make_and_model: label(info),
+        make_and_model: info.label(),
         color: offered.color,
         grayscale: offered.grayscale,
         binary: offered.binary,

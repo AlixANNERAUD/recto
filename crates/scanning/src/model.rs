@@ -8,6 +8,19 @@ pub struct ScannerInfo {
     pub kind: String,
 }
 
+impl ScannerInfo {
+    /// The vendor and model, as people are shown the scanner: SANE pads some vendors with
+    /// spaces, and leaves either empty at times.
+    pub fn label(&self) -> String {
+        [self.vendor.trim(), self.model.trim()]
+            .iter()
+            .filter(|part| !part.is_empty())
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScanMode {
     Color,

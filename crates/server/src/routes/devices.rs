@@ -198,12 +198,7 @@ async fn scan_addresses(state: &DevicesState, user: &User, secret: &str) -> Vec<
         .into_iter()
         .filter(|scanner| usable.allows(&scanner.id))
         .map(|scanner| ScanAddress {
-            scanner: [scanner.vendor.trim(), scanner.model.trim()]
-                .iter()
-                .filter(|part| !part.is_empty())
-                .copied()
-                .collect::<Vec<_>>()
-                .join(" "),
+            scanner: scanner.label(),
             address: format!(
                 "{}{}/",
                 state.web_address,

@@ -454,9 +454,10 @@ pub fn Scanner(scanners: Vec<ScannerInfo>, error: Option<String>) -> impl IntoVi
             .into_iter()
             .map(|scanner| {
                 let id = scanner.id.clone();
+                let label = scanner.label();
                 view! {
                     <option value=scanner.id prop:selected=move || selected.get() == id>
-                        {format!("{} {}", scanner.vendor, scanner.model)}
+                        {label}
                     </option>
                 }
             })
