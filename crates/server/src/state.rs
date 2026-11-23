@@ -210,6 +210,7 @@ pub async fn build(
         print: Arc::new(Cups::new(config.cups_url.clone())),
         printer_admin: printer_admin(config),
         scan: scanners().await,
+        capabilities: Default::default(),
         results: Arc::new(results),
         output_dir: config.scan_output_dir.clone(),
         max_upload_size: config.max_upload_size,

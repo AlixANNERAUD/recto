@@ -779,6 +779,7 @@ mod tests {
             print: print.clone(),
             printer_admin: None,
             scan: Arc::new(recto_scanning::MockScannerService::default()),
+            capabilities: Default::default(),
             results: Arc::new(recto_scanning::ResultStore::new(
                 dir.join("results"),
                 std::time::Duration::from_secs(60),

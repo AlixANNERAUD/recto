@@ -1,7 +1,12 @@
 //! What the server hands to pages and server functions: the services, as axum state and as a
 //! Leptos context, and the signed-in user of the request.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, Mutex, PoisonError},
+    time::{Duration, Instant},
+};
 
 use axum::{extract::FromRef, http::request::Parts};
 use leptos::{
@@ -10,7 +15,7 @@ use leptos::{
 };
 use recto_domain::held::files::HeldFiles;
 use recto_printing::{PrintService, PrinterAdmin, count::PageCounter, raster::RasterConverter};
-use recto_scanning::{ResultStore, ScannerService};
+use recto_scanning::{ResultStore, ScanError, ScannerCapabilities, ScannerService};
 use sea_orm::DatabaseConnection;
 
 use crate::branding::Branding;
@@ -33,6 +38,8 @@ pub struct AppState {
     /// Adds and changes the printers of CUPS; `None` turns printer administration off.
     pub printer_admin: Option<Arc<dyn PrinterAdmin>>,
     pub scan: Arc<dyn ScannerService>,
+    /// What each scanner said it can do, so a scan does not ask again first.
+    pub capabilities: Arc<KnownCapabilities>,
     /// Finished scans waiting to be downloaded or saved. Its I/O blocks: call it through
     /// [`ResultStore::blocking`]. Results belong to the [`User::id`], as text.
     pub results: Arc<ResultStore>,
@@ -64,6 +71,62 @@ pub struct AppState {
     pub held: Arc<HeldFiles>,
     /// How long a held job waits for its owner (`RECTO_HELD_JOB_HOURS`).
     pub held_lifetime: chrono::TimeDelta,
+}
+
+/// What each scanner said it can do, by SANE id, until [`KnownCapabilities::AGE`] or a new
+/// listing ([`ScannerService::listing`]). SANE has a single thread, and reading them opens the
+/// scanner on it, as a scan does: without this, each scan of the page, and each request of a
+/// scan app, would open the scanner once more, or wait behind a scan in progress.
+#[derive(Default)]
+pub struct KnownCapabilities(Mutex<HashMap<String, Known>>);
+
+struct Known {
+    capabilities: ScannerCapabilities,
+    at: Instant,
+    /// The scanner list's listing then.
+    listing: u64,
+}
+
+impl KnownCapabilities {
+    /// How long what a scanner said is kept.
+    pub const AGE: Duration = Duration::from_secs(10 * 60);
+
+    /// The capabilities of scanner `id`, from what it said before when that is recent and the
+    /// scanners were not listed again since, else from `scan`.
+    pub async fn get(
+        &self,
+        scan: &dyn ScannerService,
+        id: &str,
+    ) -> Result<ScannerCapabilities, ScanError> {
+        let listing = scan.listing();
+        let known = self
+            .lock()
+            .get(id)
+            .filter(|known| known.listing == listing && known.at.elapsed() < Self::AGE)
+            .map(|known| known.capabilities.clone());
+        if let Some(capabilities) = known {
+            return Ok(capabilities);
+        }
+        let capabilities = scan.capabilities(id).await?;
+        self.lock().insert(
+            id.to_owned(),
+            Known {
+                capabilities: capabilities.clone(),
+                at: Instant::now(),
+                listing,
+            },
+        );
+        Ok(capabilities)
+    }
+
+    /// What scanner `id` said last, however long ago.
+    pub fn last(&self, id: &str) -> Option<ScannerCapabilities> {
+        self.lock().get(id).map(|known| known.capabilities.clone())
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Known>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 /// The signed-in user of a request, read from the accounts database on every request, so that

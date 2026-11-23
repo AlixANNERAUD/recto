@@ -18,12 +18,7 @@
 //! cross-site layers, and every other address under `/eSCL/` or `/device/` goes on to its bare
 //! 404. Log lines name the device password's id, never the path, which may hold the secret.
 
-use std::{
-    collections::HashMap,
-    net::IpAddr,
-    sync::{Arc, Mutex, PoisonError},
-    time::{Duration, Instant},
-};
+use std::{net::IpAddr, sync::Arc, time::Duration};
 
 use axum::{
     Router,
@@ -57,17 +52,6 @@ const BUSY_RETRY: &str = "5";
 /// `Retry-After` while the job is still scanning.
 const SCANNING_RETRY: &str = "2";
 
-/// How long what a scanner said it can do is kept.
-const CAPABILITIES_AGE: Duration = Duration::from_secs(10 * 60);
-
-/// A scanner's capabilities, as SANE gave them.
-struct Known {
-    capabilities: ScannerCapabilities,
-    at: Instant,
-    /// The scanner list's [`listing`](recto_scanning::ScannerService::listing) then.
-    listing: u64,
-}
-
 #[derive(Clone)]
 struct EsclState {
     app: AppState,
@@ -81,10 +65,6 @@ struct EsclState {
     admin: Arc<str>,
     /// The brand's 512 px icon, public: apps fetch it without credentials.
     icon: Arc<str>,
-    /// What each scanner, by key, said it can do. SANE has a single thread, busy for the
-    /// whole of a scan: asking it again would keep apps waiting, so the status, the
-    /// capabilities and new jobs read this, until [`CAPABILITIES_AGE`] or a new listing.
-    capabilities: Arc<Mutex<HashMap<String, Known>>>,
     /// How long `NextDocument` waits for a scan (`AuthState::escl_document_wait`).
     document_wait: Duration,
     /// How long a client has to send its `ScanSettings`, at most [`escl::MAX_SETTINGS_BYTES`]
@@ -105,7 +85,6 @@ pub fn routes(devices: Router, app: AppState, auth: &AuthState, listener: Listen
         public_url: Arc::from(auth.public_url.as_str()),
         admin: Arc::from(auth.public("scan").as_str()),
         icon: Arc::from(auth.public("brand/icon-512.png").as_str()),
-        capabilities: Arc::default(),
         read_timeout: auth.device_read_timeout,
         document_wait: auth.escl_document_wait,
         app,
@@ -359,17 +338,10 @@ impl Scan<'_> {
         let adf = jobs.adf_state(self.key);
         let has_feeder = self
             .state
+            .app
             .capabilities
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(self.key)
-            .is_some_and(|known| {
-                known
-                    .capabilities
-                    .sources
-                    .iter()
-                    .any(|source| source.is_feeder)
-            });
+            .last(&self.scanner.id)
+            .is_some_and(|capabilities| capabilities.sources.iter().any(|source| source.is_feeder));
         // A feeder that was found empty, jammed or open is a feeder, whatever the cache says.
         let adf = (has_feeder || adf != AdfState::Loaded).then_some(adf);
         xml(escl::status_xml(
@@ -500,40 +472,19 @@ impl Scan<'_> {
         }
     }
 
-    /// The scanner's capabilities, from what it said before when that is recent enough.
+    /// The scanner's capabilities, from what it said before when that is recent enough. SANE
+    /// has a single thread, busy for the whole of a scan: the status, the capabilities and new
+    /// jobs read what is known.
     async fn known(&self) -> Result<ScannerCapabilities, ScanError> {
-        let scan = &self.state.app.scan;
-        let listing = scan.listing();
+        let app = &self.state.app;
         // While one of its jobs scans, asking SANE would wait behind the whole batch, past the
         // device's timeout: what is known, however old, is better.
-        let scanning = self.state.jobs.state(self.key) == escl::EsclState::Processing;
-        let cached = self
-            .state
-            .capabilities
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(self.key)
-            .filter(|known| {
-                scanning || (known.listing == listing && known.at.elapsed() < CAPABILITIES_AGE)
-            })
-            .map(|known| known.capabilities.clone());
-        if let Some(capabilities) = cached {
+        if self.state.jobs.state(self.key) == escl::EsclState::Processing
+            && let Some(capabilities) = app.capabilities.last(&self.scanner.id)
+        {
             return Ok(capabilities);
         }
-        let capabilities = scan.capabilities(&self.scanner.id).await?;
-        self.state
-            .capabilities
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(
-                self.key.to_owned(),
-                Known {
-                    capabilities: capabilities.clone(),
-                    at: Instant::now(),
-                    listing,
-                },
-            );
-        Ok(capabilities)
+        app.capabilities.get(&*app.scan, &self.scanner.id).await
     }
 
     /// The answer to a scanner that failed: 409 for what the person can fix at the scanner, 503

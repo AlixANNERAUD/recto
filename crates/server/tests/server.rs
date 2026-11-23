@@ -207,6 +207,7 @@ impl Harness {
                 .then(|| admin.clone() as Arc<dyn recto_printing::PrinterAdmin>),
             print: print.clone(),
             scan: scan.clone(),
+            capabilities: Default::default(),
             results: results.clone(),
             output_dir: setup.output_dir,
             max_upload_size: setup.max_upload_size,

@@ -171,6 +171,7 @@ impl Harness {
             printer_admin,
             print,
             scan: scan.clone(),
+            capabilities: Default::default(),
             results: Arc::new(ResultStore::new(
                 dir.path().to_owned(),
                 Duration::from_secs(3600),
@@ -727,6 +728,47 @@ async fn preview_reads_one_page_from_the_chosen_source() {
             .contains("The scanner does not support this")
     );
     assert_eq!(harness.scan.scan_requests().len(), 1);
+}
+
+#[tokio::test]
+async fn a_scan_opens_the_scanner_once() {
+    let harness = Harness::new(vec![kitchen()], vec![]).await;
+    let cookie = harness.sign_in("alice-subject", "alice").await;
+    let form = "application/x-www-form-urlencoded";
+    let response = harness
+        .call("scanner_capabilities", &cookie, form, "id=mock%3A0".into())
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(harness.scan.opened().len(), 1);
+
+    // The preview and the scan reuse what the scanner said: each opens it once, to scan.
+    let response = harness
+        .call("preview", &cookie, form, "id=mock%3A0".into())
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(harness.scan.opened().len(), 2);
+    let body = serde_json::json!({
+        "id": "mock:0",
+        "settings": { "resolution": 150, "mode": "Gray", "source": null, "area": null },
+        "selection": null,
+        "format": "Pdf",
+    });
+    let response = harness
+        .call("scan", &cookie, "application/json", body.to_string())
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(harness.scan.opened().len(), 3);
+
+    // Looking for scanners again asks it again.
+    let response = harness
+        .call("list_scanners", &cookie, form, "refresh=true".into())
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = harness
+        .call("preview", &cookie, form, "id=mock%3A0".into())
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(harness.scan.opened().len(), 5);
 }
 
 /// The HTML of a page for a signed-in user, sent with an extra cookie.

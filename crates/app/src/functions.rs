@@ -157,7 +157,7 @@ pub async fn list_scanners(refresh: bool) -> Result<Vec<ScannerInfo>, ServerFnEr
 pub async fn scanner_capabilities(id: String) -> Result<ScannerCapabilities, ServerFnError> {
     let context = server::Context::new()?;
     context.listed(&id).await?;
-    let capabilities = context.state.scan.capabilities(&id).await;
+    let capabilities = context.capabilities(&id).await;
     capabilities.map_err(|error| context.scan_failure(&error))
 }
 
@@ -168,7 +168,7 @@ pub async fn preview(id: String, source: Option<String>) -> Result<ScanOutcome, 
     let context = server::Context::new()?;
     context.listed(&id).await?;
     let scanned = async {
-        let capabilities = context.state.scan.capabilities(&id).await?;
+        let capabilities = context.capabilities(&id).await?;
         let settings = recto_scanning::preview_settings(&capabilities, source);
         let settings = server::checked(settings, None, &capabilities)?;
         let request = ScanRequest {
@@ -194,7 +194,7 @@ pub async fn scan(
     let context = server::Context::new()?;
     context.listed(&id).await?;
     let scanned = async {
-        let capabilities = context.state.scan.capabilities(&id).await?;
+        let capabilities = context.capabilities(&id).await?;
         let settings = server::checked(settings, selection, &capabilities)?;
         let request = ScanRequest {
             settings,
@@ -592,6 +592,12 @@ mod server {
                     tracing::warn!(user = self.user.username, "recording the scan timed out");
                 }
             }
+        }
+
+        /// What scanner `id` can do, as it said lately (see [`crate::state::KnownCapabilities`]).
+        pub async fn capabilities(&self, id: &str) -> Result<ScannerCapabilities, ScanError> {
+            let scan = &*self.state.scan;
+            self.state.capabilities.get(scan, id).await
         }
 
         /// Assembles the pages into the file and keeps it for the user. Both block, so they run
