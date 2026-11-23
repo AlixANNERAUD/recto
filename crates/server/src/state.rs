@@ -22,7 +22,7 @@ use recto_scanning::{
 use sea_orm::DatabaseConnection;
 use url::Url;
 
-use crate::{config::Config, session_store::DatabaseSessionStore};
+use crate::{config::Config, device_auth::DeviceLimits, session_store::DatabaseSessionStore};
 
 /// How long a finished scan waits to be downloaded or saved.
 pub const SCAN_RESULT_TTL: Duration = Duration::from_secs(60 * 60);
@@ -52,6 +52,9 @@ pub struct AuthState {
     pub ipp_allow_plain: bool,
     /// The paper size recto's printer offers devices by default (`RECTO_DEFAULT_MEDIA`).
     pub default_media: Media,
+    /// The failures and refused secrets of device passwords, shared by every route serving
+    /// devices.
+    pub device_limits: DeviceLimits,
 }
 
 impl AuthState {
@@ -73,6 +76,7 @@ impl AuthState {
             trust_forwarded_headers: false,
             ipp_allow_plain: false,
             default_media: Media::A4,
+            device_limits: DeviceLimits::default(),
         }
     }
 

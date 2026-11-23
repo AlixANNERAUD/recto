@@ -268,6 +268,15 @@ impl FailedSecrets {
     }
 }
 
+/// The limits every route serving devices shares, built once per server with its
+/// [`AuthState`]: the IPP routes, and any listener or protocol added later, draw on one budget
+/// of failures and one memory of refused secrets, so a second way in is no fresh budget.
+#[derive(Clone, Default)]
+pub struct DeviceLimits {
+    pub limiter: DeviceLimiter,
+    pub failed: FailedSecrets,
+}
+
 /// What device authentication needs.
 #[derive(Clone)]
 pub struct DeviceAuth {
@@ -285,12 +294,12 @@ pub struct DeviceAuth {
 }
 
 impl DeviceAuth {
-    /// Device authentication for the server of `auth`, with a limiter of its own.
+    /// Device authentication for the server of `auth`, sharing its [`DeviceLimits`].
     pub fn new(auth: &AuthState, brand_name: &str) -> Self {
         Self {
             database: auth.database.clone(),
-            limiter: DeviceLimiter::new(),
-            failed: FailedSecrets::new(),
+            limiter: auth.device_limits.limiter.clone(),
+            failed: auth.device_limits.failed.clone(),
             trust_forwarded_headers: auth.trust_forwarded_headers,
             plain_allowed: auth.public_url.scheme() == "https" || auth.ipp_allow_plain,
             brand_name: Arc::from(brand_name),
@@ -814,5 +823,30 @@ mod tests {
         assert!(plain("https://recto.example.org", false).plain_allowed);
         assert!(!plain("http://192.168.1.2:8080", false).plain_allowed);
         assert!(plain("http://192.168.1.2:8080", true).plain_allowed);
+    }
+
+    #[tokio::test]
+    async fn every_device_route_shares_one_limit() {
+        // The IPP routes, and later the LAN listener and eSCL, each build their DeviceAuth from
+        // the server's state: a failure on one counts on all, and a refused secret is refused
+        // everywhere, so a second listener is no fresh budget for guesses.
+        let database = recto_domain::testing::database().await;
+        let auth = AuthState::new(
+            None,
+            Url::parse("https://recto.example.org").unwrap(),
+            database,
+        );
+        let (first, second) = (
+            DeviceAuth::new(&auth, "recto"),
+            DeviceAuth::new(&auth, "recto"),
+        );
+        let peer: IpAddr = "192.0.2.7".parse().unwrap();
+        for _ in 0..DeviceLimiter::BURST as usize {
+            first.limiter.failed(peer);
+        }
+        assert!(!second.limiter.allow(peer));
+        let fingerprint = device_passwords::fingerprint("wrong");
+        first.failed.insert_at(fingerprint, Instant::now());
+        assert!(second.failed.contains_at(&fingerprint, Instant::now()));
     }
 }
