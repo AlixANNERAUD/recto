@@ -496,8 +496,6 @@ fn check_operation_group(group: &IppAttributeGroup) -> Result<(), StatusCode> {
     Ok(())
 }
 
-/// The values of a one-or-many attribute. Not `IppValue`'s own iterator, which walks into a
-/// collection's members.
 /// A string value of any string syntax; anything else, a string that was not UTF-8 included,
 /// counts as absent.
 fn string(value: &IppValue) -> Option<String> {
