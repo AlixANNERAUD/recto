@@ -178,7 +178,7 @@ jobs:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ vars.DOCKERHUB_USERNAME }}/recto
-          short-description: 'Print and scan from any browser through your home server: CUPS, SANE, local accounts or OIDC'
+          short-description: 'Self-hosted print and scan server for home and small office: AirPrint, IPP Everywhere, eSCL, SANE'
           readme-filepath: README.md
           # The README links to the guide and to files of the repository by relative paths.
           enable-url-completion: true
