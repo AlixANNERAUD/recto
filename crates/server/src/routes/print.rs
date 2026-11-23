@@ -560,10 +560,11 @@ async fn may_cancel(state: &AppState, user: &User, id: i32) -> Result<(), Refusa
     if user.is_administrator || state.job_visibility == JobVisibility::All {
         return Ok(());
     }
-    let jobs = state.print.jobs().await.map_err(refusal)?;
-    let job = jobs
-        .iter()
-        .find(|job| job.id == id)
+    let job = state
+        .print
+        .job(id)
+        .await
+        .map_err(refusal)?
         .ok_or(Refusal::JobNotFound)?;
     let records = jobs::for_cups_ids(&state.database, &[id])
         .await

@@ -192,6 +192,14 @@ impl PrintService for MockPrintService {
         Ok(jobs)
     }
 
+    async fn job(&self, job_id: i32) -> Result<Option<Job>, PrintError> {
+        self.check_available()?;
+        Ok(lock(&self.jobs)
+            .iter()
+            .find(|job| job.id == job_id)
+            .cloned())
+    }
+
     async fn job_status(&self, job_id: i32) -> Result<Option<JobStatus>, PrintError> {
         self.check_available()?;
         let state = lock(&self.jobs)

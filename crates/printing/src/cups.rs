@@ -269,6 +269,24 @@ impl PrintService for Cups {
         Ok(jobs)
     }
 
+    async fn job(&self, job_id: i32) -> Result<Option<Job>, PrintError> {
+        let mut request = new_request(Operation::GetJobAttributes, None)?;
+        add_operation(&mut request, attribute("job-uri", self.job_uri(job_id)?)?);
+        add_requested(&mut request, &JOB_ATTRIBUTES)?;
+        let response = self.send(&self.root_uri()?, request).await?;
+        match check(&response, || PrintError::JobNotFound(job_id)) {
+            Ok(()) => {}
+            Err(PrintError::JobNotFound(_)) => return Ok(None),
+            Err(error) => return Err(error),
+        }
+        response
+            .attributes()
+            .groups_of(DelimiterTag::JobAttributes)
+            .find_map(parse_job)
+            .map(Some)
+            .ok_or_else(|| PrintError::Unavailable("CUPS did not describe the job".into()))
+    }
+
     async fn job_status(&self, job_id: i32) -> Result<Option<JobStatus>, PrintError> {
         let mut request = new_request(Operation::GetJobAttributes, None)?;
         add_operation(&mut request, attribute("job-uri", self.job_uri(job_id)?)?);

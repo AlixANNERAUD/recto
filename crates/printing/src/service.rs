@@ -14,6 +14,9 @@ pub trait PrintService: Send + Sync + 'static {
     /// Jobs that are not completed plus the 20 most recent completed ones, newest first.
     async fn jobs(&self) -> Result<Vec<Job>, PrintError>;
 
+    /// One job, as [`jobs`](Self::jobs) lists it, `None` when CUPS no longer knows it.
+    async fn job(&self, job_id: i32) -> Result<Option<Job>, PrintError>;
+
     /// The state of one job, `None` when CUPS no longer knows it.
     async fn job_status(&self, job_id: i32) -> Result<Option<JobStatus>, PrintError>;
 

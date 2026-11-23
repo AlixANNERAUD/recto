@@ -382,6 +382,40 @@ async fn lists_jobs_newest_first() {
     assert_eq!(jobs[3].state, JobState::Completed);
 }
 
+#[tokio::test]
+async fn reads_one_job() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(Ipp(Operation::GetJobAttributes, None))
+        .respond_with(ipp(
+            StatusCode::SuccessfulOk,
+            vec![job_group(7, 5, "alice")],
+        ))
+        .mount(&server)
+        .await;
+
+    let job = cups(&server).job(7).await.unwrap().unwrap();
+
+    assert_eq!(job.id, 7);
+    assert_eq!(job.owner.as_deref(), Some("alice"));
+    assert_eq!(job.created, Some(1_700_000_007));
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let sent = parse(&requests[0].body);
+    assert!(attr(&sent, "job-uri").unwrap().ends_with("/jobs/7"));
+}
+
+#[tokio::test]
+async fn a_job_cups_forgot_is_none() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ipp(StatusCode::ClientErrorNotFound, vec![]))
+        .mount(&server)
+        .await;
+    assert_eq!(cups(&server).job(7).await.unwrap(), None);
+}
+
 fn status_group(
     state: i32,
     impressions: Option<i32>,
