@@ -25,8 +25,16 @@ with no drivers to install on each device.
   Canon, Epson and HP models), scanners shared by `saned`, and USB scanners. Choose the
   resolution, colors, source and format (PDF, PNG or JPEG), preview the glass and drag to scan
   only part of it.
+- **Is a network printer and scanner** for computers and phones: macOS, Windows, Linux, iPhone,
+  iPad and Android add recto from their own Print dialog, with no driver (IPP Everywhere and
+  AirPrint), and scan from it (eSCL). Each device has a password of its own. Documents wait on
+  the Jobs page until their owner picks a printer, or print at once on one they chose. See
+  [How printing from devices works](explanation/devices.md).
 - **Saves** scans to a folder, such as the consume folder of Paperless-ngx, without ever
   overwriting a file.
+- **Prices and limits printing**, if you want: a price per black-and-white page, color page and
+  sheet on each printer, and quotas on pages, sheets, jobs or money per day, week, month or
+  year, for everyone, a group or one person (see [Set print quotas](how-to/set-quotas.md)).
 - **Reports usage**: administrators see who printed and scanned what over a range of days, by
   user, group, printer or scanner, and download it as CSV.
 - **Signs people in** with local accounts, a username and a password, or with your own OpenID
@@ -38,14 +46,15 @@ with no drivers to install on each device.
 - **Installs as an app** on phones and computers, with an offline page.
 
 It runs as one container next to a CUPS server, configured with environment variables only. Its
-users and sessions live in a SQLite file on a volume, or in PostgreSQL.
+users, sessions and print history live in a SQLite file on a volume, or in PostgreSQL.
 
 ## What it does not do
 
 - **It does not convert documents.** Office files must be exported to PDF first. Converting them
   takes a large, exposed toolchain, which recto keeps out of its container.
-- **It does not replace CUPS administration.** Printers are added to CUPS with `lpadmin` (see
-  [Add a printer](how-to/add-printer.md)); recto lists what CUPS has.
+- **It does not replace CUPS administration.** Administrators add, pause and remove printers
+  from recto when it runs with its own CUPS server (see [Add a printer](how-to/add-printer.md)),
+  but drivers, filters and anything else CUPS does stay in CUPS.
 - **It does not keep scans.** A scan stays available for an hour, for its owner only, then it is
   deleted. Save it to a folder to keep it.
 - **It does not separate users much.** By default anyone signed in can use every printer and
