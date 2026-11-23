@@ -20,6 +20,7 @@ use recto_app::state::{AppState, Currency, JobVisibility};
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::{
     access::{self, Access, DeviceKind},
+    held::files::HeldFiles,
     jobs,
     testing::{TempDir, temporary_directory},
     users::{self, Identity},
@@ -186,6 +187,8 @@ impl Harness {
             timezone: chrono_tz::UTC,
             page_counter: Default::default(),
             os_integration: true,
+            held: Arc::new(HeldFiles::new(&dir.path().join("data")).unwrap()),
+            held_lifetime: chrono::TimeDelta::hours(24),
         };
         let public_url = Url::parse(PUBLIC_URL).unwrap();
         let openid = OpenId::new(OpenIdSettings {

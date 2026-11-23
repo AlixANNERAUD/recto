@@ -11,6 +11,10 @@ use crate::branding::BrandOptions;
 
 /// Where the database is when `RECTO_DATABASE_URL` is not set: the container's data volume.
 pub const DEFAULT_DATABASE_URL: &str = "sqlite:///data/recto.db";
+/// Where held documents are kept when `RECTO_DATA_DIR` is not set: the container's data volume.
+pub const DEFAULT_DATA_DIR: &str = "/data";
+/// The longest a held job may be kept, in hours: 30 days.
+pub const MAX_HELD_JOB_HOURS: u32 = 720;
 
 /// The format of log lines on standard error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -101,6 +105,17 @@ pub struct Config {
         action = ArgAction::Set
     )]
     pub ipp_allow_plain: bool,
+    /// Where recto keeps the documents computers and phones send, until they are released.
+    #[arg(long, env = "RECTO_DATA_DIR", default_value = DEFAULT_DATA_DIR, value_parser = parse_path)]
+    pub data_dir: PathBuf,
+    /// How many hours a held job waits for its owner before it is deleted, 1 to 720.
+    #[arg(
+        long,
+        env = "RECTO_HELD_JOB_HOURS",
+        default_value = "24",
+        value_parser = parse_held_job_hours
+    )]
+    pub held_job_hours: u32,
     #[arg(long, env = "RECTO_CUPS_URL", default_value = "http://localhost:631", value_parser = parse_cups_url)]
     pub cups_url: Url,
     /// CUPS's Unix socket, which lets administrators manage printers; unset or blank turns
@@ -178,6 +193,9 @@ impl Config {
             {
                 *path = None;
             }
+        }
+        if config.data_dir.as_os_str().is_empty() {
+            config.data_dir = PathBuf::from(DEFAULT_DATA_DIR);
         }
         let invalid = |message: &str| {
             Err(clap::Error::raw(
@@ -269,6 +287,20 @@ fn parse_job_visibility(value: &str) -> Result<JobVisibility, String> {
             "RECTO_JOB_VISIBILITY must be all or own, not {value}"
         )),
     }
+}
+
+fn parse_held_job_hours(value: &str) -> Result<u32, String> {
+    value
+        .trim()
+        .parse()
+        .ok()
+        .filter(|hours| (1..=MAX_HELD_JOB_HOURS).contains(hours))
+        .ok_or_else(|| {
+            format!(
+                "RECTO_HELD_JOB_HOURS must be a number of hours from 1 to \
+                 {MAX_HELD_JOB_HOURS}, not {value}"
+            )
+        })
 }
 
 fn parse_currency(value: &str) -> Result<String, String> {
@@ -502,6 +534,27 @@ mod tests {
         // Off until the device routes exist: device passwords would print nothing yet.
         assert!(!config.os_integration);
         assert!(!config.ipp_allow_plain);
+    }
+
+    #[test]
+    fn held_job_settings_are_checked() {
+        let config = parse(&[]).unwrap();
+        assert_eq!(config.data_dir, PathBuf::from("/data"));
+        assert_eq!(config.held_job_hours, 24);
+        let config = parse(&["--data-dir", "/srv/recto", "--held-job-hours", "720"]).unwrap();
+        assert_eq!(config.data_dir, PathBuf::from("/srv/recto"));
+        assert_eq!(config.held_job_hours, 720);
+        assert_eq!(parse(&["--held-job-hours", "1"]).unwrap().held_job_hours, 1);
+        // Blank means the default, as for every setting.
+        let blank = parse(&["--data-dir", ""]).unwrap();
+        assert_eq!(blank.data_dir, PathBuf::from("/data"));
+        for hours in ["0", "721", "-1", "a day"] {
+            let error = parse(&[&format!("--held-job-hours={hours}")]).unwrap_err();
+            assert!(
+                error.to_string().contains("RECTO_HELD_JOB_HOURS"),
+                "{error}"
+            );
+        }
     }
 
     #[test]

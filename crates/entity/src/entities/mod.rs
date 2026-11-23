@@ -7,6 +7,7 @@ pub mod device_access_groups;
 pub mod device_passwords;
 pub mod group_memberships;
 pub mod groups;
+pub mod held_jobs;
 pub mod print_jobs;
 pub mod printer_prices;
 pub mod quota_adjustments;

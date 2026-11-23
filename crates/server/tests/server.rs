@@ -22,6 +22,7 @@ use recto_app::state::{AppState, Currency, JobVisibility};
 use recto_authentication::{OpenId, OpenIdSettings};
 use recto_domain::{
     access::{self, Access, DeviceKind},
+    held::files::HeldFiles,
     jobs,
     passwords::{self, PasswordPolicy},
     prices::{self, Prices},
@@ -124,6 +125,8 @@ struct Harness {
     admin: Arc<MockPrinterAdmin>,
     scan: Arc<MockScannerService>,
     results: Arc<ResultStore>,
+    /// The held documents, under the harness's data directory.
+    held: Arc<HeldFiles>,
     sessions: DatabaseSessionStore,
     database: DatabaseConnection,
     _dir: TempDir,
@@ -166,6 +169,7 @@ impl Harness {
         std::fs::create_dir_all(site.join("pkg")).unwrap();
         std::fs::write(site.join("pkg/recto.css"), STYLESHEET).unwrap();
         let admin = Arc::new(MockPrinterAdmin::new());
+        let held = Arc::new(HeldFiles::new(&dir.path().join("data")).unwrap());
         let state = AppState {
             printer_admin: setup
                 .managed
@@ -186,6 +190,8 @@ impl Harness {
             timezone: chrono_tz::UTC,
             page_counter: Default::default(),
             os_integration: setup.os_integration,
+            held: held.clone(),
+            held_lifetime: chrono::TimeDelta::hours(24),
         };
         let public_url = Url::parse(setup.public_url).unwrap();
         let openid = setup.issuer.map(|issuer| {
@@ -216,6 +222,7 @@ impl Harness {
             admin,
             scan,
             results,
+            held,
             sessions,
             database,
             _dir: dir,
@@ -228,6 +235,21 @@ impl Harness {
             .oneshot(from_peer(request))
             .await
             .unwrap()
+    }
+
+    /// Drops a table, to make what reads it fail. On PostgreSQL, the foreign keys that name it go
+    /// with it (the held jobs name the ledger); SQLite drops a table that others name.
+    async fn drop_table(&self, table: &str) {
+        let cascade = match sea_orm::ConnectionTrait::get_database_backend(&self.database) {
+            sea_orm::DatabaseBackend::Postgres => " CASCADE",
+            _ => "",
+        };
+        sea_orm::ConnectionTrait::execute_unprepared(
+            &self.database,
+            &format!("DROP TABLE {table}{cascade}"),
+        )
+        .await
+        .unwrap();
     }
 
     /// Creates a local user with a password.
@@ -3149,9 +3171,7 @@ async fn unrecorded_jobs_are_canceled_by_administrators_only() {
 async fn ownership_fails_closed() {
     let (harness, cookie) = private_jobs().await;
     // Users and sessions stay readable; only the records are gone.
-    sea_orm::ConnectionTrait::execute_unprepared(&harness.database, "DROP TABLE print_jobs")
-        .await
-        .unwrap();
+    harness.drop_table("print_jobs").await;
     let response = harness
         .send(post("/jobs/1/cancel", &cookie, None, vec![]))
         .await;
@@ -3530,9 +3550,7 @@ async fn device_forms_need_an_administrator() {
 async fn a_failed_recording_still_reports_success() {
     let harness = Harness::new().await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
-    sea_orm::ConnectionTrait::execute_unprepared(&harness.database, "DROP TABLE print_jobs")
-        .await
-        .unwrap();
+    harness.drop_table("print_jobs").await;
     let response = print(
         &harness,
         &cookie,
@@ -3549,9 +3567,7 @@ async fn a_failed_recording_still_reports_success() {
 async fn the_job_list_fails_closed_with_private_jobs() {
     let (harness, cookie) = private_jobs().await;
     let admin = harness.administrator("root-subject", "root").await;
-    sea_orm::ConnectionTrait::execute_unprepared(&harness.database, "DROP TABLE print_jobs")
-        .await
-        .unwrap();
+    harness.drop_table("print_jobs").await;
     let response = harness.send(api("list_jobs", &cookie)).await;
     assert!(!response.status().is_success());
     let body = text(response).await;
@@ -4354,3 +4370,6 @@ mod quotas;
 
 #[path = "server/devices.rs"]
 mod devices;
+
+#[path = "server/held.rs"]
+mod held;

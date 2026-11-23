@@ -8,6 +8,7 @@ use leptos::{
     config::LeptosOptions,
     prelude::{ServerFnError, use_context},
 };
+use recto_domain::held::files::HeldFiles;
 use recto_printing::{PrintService, PrinterAdmin, count::PageCounter};
 use recto_scanning::{ResultStore, ScannerService};
 use sea_orm::DatabaseConnection;
@@ -56,6 +57,11 @@ pub struct AppState {
     /// Whether computers and phones print and scan through recto with device passwords
     /// (`RECTO_OS_INTEGRATION`); without it, the Account page has no Devices section.
     pub os_integration: bool,
+    /// The documents of held jobs (`RECTO_DATA_DIR/held`). Its I/O blocks: call it through
+    /// `tokio::task::spawn_blocking`.
+    pub held: Arc<HeldFiles>,
+    /// How long a held job waits for its owner (`RECTO_HELD_JOB_HOURS`).
+    pub held_lifetime: chrono::TimeDelta,
 }
 
 /// The signed-in user of a request, read from the accounts database on every request, so that

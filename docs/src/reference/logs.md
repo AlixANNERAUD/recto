@@ -45,6 +45,8 @@ only.
 | info | `the CUPS socket does not exist yet`: harmless while CUPS is still starting, since recto connects at each request | `socket` |
 | info | `scan saved` | `user`, `path` |
 | info | `usage exported` | `by` (who downloaded it), `export` (the file name), `from`, `to` |
+| info | `held jobs expired`: documents sent from computers and phones that nobody released in time, deleted | `count` |
+| info | `orphan held files removed`: documents no held job names, left by a crash or by deleting their owner | `count` |
 | info | `shutting down` | |
 | warn | `listing the scanners failed` | `error` |
 | warn | `the printing service failed`, `the printing service refused` | `error` |
@@ -63,6 +65,9 @@ only.
 | warn | `reading the user information failed` | `error` |
 | warn | `SANE could not start; scanning is off`, `SANE crashed while starting; scanning is off` | `error` |
 | warn | `the scan results directory is not usable` | `error`, `dir` |
+| warn | `the held documents directory is not usable` | `error`, `dir` |
+| warn | `held jobs whose release never finished are held again`: recto stopped during a release, before the job was counted | `count` |
+| warn | `removing a held document failed`, `removing held documents failed`, `listing the held documents failed`: the next sweep tries again | `error`, and `file` or `dir` |
 | warn | `printer administration is off` | `error` |
 | warn | `reading a job state failed` | `error`, `job` |
 | warn | `refunded ledger entries CUPS never received` | `count` |
@@ -93,6 +98,7 @@ only.
 | error | `revoking the device passwords failed`: at a sign-in refused the required claim | `error`, `subject` |
 | error | `loading the usage failed`: the Usage page shows the error instead of the tables | `error` |
 | error | `exporting the usage failed`: the download answers `503` | `error` |
+| error | `sweeping the held jobs failed`, `reading the held documents' names failed`: the next sweep tries again | `error` |
 
 Commands such as `recto create-administrator` write their messages as text.
 

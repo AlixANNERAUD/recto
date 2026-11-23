@@ -51,6 +51,7 @@ container next to recto's: with `--network container:<recto>` it shares recto's 
 | Path | What |
 | --- | --- |
 | `/data` | The SQLite database, `recto.db` with its `-wal` and `-shm` files, unless `RECTO_DATABASE_URL` points elsewhere. Mount a volume here: `compose.yml` mounts `recto-data`. |
+| `/data/held` | Documents sent from computers and phones, until they are released, deleted or expire (`RECTO_HELD_JOB_HOURS`). Readable by recto alone. `RECTO_DATA_DIR` moves it with `/data`. |
 | `/tmp/recto-scans` | Scan results, deleted after an hour. In `compose.yml`, `/tmp` is a memory-backed `tmpfs`. |
 | `RECTO_SCAN_OUTPUT_DIR` | Scans saved with **Save to folder**. |
 

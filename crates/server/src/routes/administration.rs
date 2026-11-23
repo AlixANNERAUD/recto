@@ -368,7 +368,7 @@ fn refused(error: Error) -> (StatusCode, UsersProblem) {
         }
         Error::Invalid(Problem::OwnAccount) => UsersProblem::OwnAccount,
         Error::Invalid(Problem::AdministratorFromClaim) => UsersProblem::AdministratorFromClaim,
-        // The user forms never meet the problems of quota rules or device passwords.
+        // The user forms never meet the problems of quota rules, devices or held jobs.
         Error::Invalid(
             problem @ (Problem::RuleNameEmpty
             | Problem::RuleLimitNegative
@@ -382,7 +382,8 @@ fn refused(error: Error) -> (StatusCode, UsersProblem) {
             | Problem::HolderMismatch
             | Problem::DeviceNameInvalid { .. }
             | Problem::DeviceNameControl
-            | Problem::TooManyDevicePasswords { .. }),
+            | Problem::TooManyDevicePasswords { .. }
+            | Problem::TooManyHeldJobs { .. }),
         ) => {
             tracing::error!(%problem, "changing a user failed");
             return (StatusCode::SERVICE_UNAVAILABLE, UsersProblem::Unavailable);

@@ -26,7 +26,10 @@ use recto_app::{
     state::{AppState, User},
 };
 use recto_authentication::csrf::{self, AllowedOrigin};
-use recto_domain::ledger;
+use recto_domain::{
+    held::{self, files::HeldFiles},
+    ledger,
+};
 use recto_printing::PrintService;
 use recto_scanning::{ResultStore, ScannerService};
 use sea_orm::DatabaseConnection;
@@ -49,6 +52,12 @@ use crate::{
 const PURGE_INTERVAL: Duration = Duration::from_secs(10 * 60);
 /// How often expired sessions are deleted.
 const SESSION_PURGE_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+/// How often expired held jobs are deleted.
+const HELD_SWEEP_INTERVAL: Duration = Duration::from_secs(10 * 60);
+/// How old a held document no row names must be before a sweep removes it while recto runs: one
+/// written moments ago may be waiting for its row.
+const ORPHAN_AGE: Duration = Duration::from_secs(60 * 60);
 
 /// How often CUPS is asked about the jobs of the ledger that are not final.
 const JOB_POLL_INTERVAL: Duration = Duration::from_secs(30);
@@ -207,6 +216,11 @@ pub async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
+    // Before serving, while nothing is being written: a crash between writing a document and
+    // recording it left a file no row names.
+    remove_orphan_held_files(&state.database, &state.held, SystemTime::now()).await;
+    // Whether or not OS integration is on: documents held before it was turned off must go.
+    sweep_held(state.database.clone(), Arc::clone(&state.held));
     purge_expired_results(Arc::clone(&state.results));
     delete_expired_sessions(auth.sessions.clone());
     poll_jobs(Arc::clone(&state.print), state.database.clone());
@@ -317,6 +331,103 @@ pub async fn poll_once(print: &dyn PrintService, database: &DatabaseConnection) 
         if let Err(error) = ledger::observe(database, id, status.as_ref(), now).await {
             tracing::error!(%error, job = cups_job_id, "recording a job state failed");
         }
+    }
+}
+
+/// Sweeps the held jobs in the background, every [`HELD_SWEEP_INTERVAL`].
+fn sweep_held(database: DatabaseConnection, files: Arc<HeldFiles>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(HELD_SWEEP_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            sweep_held_once(&database, &files, chrono::Utc::now()).await;
+        }
+    });
+}
+
+/// One sweep of the held jobs: deletes the expired ones and their documents, returns the
+/// releases that never reached the ledger (see [`held::sweep`]), and removes documents no row
+/// has named for an hour. Failures are logged and left to the next sweep.
+pub async fn sweep_held_once(
+    database: &DatabaseConnection,
+    files: &Arc<HeldFiles>,
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    match held::sweep(database, now).await {
+        Ok(swept) => {
+            if swept.removed > 0 {
+                tracing::info!(count = swept.removed, "held jobs expired");
+            }
+            if swept.returned > 0 {
+                tracing::warn!(
+                    count = swept.returned,
+                    "held jobs whose release never finished are held again"
+                );
+            }
+            remove_held_files(files, swept.files).await;
+        }
+        Err(error) => tracing::error!(%error, "sweeping the held jobs failed"),
+    }
+    let written_before = SystemTime::now()
+        .checked_sub(ORPHAN_AGE)
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    remove_orphan_held_files(database, files, written_before).await;
+}
+
+/// Removes the held documents no row names, written before `written_before`, and returns how
+/// many there were.
+pub async fn remove_orphan_held_files(
+    database: &DatabaseConnection,
+    files: &Arc<HeldFiles>,
+    written_before: SystemTime,
+) -> usize {
+    let known = match held::files(database).await {
+        Ok(known) => known,
+        Err(error) => {
+            tracing::error!(%error, "reading the held documents' names failed");
+            return 0;
+        }
+    };
+    let listing = Arc::clone(files);
+    let orphans =
+        tokio::task::spawn_blocking(move || listing.orphans(&known, written_before)).await;
+    let orphans = match orphans {
+        Ok(Ok(orphans)) => orphans,
+        Ok(Err(error)) => {
+            tracing::warn!(%error, dir = %files.dir().display(), "listing the held documents failed");
+            return 0;
+        }
+        Err(error) => {
+            tracing::warn!(%error, "listing the held documents failed");
+            return 0;
+        }
+    };
+    let count = orphans.len();
+    if count > 0 {
+        tracing::info!(count, "orphan held files removed");
+        remove_held_files(files, orphans).await;
+    }
+    count
+}
+
+/// Removes held documents; one that cannot be removed is logged, and the orphan sweep tries
+/// again.
+async fn remove_held_files(files: &Arc<HeldFiles>, names: Vec<String>) {
+    if names.is_empty() {
+        return;
+    }
+    let files = Arc::clone(files);
+    let removed = tokio::task::spawn_blocking(move || {
+        for name in names {
+            if let Err(error) = files.remove(&name) {
+                tracing::warn!(%error, file = name, "removing a held document failed");
+            }
+        }
+    })
+    .await;
+    if let Err(error) = removed {
+        tracing::warn!(%error, "removing held documents failed");
     }
 }
 

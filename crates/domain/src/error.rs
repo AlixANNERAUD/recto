@@ -86,6 +86,9 @@ pub enum Problem {
     DeviceNameControl,
     #[error("a user has at most {maximum} device passwords")]
     TooManyDevicePasswords { maximum: usize },
+    /// The user's held jobs are as many, or their documents as large in all, as allowed.
+    #[error("a user has at most {maximum} held jobs, within a total size")]
+    TooManyHeldJobs { maximum: u64 },
 }
 
 /// The result of a domain operation.

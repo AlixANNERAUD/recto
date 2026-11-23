@@ -314,11 +314,7 @@ async fn quotas_fail_closed() {
     // Without rules, the ledger is best effort.
     let harness = Harness::new().await;
     let cookie = harness.sign_in("alice-subject", "alice").await;
-    harness
-        .database
-        .execute_unprepared("DROP TABLE print_jobs")
-        .await
-        .unwrap();
+    harness.drop_table("print_jobs").await;
     let response = harness.print_pages(&cookie, 1).await;
     assert_redirect(&response, "/jobs?submitted=8");
     assert_eq!(harness.print.submitted().len(), 1);

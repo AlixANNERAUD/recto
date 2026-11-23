@@ -99,6 +99,8 @@ RECTO_LOG_FORMAT = "text"
 RECTO_DEV_MOCKS = "1"
 # A database of its own under target/, so the development user and sessions survive restarts.
 RECTO_DATABASE_URL = "sqlite://target/dev.db"
+# Held documents under target/ too, rather than the container's /data.
+RECTO_DATA_DIR = "target/dev-data"
 
 [tasks.build]
 description = "Build the release binary and the site"

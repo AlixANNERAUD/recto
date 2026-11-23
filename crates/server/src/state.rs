@@ -9,7 +9,10 @@ use recto_app::{
     state::{AppState, Currency},
 };
 use recto_authentication::{OpenId, OpenIdSettings};
-use recto_domain::passwords::{self, PasswordPolicy};
+use recto_domain::{
+    held::files::HeldFiles,
+    passwords::{self, PasswordPolicy},
+};
 use recto_printing::count::PageCounter;
 use recto_printing::{Cups, CupsAdmin, PrinterAdmin};
 use recto_scanning::{
@@ -163,6 +166,20 @@ fn printer_admin(config: &Config) -> Option<Arc<dyn PrinterAdmin>> {
     }
 }
 
+/// The held documents' directory. One that cannot be created only earns a warning: printing
+/// and scanning do not need it, and what an earlier run left must still be swept.
+fn held_files(config: &Config) -> HeldFiles {
+    HeldFiles::new(&config.data_dir).unwrap_or_else(|error| {
+        let files = HeldFiles::at(&config.data_dir);
+        tracing::warn!(
+            %error,
+            dir = %files.dir().display(),
+            "the held documents directory is not usable"
+        );
+        files
+    })
+}
+
 /// Builds every service. Nothing here needs CUPS, a scanner or the identity provider to answer,
 /// so recto starts while they are down.
 pub async fn build(
@@ -193,6 +210,8 @@ pub async fn build(
         timezone: config.timezone,
         page_counter: PageCounter::default(),
         os_integration: config.os_integration,
+        held: Arc::new(held_files(config)),
+        held_lifetime: chrono::TimeDelta::hours(i64::from(config.held_job_hours)),
     };
     let openid = config
         .oidc_issuer

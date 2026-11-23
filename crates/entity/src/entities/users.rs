@@ -28,6 +28,8 @@ pub enum Relation {
     DevicePasswords,
     #[sea_orm(has_many = "super::group_memberships::Entity")]
     GroupMemberships,
+    #[sea_orm(has_many = "super::held_jobs::Entity")]
+    HeldJobs,
     #[sea_orm(has_many = "super::print_jobs::Entity")]
     PrintJobs,
     #[sea_orm(has_many = "super::scan_jobs::Entity")]
@@ -45,6 +47,12 @@ impl Related<super::device_passwords::Entity> for Entity {
 impl Related<super::group_memberships::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::GroupMemberships.def()
+    }
+}
+
+impl Related<super::held_jobs::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::HeldJobs.def()
     }
 }
 

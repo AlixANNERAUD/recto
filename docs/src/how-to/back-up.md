@@ -6,7 +6,8 @@ backups as secrets: whoever reads one can try the password hashes offline, and u
 still valid when it was taken.
 
 Nothing else in recto needs a backup. Scans are kept for an hour only, and saved scans belong to
-the folder they were saved to. Your printers live in CUPS, in the `cups-config` volume; adding
+the folder they were saved to. Documents sent from computers and phones wait in `/data/held` for a
+day by default, then expire; after a restore, recto deletes at startup those no job names. Your printers live in CUPS, in the `cups-config` volume; adding
 them again with `lpadmin` is usually quicker than backing it up.
 
 ## Take a backup of SQLite
