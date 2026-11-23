@@ -60,7 +60,7 @@ COPY --from=builder /out/site /site
 
 # The runtime base: Debian 13 like the builder, with glibc, libgcc, libstdc++, OpenSSL, zlib, CA
 # certificates and the nonroot user (65532), but no shell, package manager or other programs.
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cb87acc574abe719b6e5c547384defa2f7b1f24af9605d3f618cf852495d8be2 AS base
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:532c7a94f9e96ba9db75eb9388f4227751131c7cb0a411d1a8521af4096135de AS base
 
 # Debian's libsane1 pulls in perl, systemd, gnupg and image codecs that nothing here loads, so SANE
 # is installed in this stage and only what recto and SANE load at run time goes to /rootfs, which
