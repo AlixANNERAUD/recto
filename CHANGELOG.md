@@ -5,6 +5,65 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3](https://github.com/AlixANNERAUD/recto/compare/v0.1.2...v0.1.3) - 2026-11-23
+
+### Added
+
+- *(printing)* read and run CUPS maintenance commands
+- run a printer's maintenance commands from Administration > Printers
+
+### Changed
+
+- *(printing)* share the IPP transport of Cups and CupsAdmin
+- *(printing)* share the IPP value helpers
+- *(printing)* run page counts and raster conversions through Bounded
+- *(printing)* build a queue's address with one printer_url
+- *(domain)* insert held and incoming jobs through one insert
+- *(domain)* share the password write of set and reset
+- *(domain)* look up an identity's user in one place
+- *(app)* show a refused form's alert with one refusal_alert
+- *(app)* name duplex and color choices with shared labels
+- *(app)* define coded enums with one coded! macro
+- *(app)* filter usable printers and scanners with one function
+- *(server)* build the direct printing user with session::user
+- *(server)* share the refusal, give-back and redirect of a print
+- *(server)* run held document I/O through HeldFiles::blocking
+- *(server)* read IPP and eSCL bodies with one bounded reader
+- *(server)* answer a missing resource with one not_found
+- *(server)* keep client and address helpers in device_auth
+- *(server)* start SANE through one start_sane
+- *(scanning)* label a scanner with ScannerInfo::label
+- cut text on a character boundary with floor_char_boundary
+- *(server)* write a refusal's address with one refused_location
+- *(scanning)* run the result store's I/O through ResultStore::blocking
+- *(domain)* pick the rules on several printers with applicable_on
+- *(app)* define the theme with the coded! macro
+- *(server)* type the settings again with getargs-derive 0.1.2
+
+### Documentation
+
+- *(printing)* drop the stray comment above the string helper
+- say CUPS lists a maintenance job under recto's own name
+
+### Fixed
+
+- *(server)* bound web form bodies in time and uploads per user
+- *(app)* write amounts of money with the language's decimal mark
+- *(app)* tell people without a usable printer or scanner that none is theirs
+- *(server)* give large print uploads time to arrive, and say when one did not
+
+### Miscellaneous
+
+- *(deps)* parse the command line with getargs-derive instead of clap
+
+### Performance
+
+- *(domain)* read a user's standings on every rule at once
+- *(server)* lock the user's row once per quota-checked job
+- *(server)* look up only the job being canceled
+- *(server)* print a held job with the pages counted on arrival
+- *(app)* keep what scanners said they can do for the scan page
+
 ## [0.1.2](https://github.com/AlixANNERAUD/recto/compare/v0.1.1...v0.1.2) - 2026-11-23
 
 ### Changed
