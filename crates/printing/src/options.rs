@@ -85,7 +85,21 @@ impl FromStr for PageRanges {
             }
             ranges.push(range);
         }
+        PageRanges::from_ranges(ranges).ok_or_else(invalid)
+    }
+}
 
+impl PageRanges {
+    /// Sorts and merges inclusive 1-based ranges, or refuses a list that is empty, starts at page
+    /// 0 or has a range that ends before it starts.
+    pub fn from_ranges(mut ranges: Vec<(u32, u32)>) -> Option<PageRanges> {
+        if ranges.is_empty()
+            || ranges
+                .iter()
+                .any(|&(first, last)| first == 0 || first > last)
+        {
+            return None;
+        }
         ranges.sort_unstable();
         let mut merged: Vec<(u32, u32)> = Vec::with_capacity(ranges.len());
         for (first, last) in ranges {
@@ -97,7 +111,7 @@ impl FromStr for PageRanges {
                 _ => merged.push((first, last)),
             }
         }
-        Ok(PageRanges(merged))
+        Some(PageRanges(merged))
     }
 }
 

@@ -7,6 +7,7 @@ mod error;
 mod format;
 mod model;
 mod options;
+pub mod printer;
 mod status;
 
 #[cfg(feature = "service")]
