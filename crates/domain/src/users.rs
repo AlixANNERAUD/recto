@@ -407,11 +407,25 @@ pub async fn set_password(
     password: String,
     policy: &PasswordPolicy,
 ) -> Result<()> {
+    let password_hash = validated_hash(password, policy).await?;
+    store_password(database, user_id, password_hash).await
+}
+
+/// The hash of `password`, once `policy` accepts it.
+async fn validated_hash(password: String, policy: &PasswordPolicy) -> Result<String> {
     policy.validate(&password)?;
+    Ok(passwords::hash(password).await)
+}
+
+/// Writes the user's new password hash and ends their sessions, as [`set_password`] says.
+async fn store_password(
+    database: &impl ConnectionTrait,
+    user_id: i64,
+    password_hash: String,
+) -> Result<()> {
     let user = find_by_id(database, user_id)
         .await?
         .ok_or(Error::NotFound)?;
-    let password_hash = passwords::hash(password).await;
     let mut changes: users::ActiveModel = user.into();
     changes.password_hash = Set(Some(password_hash));
     changes.sessions_valid_after = Set(Some(sessions_cutoff()));
@@ -429,16 +443,9 @@ pub async fn reset_password(
     password: String,
     policy: &PasswordPolicy,
 ) -> Result<u64> {
-    policy.validate(&password)?;
-    let password_hash = passwords::hash(password).await;
+    let password_hash = validated_hash(password, policy).await?;
     let transaction = begin_write(database).await?;
-    let user = find_by_id(&transaction, user_id)
-        .await?
-        .ok_or(Error::NotFound)?;
-    let mut changes: users::ActiveModel = user.into();
-    changes.password_hash = Set(Some(password_hash));
-    changes.sessions_valid_after = Set(Some(sessions_cutoff()));
-    changes.update(&transaction).await?;
+    store_password(&transaction, user_id, password_hash).await?;
     let revoked = device_passwords::revoke_all(&transaction, user_id).await?;
     transaction.commit().await?;
     Ok(revoked)
