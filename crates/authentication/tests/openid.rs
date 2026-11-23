@@ -5,9 +5,9 @@ use std::time::Instant;
 
 use chrono::{Duration, Utc};
 use openidconnect::{
-    AccessToken, Audience, EndUserEmail, EndUserName, EndUserUsername, IdToken, IdTokenClaims,
-    IssuerUrl, JsonWebKeyId, LocalizedClaim, Nonce, PrivateSigningKey, StandardClaims,
-    SubjectIdentifier,
+    AccessToken, Audience, ClientId, EndUserEmail, EndUserName, EndUserUsername, IdToken,
+    IdTokenClaims, IssuerUrl, JsonWebKeyId, LocalizedClaim, Nonce, PrivateSigningKey,
+    StandardClaims, SubjectIdentifier,
     core::{
         CoreGenderClaim, CoreJweContentEncryptionAlgorithm, CoreJwsSigningAlgorithm,
         CoreRsaPrivateSigningKey,
@@ -202,13 +202,14 @@ impl Provider {
         >::new(
             IdTokenClaims::new(
                 IssuerUrl::new(self.issuer()).unwrap(),
-                vec![Audience::new(answer.audience)],
+                answer.audiences.into_iter().map(Audience::new).collect(),
                 Utc::now() + answer.lifetime,
                 Utc::now(),
                 standard,
                 ExtraClaims { claims },
             )
-            .set_nonce(Some(Nonce::new(answer.nonce))),
+            .set_nonce(Some(Nonce::new(answer.nonce)))
+            .set_authorized_party(answer.authorized_party.map(ClientId::new)),
             &key(answer.signed_with),
             CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
             Some(&access_token),
@@ -246,7 +247,9 @@ impl Provider {
 struct Answer {
     nonce: String,
     subject: String,
-    audience: String,
+    audiences: Vec<String>,
+    /// The `azp` claim.
+    authorized_party: Option<String>,
     lifetime: Duration,
     signed_with: Key,
     published: Key,
@@ -264,7 +267,8 @@ impl Answer {
         Self {
             nonce: nonce.to_owned(),
             subject: "subject-1".to_owned(),
-            audience: CLIENT_ID.to_owned(),
+            audiences: vec![CLIENT_ID.to_owned()],
+            authorized_party: None,
             lifetime: Duration::minutes(5),
             signed_with: Key::Signing,
             published: Key::Signing,
@@ -555,7 +559,49 @@ async fn wrong_audience_is_refused() {
     let provider = Provider::start().await;
     let openid = OpenId::new(provider.settings());
     let result = sign_in_with(&provider, &openid, |answer| {
-        answer.audience = "another-client".to_owned();
+        answer.audiences = vec!["another-client".to_owned()];
+    })
+    .await;
+    assert!(
+        matches!(result, Err(OpenIdError::Rejected(_))),
+        "{result:?}"
+    );
+}
+
+/// Zitadel's ID tokens name the project next to the client, with the client as authorized party.
+#[tokio::test]
+async fn an_extra_audience_is_accepted_when_the_token_was_issued_to_recto() {
+    let provider = Provider::start().await;
+    let openid = OpenId::new(provider.settings());
+    let result = sign_in_with(&provider, &openid, |answer| {
+        answer.audiences = vec![CLIENT_ID.to_owned(), "400928640428166403".to_owned()];
+        answer.authorized_party = Some(CLIENT_ID.to_owned());
+    })
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[tokio::test]
+async fn an_extra_audience_without_an_authorized_party_is_refused() {
+    let provider = Provider::start().await;
+    let openid = OpenId::new(provider.settings());
+    let result = sign_in_with(&provider, &openid, |answer| {
+        answer.audiences = vec![CLIENT_ID.to_owned(), "another-client".to_owned()];
+    })
+    .await;
+    assert!(
+        matches!(result, Err(OpenIdError::Rejected(_))),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_token_issued_to_another_client_is_refused() {
+    let provider = Provider::start().await;
+    let openid = OpenId::new(provider.settings());
+    let result = sign_in_with(&provider, &openid, |answer| {
+        answer.audiences = vec![CLIENT_ID.to_owned(), "another-client".to_owned()];
+        answer.authorized_party = Some("another-client".to_owned());
     })
     .await;
     assert!(

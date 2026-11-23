@@ -61,7 +61,9 @@ sequenceDiagram
    keeps them in a short-lived pending session (10 minutes), and redirects to the provider.
 2. The person signs in at the provider, which redirects back to `/auth/callback` with a code.
 3. recto checks the `state`, exchanges the code with the verifier, and checks the ID token's
-   signature, issuer, audience, expiry and nonce.
+   signature, issuer, audience, expiry and nonce. The audiences must include recto's client id;
+   others, such as the project id Zitadel adds, are accepted when the token's authorized party
+   (`azp`) is recto.
 4. When the token lacks the profile claims, or a claim recto was told to read (the required, the
    administrator or the groups claim), recto asks the UserInfo endpoint for them.
 5. recto checks the required claim, if one is configured, finds the user or creates it, applies
