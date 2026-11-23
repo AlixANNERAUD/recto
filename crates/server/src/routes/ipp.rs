@@ -29,7 +29,7 @@
 //!
 //! Log lines name the device password's id, never the path, which may hold the secret.
 
-use std::{future::poll_fn, pin::Pin, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use ::ipp::{
     attribute::IppAttribute,
@@ -37,7 +37,7 @@ use ::ipp::{
 };
 use axum::{
     Router,
-    body::{Body, Bytes, HttpBody},
+    body::Bytes,
     extract::{Request, State},
     http::{HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
@@ -62,6 +62,7 @@ use recto_printing::{
 };
 use url::Url;
 
+use super::body::{self, Unread, fill};
 use super::held::release_held;
 use super::print::{Choices, FORM_SLACK, Rejected, Submitted, job_name};
 use crate::{
@@ -222,12 +223,7 @@ async fn serve(state: IppState, request: Request, secret: Option<String>) -> Res
         },
     };
     let limit = state.body_limit;
-    let announced = parts
-        .headers
-        .get(header::CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok());
-    if announced.is_some_and(|length| length > limit as u64) {
+    if body::announced_over(&parts.headers, limit) {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
     // On a personal address the secret is in the path: checked before any byte is read.
@@ -329,57 +325,6 @@ async fn serve(state: IppState, request: Request, secret: Option<String>) -> Res
         status,
         groups,
     ))
-}
-
-/// Why a body could not be read.
-enum Unread {
-    TooLarge,
-    Failed,
-    TimedOut,
-}
-
-impl IntoResponse for Unread {
-    fn into_response(self) -> Response {
-        match self {
-            Unread::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            Unread::Failed => StatusCode::BAD_REQUEST,
-            Unread::TimedOut => StatusCode::REQUEST_TIMEOUT,
-        }
-        .into_response()
-    }
-}
-
-/// Reads the body into `buffer` until it holds `wanted` bytes or the body ends, refusing more
-/// than `limit` in all, whatever the body announced: chunked bodies announce nothing. Each piece
-/// must arrive within `idle` of the last.
-async fn fill(
-    body: &mut Body,
-    buffer: &mut Vec<u8>,
-    wanted: usize,
-    limit: usize,
-    idle: Duration,
-) -> Result<(), Unread> {
-    // What an earlier read took may already be over a limit lowered since.
-    if buffer.len() > limit {
-        return Err(Unread::TooLarge);
-    }
-    while buffer.len() < wanted {
-        let next = poll_fn(|context| Pin::new(&mut *body).poll_frame(context));
-        let frame = tokio::time::timeout(idle, next)
-            .await
-            .map_err(|_| Unread::TimedOut)?;
-        let Some(frame) = frame else {
-            return Ok(());
-        };
-        let Ok(data) = frame.map_err(|_| Unread::Failed)?.into_data() else {
-            continue;
-        };
-        if buffer.len().saturating_add(data.len()) > limit {
-            return Err(Unread::TooLarge);
-        }
-        buffer.extend_from_slice(&data);
-    }
-    Ok(())
 }
 
 /// An IPP answer: `Cache-Control: no-cache` is a must of PWG 5100.14.

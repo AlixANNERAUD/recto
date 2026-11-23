@@ -2,6 +2,7 @@
 
 pub mod administration;
 pub mod auth;
+mod body;
 pub mod devices;
 pub mod escl;
 pub mod held;

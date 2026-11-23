@@ -20,16 +20,14 @@
 
 use std::{
     collections::HashMap,
-    future::poll_fn,
     net::IpAddr,
-    pin::Pin,
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
 
 use axum::{
     Router,
-    body::{Body, HttpBody},
+    body::Body,
     extract::{Request, State},
     http::{HeaderValue, Method, StatusCode, header, request::Parts},
     middleware::{self, Next},
@@ -47,6 +45,7 @@ use recto_scanning::{
 };
 use uuid::Uuid;
 
+use super::body;
 use crate::{
     config::OpenNetworks,
     device_auth::{self, DeviceAuth, Listener},
@@ -383,17 +382,15 @@ impl Scan<'_> {
 
     /// `POST ScanJobs`: reads the settings, starts the scan and answers with the job's address.
     async fn new_job(&self, parts: &Parts, body: Body) -> Response {
-        let announced = parts
-            .headers
-            .get(header::CONTENT_LENGTH)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok());
-        if announced.is_some_and(|length| length > escl::MAX_SETTINGS_BYTES as u64) {
+        if body::announced_over(&parts.headers, escl::MAX_SETTINGS_BYTES) {
             return StatusCode::PAYLOAD_TOO_LARGE.into_response();
         }
-        let settings = match read_settings(body, self.state.read_timeout).await {
+        // All of it within the timeout: the settings are small, so a client that needs longer
+        // stalls.
+        let read = body::read_all(body, escl::MAX_SETTINGS_BYTES, self.state.read_timeout);
+        let settings = match read.await {
             Ok(settings) => settings,
-            Err(status) => return status.into_response(),
+            Err(unread) => return unread.into_response(),
         };
         // Before SANE is asked anything: it would answer only once the running scan is over.
         if self.state.jobs.state(self.key) == escl::EsclState::Processing {
@@ -583,28 +580,6 @@ fn xml(body: String) -> Response {
         body,
     )
         .into_response()
-}
-
-/// The body of `POST ScanJobs`, at most [`escl::MAX_SETTINGS_BYTES`] whatever it announced, and
-/// all of it within `timeout`: the settings are small, so a client that needs longer stalls.
-async fn read_settings(mut body: Body, timeout: Duration) -> Result<Vec<u8>, StatusCode> {
-    let read = async {
-        let mut buffer = Vec::new();
-        while let Some(frame) = poll_fn(|context| Pin::new(&mut body).poll_frame(context)).await {
-            let frame = frame.map_err(|_| StatusCode::BAD_REQUEST)?;
-            let Ok(data) = frame.into_data() else {
-                continue;
-            };
-            if buffer.len().saturating_add(data.len()) > escl::MAX_SETTINGS_BYTES {
-                return Err(StatusCode::PAYLOAD_TOO_LARGE);
-            }
-            buffer.extend_from_slice(&data);
-        }
-        Ok(buffer)
-    };
-    tokio::time::timeout(timeout, read)
-        .await
-        .unwrap_or(Err(StatusCode::REQUEST_TIMEOUT))
 }
 
 /// What the scan log needs of a job.
