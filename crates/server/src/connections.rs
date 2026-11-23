@@ -48,9 +48,7 @@ where
             request.extensions_mut().insert(ConnectInfo(peer));
             router.clone().oneshot(request)
         });
-        let connection = graceful.watch(
-            builder.serve_connection(TokioIo::new(io), service),
-        );
+        let connection = graceful.watch(builder.serve_connection(TokioIo::new(io), service));
         tokio::spawn(async move {
             // Timeouts and clients that go away end up here: nothing to act on.
             if let Err(error) = connection.await {
