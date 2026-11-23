@@ -85,8 +85,13 @@ pub(crate) fn location(outcome: &Result<Submitted, Rejected>, refused_to: &str) 
         Err(Rejected::Quota(rule)) => {
             format!("{refused_to}?error={}&rule={rule}", Refusal::Quota.code())
         }
-        Err(Rejected::Refusal(refusal)) => format!("{refused_to}?error={}", refusal.code()),
+        Err(Rejected::Refusal(refusal)) => refused_location(refused_to, *refusal),
     }
+}
+
+/// `page` with why a job was refused.
+pub(crate) fn refused_location(page: &str, refusal: Refusal) -> String {
+    format!("{page}?error={}", refusal.code())
 }
 
 fn joined(rules: &[i64]) -> String {
@@ -549,7 +554,7 @@ pub async fn cancel(
             tracing::info!(user = user.username, job = id, "job canceled");
             Redirect::to("/jobs")
         }
-        Err(refusal) => Redirect::to(&format!("/jobs?error={}", refusal.code())),
+        Err(refusal) => Redirect::to(&refused_location("/jobs", refusal)),
     }
 }
 

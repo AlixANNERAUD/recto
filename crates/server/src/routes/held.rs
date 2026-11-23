@@ -29,6 +29,7 @@ use super::{
     not_found,
     print::{
         Choices, Document, HeldClaim, Rejected, Submitted, give_back, location, print_document,
+        refused_location,
     },
 };
 use crate::{session, state::AuthState};
@@ -294,5 +295,5 @@ async fn own(state: &HeldRoutes, user: &User, id: &str) -> Result<Option<HeldJob
 }
 
 fn refused(refusal: Refusal) -> Response {
-    Redirect::to(&format!("/jobs?error={}", refusal.code())).into_response()
+    Redirect::to(&refused_location("/jobs", refusal)).into_response()
 }
