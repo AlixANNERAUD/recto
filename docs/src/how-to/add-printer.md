@@ -163,7 +163,9 @@ list some.
 
 A command reaches the printer as a job that CUPS hands to the driver instead of printing it. It
 waits behind the printer's other jobs, waits while the printer is paused, and is refused while
-the printer turns jobs away. recto never records it, counts it against a quota or holds it.
+the printer turns jobs away. CUPS lists it under recto's own name, the account recto talks to
+CUPS as, and recto's log names the administrator who ran it (see [Logs](../reference/logs.md)).
+recto never records it, counts it against a quota or holds it.
 
 ## Check
 

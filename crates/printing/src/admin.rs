@@ -41,8 +41,10 @@ pub trait PrinterAdmin: Send + Sync + 'static {
     /// Makes the queue turn new jobs away.
     async fn reject(&self, name: &str) -> Result<(), AdminError>;
     async fn delete(&self, name: &str) -> Result<(), AdminError>;
-    /// Has the queue's driver run `command`, through a job in `by`'s name that CUPS hands to the
-    /// driver instead of printing it.
+    /// Has the queue's driver run `command`, through a job that CUPS hands to the driver instead
+    /// of printing it. CUPS names a job after the account its request authenticated as, so it
+    /// lists this one under recto's own name, not `by`'s: `by`, the administrator, is for the
+    /// caller's log.
     async fn maintain(&self, name: &str, command: Maintenance, by: &str) -> Result<(), AdminError>;
     /// The drivers whose make and model contain every word of `search`, at most `limit`.
     async fn drivers(&self, search: &str, limit: u32) -> Result<Vec<DriverInfo>, AdminError>;
