@@ -477,7 +477,12 @@ fn verify(
     let id_token = token
         .id_token()
         .ok_or_else(|| Verification::Invalid("no ID token in the answer".to_owned()))?;
-    let verifier = client.id_token_verifier();
+    // Zitadel adds its project's id to the audiences, and other providers their API's. The
+    // library refuses any audience but the client id by default; OpenID Connect Core 3.1.3.7
+    // allows more when the authorized party is this client, which is checked below.
+    let verifier = client
+        .id_token_verifier()
+        .set_other_audience_verifier_fn(|_| true);
     let claims = id_token
         .claims(&verifier, nonce)
         .map_err(|error| match error {
@@ -487,6 +492,15 @@ fn verify(
             ) => Verification::Keys(error.to_string()),
             other => invalid(&other),
         })?;
+    let authorized_party = claims.authorized_party().map(|party| party.as_str());
+    let client_id = client.client_id().as_str();
+    if authorized_party.is_some_and(|party| party != client_id)
+        || (claims.audiences().len() > 1 && authorized_party.is_none())
+    {
+        return Err(Verification::Invalid(
+            "the ID token was issued to another client".to_owned(),
+        ));
+    }
     if let Some(expected) = claims.access_token_hash() {
         let algorithm = id_token.signing_alg().map_err(|error| invalid(&error))?;
         let key = id_token
