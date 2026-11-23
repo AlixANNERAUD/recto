@@ -507,13 +507,18 @@ impl Scan<'_> {
     async fn known(&self) -> Result<ScannerCapabilities, ScanError> {
         let scan = &self.state.app.scan;
         let listing = scan.listing();
+        // While one of its jobs scans, asking SANE would wait behind the whole batch, past the
+        // device's timeout: what is known, however old, is better.
+        let scanning = self.state.jobs.state(self.key) == escl::EsclState::Processing;
         let cached = self
             .state
             .capabilities
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(self.key)
-            .filter(|known| known.listing == listing && known.at.elapsed() < CAPABILITIES_AGE)
+            .filter(|known| {
+                scanning || (known.listing == listing && known.at.elapsed() < CAPABILITIES_AGE)
+            })
             .map(|known| known.capabilities.clone());
         if let Some(capabilities) = cached {
             return Ok(capabilities);
